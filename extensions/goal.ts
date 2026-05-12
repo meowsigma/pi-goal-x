@@ -1,11 +1,10 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, Text, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	countUserSteps,
-	displayObjectiveTitle,
 	footerStatus,
 	formatDuration,
 	formatRemainingTokens,
@@ -40,6 +39,7 @@ import {
 	SISYPHUS_WORK_TOOL_NAMES,
 	TWEAK_APPLY_TOOL_NAME,
 } from "./goal-tool-names.ts";
+import { GoalWidgetComponent } from "./goal-widget.ts";
 
 import {
 	buildAutoContinueCapPause,
@@ -1043,7 +1043,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const displayGoal = goalForDisplay();
 			if (displayGoal) statusRefreshCtx.ui.setStatus("goal", footerStatus(displayGoal));
 			// Live-tick the above-editor widget so duration/tokens update.
-			widgetTui?.requestRender();
+			goalWidgetComponent?.update();
 		}, STATUS_REFRESH_MS);
 		statusRefreshTimer.unref?.();
 	}
@@ -1198,111 +1198,14 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	 *   └─ Suggested: ask the user for the test location
 	 */
 	const GOAL_WIDGET_KEY = "goal";
-	const SISYPHUS_BAR_WIDTH = 10;
 	let widgetRegistered = false;
-	let widgetTui: TUI | undefined;
-
-	type GoalIconColor = "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text";
-	function getDisplayIcon(g: GoalRecord): { icon: string; color: GoalIconColor } {
-		if (g.status === "complete") return { icon: "✓", color: "success" };
-		if (g.status === "paused") {
-			if (g.stopReason === "agent") return { icon: "⊘", color: "warning" };
-			return { icon: "◐", color: "muted" };
-		}
-		if (g.status === "budgetLimited") return { icon: "◑", color: "warning" };
-		// active
-		if (g.sisyphus) return { icon: "◆", color: "accent" };
-		return g.autoContinue ? { icon: "●", color: "accent" } : { icon: "○", color: "muted" };
-	}
-
-	function buildSisyphusBar(g: GoalRecord, theme: Theme): string {
-		const total = g.totalSteps ?? 0;
-		if (total <= 0) return "";
-		const done = Math.min(g.stepsCompleted ?? 0, total);
-		const filled = Math.max(0, Math.min(SISYPHUS_BAR_WIDTH, Math.round((done / total) * SISYPHUS_BAR_WIDTH)));
-		const empty = SISYPHUS_BAR_WIDTH - filled;
-		const filledChar = theme.fg("accent", "▰".repeat(filled));
-		const emptyChar = theme.fg("dim", "▱".repeat(empty));
-		return `[${filledChar}${emptyChar}] ${done}/${total}`;
-	}
-
-	function renderGoalOverlay(theme: Theme, width: number): string[] {
-		if (!goal) return [];
-		const g = goalForDisplay() ?? goal;
-		const trunc = (s: string): string => truncateToWidth(s, width, "…");
-
-		const { icon, color } = getDisplayIcon(g);
-		const sisyphusLabel = g.sisyphus ? "Sisyphus" : "Goal";
-		const statusVerb = (() => {
-			if (g.status === "complete") return "complete";
-			if (g.status === "paused") return g.stopReason === "agent" ? "blocked" : "paused";
-			if (g.status === "budgetLimited") return "budget limited";
-			return g.autoContinue ? "running" : "idle";
-		})();
-
-		// Heading: "◆ Sisyphus  [▰▰▰▱▱] 3/5"  or  "● Goal  running"
-		const headParts: string[] = [
-			theme.fg(color, icon),
-			theme.fg(color, theme.bold(`${sisyphusLabel} ${statusVerb}`)),
-		];
-		if (g.sisyphus && (g.totalSteps ?? 0) > 0) {
-			const bar = buildSisyphusBar(g, theme);
-			if (bar) headParts.push(bar);
-		}
-		const heading = trunc(headParts.join("  "));
-
-		const lines: string[] = [heading];
-		const branch = (s: string): string => trunc(`${theme.fg("dim", "├─")} ${s}`);
-		const tail = (s: string): string => trunc(`${theme.fg("dim", "└─")} ${s}`);
-
-
-		// Objective line — show a clean title instead of raw "=== Goal ===" blocks.
-		const objectiveTitle = displayObjectiveTitle(g.objective);
-		lines.push(branch(`${theme.fg("accent", "⟡")} ${theme.fg("text", truncateText(objectiveTitle, Math.max(20, width - 6)))}`));
-
-		// Status / autoContinue / usage line
-		const statusBits: string[] = [statusLabel(g)];
-		if (g.status === "active" && g.autoContinue) statusBits.push("auto-continue");
-		if (g.usage.activeSeconds > 0) statusBits.push(formatDuration(g.usage.activeSeconds));
-		if (g.usage.tokensUsed > 0) statusBits.push(formatTokenValue(g.usage.tokensUsed));
-		lines.push(branch(theme.fg("muted", statusBits.join(" · "))));
-
-		// Budget line (only if set)
-		if (g.tokenBudget !== null) {
-			lines.push(branch(theme.fg("muted", `Budget: ${formatTokenBudget(g)} · remaining ${formatRemainingTokens(g)}`)));
-		}
-
-		// Pause-specific lines
-		if (g.status === "paused" && g.stopReason === "agent" && g.pauseReason) {
-			lines.push(branch(theme.fg("warning", `Blocker: ${truncateText(g.pauseReason, Math.max(0, width - 14))}`)));
-			if (g.pauseSuggestedAction) {
-				lines.push(branch(theme.fg("muted", `Suggested: ${truncateText(g.pauseSuggestedAction, Math.max(0, width - 16))}`)));
-			}
-		}
-
-		// Completion path
-		if (g.status === "complete" && g.archivedPath) {
-			lines.push(tail(theme.fg("dim", g.archivedPath)));
-			return lines;
-		}
-
-		// Active path footer
-		if (g.activePath) {
-			lines.push(tail(theme.fg("dim", g.activePath)));
-		} else {
-			// Convert last line from branch to tail
-			const last = lines.length - 1;
-			lines[last] = lines[last].replace(theme.fg("dim", "├─"), theme.fg("dim", "└─"));
-		}
-
-		return lines;
-	}
+	let goalWidgetComponent: GoalWidgetComponent | null = null;
 
 	function clearGoalWidget(ctx: ExtensionContext): void {
 		ctx.ui.setStatus("goal", undefined);
 		ctx.ui.setWidget(GOAL_WIDGET_KEY, undefined);
 		widgetRegistered = false;
-		widgetTui = undefined;
+		goalWidgetComponent = null;
 	}
 
 	function updateUI(ctx: ExtensionContext): void {
@@ -1320,20 +1223,18 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			ctx.ui.setWidget(
 				GOAL_WIDGET_KEY,
 				(tui, theme) => {
-					widgetTui = tui;
-					return {
-						render: (width: number) => renderGoalOverlay(theme, width),
-						invalidate: () => {
-							widgetRegistered = false;
-							widgetTui = undefined;
-						},
-					};
+					goalWidgetComponent = new GoalWidgetComponent({
+						tui,
+						theme,
+						getGoal: () => goalForDisplay() ?? goal,
+					});
+					return goalWidgetComponent;
 				},
 				{ placement: "aboveEditor" },
 			);
 			widgetRegistered = true;
 		} else {
-			widgetTui?.requestRender();
+			goalWidgetComponent?.update();
 		}
 
 		if (goal.status === "complete") {

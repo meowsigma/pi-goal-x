@@ -23,6 +23,7 @@ Reusable logic is split into smaller modules:
 | `goal-policy.ts` | Lifecycle policy, pause/resume/complete validation, Sisyphus step validation, verify-command classification, budget/compaction policy, full result reports |
 | `goal-questionnaire.ts` | Built-in questionnaire types, normalization, answer formatting, TUI question runner, proposal confirmation dialog, question-tool registration |
 | `goal-tool-names.ts` | Published tool-name constants, active-tool lists, post-stop allowlist, Sisyphus work-tool list, question-like tool detection |
+| `goal-widget.ts` | Above-editor Goal Beacon component, Sisyphus progress bar, blocker/budget/status rendering |
 
 ## Lifecycle
 

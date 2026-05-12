@@ -12,7 +12,7 @@
 | # | Change | Source | Mechanism | Status |
 |---|--------|--------|-----------|--------|
 | D | `propose_goal_draft` tool + UI confirm dialog | user-directed | New schema-level commit path: agent drafts → user clicks Confirm → goal created. Headless auto-confirms. `create_goal` is HIDDEN from agent. | ✅ |
-| B1 | Drafting focus consistency schema gate | user-directed | `draftingFor.focus` set by /goal-set or /goal-sis; propose_goal_draft REJECTS proposals where `params.sisyphus` ≠ drafting focus | ✅ |
+| B1 | Drafting focus consistency schema gate | user-directed | `draftingFor.focus` set by /goal-set or /goal-sisyphus; propose_goal_draft REJECTS proposals where `params.sisyphus` ≠ drafting focus | ✅ |
 | B2 | Plan-step preservation schema gate | user-directed | propose_goal_draft REJECTS sisyphus proposals whose step count exceeds user's original step count by >1 (no agent-invented reconnaissance steps) | ✅ |
 | C1 | `<pi_goal_continuation goal_id="...">` prefix | pi-codex-goal | Continuation prompts now have a structured XML-like outer marker (preserves old `[GOAL ...]` markers for back-compat) | ✅ |
 | C2 | `METRIC name=value` structured output | pi-autoresearch | `step_complete` result text emits `METRIC step=N total=M done=K verifyCommand=passed|absent evidence_chars=L` | ✅ |

@@ -30,11 +30,11 @@ Reusable logic is split into smaller modules:
 
 ```text
 /user command
-  ├─ /goal-set or /goal-sis
+  ├─ /goal-set or /goal-sisyphus
   │    └─ draftingFor = {...}
-  │         ├─ agent may ask via chat / goal_question / goal_questionnaire
+  │         ├─ agent asks at least one concrete question via a question-like tool
   │         ├─ workhorse tools are blocked
-  │         └─ propose_goal_draft validates and asks user to confirm
+  │         └─ propose_goal_draft validates B0/B1 and asks user to confirm
   │              ├─ Continue Chatting: stay in drafting
   │              └─ Confirm: create active goal, write .pi/goals file, print full objective
   │
@@ -64,12 +64,13 @@ The legacy `step_complete` tool remains registered as a hidden compatibility no-
 
 ## Drafting and confirmation
 
-Drafting is a user-intent collection phase. The agent may clarify through normal chat or built-in question tools, but cannot inspect or edit the repo before the user confirms the goal.
+Drafting is a user-intent collection phase. For `/goal-set` and `/goal-sisyphus`, the agent must ask at least one concrete grill-me style question through `goal_question`, `goal_questionnaire`, or another question-like user-dialogue tool before proposing. It should ask one decision branch at a time with a recommended answer, and it cannot inspect or edit the repo before the user confirms the goal.
 
 `propose_goal_draft` enforces:
 
 - a drafting flow must be active;
 - no unfinished goal may already exist;
+- at least one drafting question must have been asked;
 - objective must be non-empty;
 - `sisyphus` must match the command the user invoked.
 

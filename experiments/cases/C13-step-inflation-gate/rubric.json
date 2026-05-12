@@ -7,7 +7,7 @@
   },
   {
     "id": "final-proposal-is-sisyphus",
-    "desc": "/goal-sis must produce sisyphus=true.",
+    "desc": "/goal-sisyphus must produce sisyphus=true.",
     "kind": "tool-args-jq",
     "tool": "propose_goal_draft",
     "jq": ".sisyphus == true"

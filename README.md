@@ -7,7 +7,7 @@ The extension is designed around one rule: **the user owns intent; the agent exe
 ## What it provides
 
 - **Two goal styles**: regular goals for open-ended work, and Sisyphus goals for patient ordered execution.
-- **Draft-before-run flow**: `/goal-set` and `/goal-sis` start a drafting conversation before any work begins.
+- **Draft-before-run flow**: `/goal-set` and `/goal-sisyphus` start a drafting conversation before any work begins.
 - **Confirm-before-commit**: the agent must call `propose_goal_draft`; the user confirms or keeps chatting.
 - **Full goal visibility**: after confirmation, the final objective is printed back into the conversation in full.
 - **Auto-continue loop**: confirmed goals can continue across turns until completion, pause, budget limit, abort, or user interruption.
@@ -48,8 +48,8 @@ pi -e .
 
 Flow:
 
-1. The agent asks any needed clarifying questions.
-2. The agent calls `propose_goal_draft` with a concrete objective.
+1. The agent asks at least one concrete question about success criteria, constraints, boundaries, priorities, or blocker handling.
+2. The agent calls `propose_goal_draft` with a concrete objective after incorporating the answer.
 3. pi shows a full plain-text confirmation report.
 4. If confirmed, the full finalized goal is printed into the conversation and written to `.pi/goals/`.
 5. The agent works until it calls `update_goal(status="complete")`, pauses, hits a budget/cap, or the user interrupts.
@@ -57,7 +57,7 @@ Flow:
 ### Sisyphus goal
 
 ```text
-/goal-sis Refactor the auth flow: 1) extract token validation. 2) wire it into login. 3) update tests.
+/goal-sisyphus Refactor the auth flow: 1) extract token validation. 2) wire it into login. 3) update tests.
 ```
 
 Sisyphus mode is for patient ordered execution. It uses the same lifecycle and tools as a regular goal; the difference is the prompt style and completion standard: preserve the user's order, do not rush, do not invent preflight/reconnaissance steps, and stop to ask when blocked.
@@ -66,8 +66,7 @@ Sisyphus mode is for patient ordered execution. It uses the same lifecycle and t
 
 ```text
 /goal-set <topic>       Start drafting a regular goal
-/goal-sis <topic>       Start drafting a Sisyphus-style goal
-/sis <topic>            Alias for /goal-sis
+/goal-sisyphus <topic>  Start drafting a Sisyphus-style goal
 /goal-status            Show current goal state
 /goal-tweak <change>    Draft a revision to the active/paused goal
 /goal-pause             Pause the active goal
@@ -95,7 +94,7 @@ The extension exposes tools only when they make sense for the current lifecycle 
 
 ## Drafting behavior
 
-During `/goal-set`, `/goal-sis`, or `/goal-tweak`, the agent is in an interview phase. It may ask questions through normal chat, `goal_question`, or `goal_questionnaire`, but workhorse tools are blocked.
+During `/goal-set`, `/goal-sisyphus`, or `/goal-tweak`, the agent is in an interview phase. For `/goal-set` and `/goal-sisyphus`, the agent must ask at least one concrete grill-me style question before `propose_goal_draft`; the B0 question gate rejects direct proposals. Prefer `goal_question` with a recommended answer for the first decision branch; use `goal_questionnaire` only for tightly related choices. Workhorse tools are blocked.
 
 Allowed during goal drafting:
 
@@ -134,7 +133,8 @@ The shipped gates are intentionally small and mechanical.
 | Gate | Prevents |
 |---|---|
 | Drafting tool whitelist | The agent doing repo reconnaissance before the user confirms a goal |
-| Focus consistency | `/goal-set` accidentally becoming Sisyphus, or `/goal-sis` becoming regular mode |
+| Focus consistency | `/goal-set` accidentally becoming Sisyphus, or `/goal-sisyphus` becoming regular mode |
+| Required drafting question | The agent directly agreeing to a goal without grilling the user on criteria or constraints |
 | Confirm-before-commit | The agent silently creating or replacing a goal |
 | Completion gate | Completing paused, stale, missing, or unfinished goals |
 | Post-stop block | Continuing to call tools after `pause_goal`, `update_goal`, or `apply_goal_tweak` stops the turn |

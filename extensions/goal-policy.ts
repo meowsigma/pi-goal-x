@@ -77,7 +77,7 @@ export function buildPausedByAgentGoal<T extends GoalPolicyRecordLike>(goal: T, 
 }
 
 export function validateResumeGoal(goal: GoalPolicyRecordLike | null): PolicyValidation {
-	if (!goal) return { ok: false, message: "No goal is set. Use /goal-set or /goal-sis to start one." };
+	if (!goal) return { ok: false, message: "No goal is set. Use /goal-set or /goal-sisyphus to start one." };
 	if (goal.status === "complete") return { ok: false, message: "Goal is complete. Use /goal-set to start a new one." };
 	if (goal.status === "active" && goal.autoContinue) return { ok: false, message: "Goal is already running." };
 	if (goal.status === "budgetLimited" && goal.tokenBudget !== null && goal.usage.tokensUsed >= goal.tokenBudget) {

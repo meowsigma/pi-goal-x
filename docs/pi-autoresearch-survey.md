@@ -23,9 +23,9 @@ This document records external patterns that are actually implemented in `pi-goa
 
 The current extension also adds behavior specific to goal drafting and lifecycle safety:
 
-- **Draft-before-run**: `/goal-set` and `/goal-sis` start a drafting interview instead of immediate execution.
+- **Draft-before-run**: `/goal-set` and `/goal-sisyphus` start a drafting interview instead of immediate execution.
 - **Confirm-before-commit**: `propose_goal_draft` is the normal creation path; `create_goal` stays hidden.
-- **Sisyphus as style**: `/goal-sis` uses the same lifecycle and tools as `/goal-set`; it only changes drafting/continuation wording and completion expectations.
+- **Sisyphus as style**: `/goal-sisyphus` uses the same lifecycle and tools as `/goal-set`; it only changes drafting/continuation wording and completion expectations.
 - **Full draft confirmation and creation output**: draft confirmation uses a plain-text report, and after confirmation the finalized objective is printed directly into the conversation.
 - **Full completion output**: completion prints a report directly into the conversation, including optional evidence and full goal details.
 - **Built-in question tools**: `goal_question` and `goal_questionnaire` provide package-local user-dialogue tools with `goal_` prefixes.

@@ -36,6 +36,7 @@ import {
 	SISYPHUS_STEP_TOOL_NAME,
 	GOAL_WORK_TOOL_NAMES,
 	TWEAK_APPLY_TOOL_NAME,
+	isQuestionLikeToolName,
 } from "./goal-tool-names.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { GoalWidgetComponent } from "./widgets/goal-widget.ts";
@@ -101,7 +102,7 @@ const POST_STOP_ALLOWED_TOOL_SET = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 let tweakDraftingFor: string | null = null;
 
 /**
- * Phase 5 D + B1: when non-null, a /goal-set or /goal-sis drafting flow
+ * Phase 5 D + B1: when non-null, a /goal-set or /goal-sisyphus drafting flow
  * is in progress. During that window:
  *   - propose_goal_draft tool is the ONLY way to commit the goal (UI confirm)
  *   - create_goal tool is hidden from the agent
@@ -112,9 +113,10 @@ let tweakDraftingFor: string | null = null;
  */
 interface DraftingState {
 	focus: GoalDraftingFocus;
-	originalTopic: string;       // user's exact input to /goal-set or /goal-sis
+	originalTopic: string;       // user's exact input to /goal-set or /goal-sisyphus
 	draftId: string;
 	startedAt: number;
+	questionsAsked: number;
 }
 let draftingFor: DraftingState | null = null;
 
@@ -311,7 +313,7 @@ function usageLines(goal: GoalRecord): string[] {
 }
 
 function detailedSummary(goal: GoalRecord | null): string {
-	if (!goal) return "No goal is set. Use /goal-set <topic> (normal drafting) or /goal-sis <topic> (sisyphus drafting). /sis and /sisyphus are shortcuts.";
+	if (!goal) return "No goal is set. Use /goal-set <topic> (normal drafting) or /goal-sisyphus <topic> (Sisyphus drafting).";
 	const lines = [
 		`Goal: ${goal.objective}`,
 		`Status: ${statusLabel(goal)}`,
@@ -921,7 +923,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				active.delete(TWEAK_APPLY_TOOL_NAME);
 			}
 			// Phase 5 D: propose_goal_draft is only active during /goal-set or
-			// /goal-sis drafting; create_goal is HIDDEN during drafting (forcing
+			// /goal-sisyphus drafting; create_goal is HIDDEN during drafting (forcing
 			// the agent through the confirm dialog). Outside drafting, neither
 			// is shown until a /goal-* command starts a new flow.
 			if (draftingFor !== null) {
@@ -931,7 +933,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			} else {
 				active.delete(PROPOSE_DRAFT_TOOL_NAME);
 				// Outside drafting, create_goal stays hidden too — the user must
-				// invoke /goal-set or /goal-sis first. This kills the "agent
+				// invoke /goal-set or /goal-sisyphus first. This kills the "agent
 				// silently creates a goal from a casual message" failure mode.
 				active.delete(CREATE_GOAL_TOOL_NAME);
 			}
@@ -1323,7 +1325,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	function startGoalTweakDrafting(hint: string, ctx: ExtensionContext): void {
 		if (!goal) {
-			ctx.ui.notify("No goal is set. Use /goal-set or /goal-sis to start one.", "warning");
+			ctx.ui.notify("No goal is set. Use /goal-set or /goal-sisyphus to start one.", "warning");
 			return;
 		}
 		if (goal.status === "complete") {
@@ -1383,8 +1385,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		draftingFor = {
 			focus,
 			originalTopic: trimmed,
-				draftId,
+			draftId,
 			startedAt: Date.now(),
+			questionsAsked: 0,
 		};
 		syncGoalTools();
 		try {
@@ -1509,7 +1512,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 	};
 	pi.registerCommand("goal", {
-		description: "Show goal status. Manage goals with /goal-set, /goal-sis, /goal-tweak, /goal-replace, /goal-clear, /goal-pause, /goal-resume.",
+		description: "Show goal status. Manage goals with /goal-set, /goal-sisyphus, /goal-tweak, /goal-replace, /goal-clear, /goal-pause, /goal-resume.",
 		handler: statusCommand.handler,
 	});
 	pi.registerCommand("goal-status", statusCommand);
@@ -1522,17 +1525,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	// /goal-sis / /goal-sisyphus / /sis / /sisyphus <topic>: drafting -> new Sisyphus goal.
-	const sisyphusCommand = {
-		description: "Draft a Sisyphus goal. The agent interviews you for explicit numbered steps, then runs strictly step-by-step. No skipping, no rushing.",
+	// /goal-sisyphus <topic>: drafting -> new Sisyphus goal.
+	pi.registerCommand("goal-sisyphus", {
+		description: "Draft a Sisyphus goal. The agent grills you for the ordered style, completion standard, and boundaries before proposing a draft.",
 		handler: async (rawArgs: string, ctx: ExtensionContext) => {
 			await handleGoalCommandTopic(rawArgs, ctx, "sisyphus", { replace: false });
 		},
-	};
-	pi.registerCommand("goal-sis", sisyphusCommand);
-	pi.registerCommand("goal-sisyphus", sisyphusCommand);
-	pi.registerCommand("sis", sisyphusCommand);
-	pi.registerCommand("sisyphus", sisyphusCommand);
+	});
 
 	// /goal-tweak [hint]: drafting on top of the current goal -> edits the active goal file.
 	pi.registerCommand("goal-tweak", {
@@ -1606,12 +1605,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	pi.registerTool(defineTool({
 		name: "create_goal",
 		label: "Create Goal",
-		description: "Create a new active pi goal. In drafting flows (/goal or /sis), call this only after the drafting interview has produced a concrete objective (and for sisyphus, an explicit numbered step list). Fails if an unfinished goal already exists.",
+		description: "Create a new active pi goal. In drafting flows (/goal-set or /goal-sisyphus), call this only after the drafting interview has produced a concrete objective. Fails if an unfinished goal already exists.",
 		promptSnippet: "Create a persistent pi goal when the user explicitly asks for one or when a goal-drafting interview has converged.",
 		promptGuidelines: [
-			"Use create_goal only when the user explicitly asks to start a long-running goal, OR when a /goal or /sis drafting interview has produced a concrete objective and (for sisyphus) explicit numbered steps.",
+			"Use create_goal only when the user explicitly asks to start a long-running goal, OR when a /goal-set or /goal-sisyphus drafting interview has produced a concrete objective.",
 			"Do not create replacement goals silently when an unfinished goal already exists.",
-			"Pass sisyphus=true when the goal came out of /sis drafting, when the user invoked Sisyphus mode, or when the objective itself is structured as numbered atomic steps that must be executed strictly in order. The objective text in that case must include the steps and per-step done criteria.",
+			"Pass sisyphus=true only when the goal came out of /goal-sisyphus drafting or when the user explicitly invoked Sisyphus mode.",
 		],
 		parameters: Type.Object({
 			objective: Type.String({ description: "Concrete objective to pursue. For Sisyphus goals this MUST be the full plan including numbered steps and per-step done criteria." }),
@@ -1650,29 +1649,31 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 	}));
 
-	// Phase 5 D + B1: agent's drafting-time entry point. Replaces create_goal
-	// during /goal-set or /goal-sis drafting. Shows the user a full plain-text
+	// Phase 5 D + B0/B1: agent's drafting-time entry point. Replaces create_goal
+	// during /goal-set or /goal-sisyphus drafting. Shows the user a full plain-text
 	// draft report with two choices: [Confirm] (creates the goal) or
-	// [Continue Chatting] (returns control to the agent for more interview). Schema gate:
+	// [Continue Chatting] (returns control to the agent for more interview). Schema gates:
+	//   B0 required question
 	//   B1 focus-vs-sisyphus consistency
 	// In headless mode (no UI), auto-confirms — harness-friendly.
 	pi.registerTool(defineTool({
 		name: PROPOSE_DRAFT_TOOL_NAME,
 		label: "Propose Goal Draft",
-		description: "During /goal-set or /goal-sis drafting, propose the goal draft to the user. The user sees a full plain-text confirmation report and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during drafting.",
+		description: "During /goal-set or /goal-sisyphus drafting, propose the goal draft to the user. The user sees a full plain-text confirmation report and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during drafting.",
 		promptSnippet: "Propose the drafted goal to the user with a full plain-text Confirm / Continue Chatting dialog.",
 		promptGuidelines: [
-			"Call propose_goal_draft ONLY when you are inside a /goal-set or /goal-sis drafting flow AND you have gathered enough info to write a concrete goal. If you have not asked enough questions, keep interviewing the user — do not propose prematurely.",
+			"Call propose_goal_draft ONLY when you are inside a /goal-set or /goal-sisyphus drafting flow AND you have asked at least one concrete question with goal_question, goal_questionnaire, or another question-like user-dialogue tool. The B0 schema gate rejects direct proposals.",
+			"After that required question, call propose_goal_draft only when you have enough info to write a concrete goal. If the answer exposes ambiguity, keep interviewing the user — do not propose prematurely.",
 			"The user will see a full plain-text draft report plus a [Confirm] / [Continue Chatting] choice. Confirm creates the goal; Continue Chatting returns control to you to ask follow-up questions.",
 			"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT propose again immediately with the same content; iterate based on their feedback first.",
-			"The sisyphus field must match the user's drafting focus: /goal-sis → sisyphus=true, /goal-set → sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
-			"For sisyphus goals, the objective MUST include the user's numbered steps verbatim — do not add steps the user did not request (e.g. extra 'verify the precondition' steps), do not merge steps, do not reorder. The schema rejects drafts whose step count exceeds the user's original by more than 1.",
+			"The sisyphus field must match the user's drafting focus: /goal-sisyphus → sisyphus=true, /goal-set → sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
+			"For sisyphus goals, preserve the user's requested ordered style and completion standard. Do not add reconnaissance/preflight steps, merge steps, reorder steps, or change the mode without explicit user confirmation.",
 			"create_goal is hidden from you during drafting; propose_goal_draft is the only commit path. This is intentional — the user wants explicit say in goal creation.",
 		],
 		parameters: Type.Object({
 			objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input." }),
 			autoContinue: Type.Optional(Type.Boolean({ description: "Whether pi should keep sending continuation prompts until complete. Default true." })),
-			sisyphus: Type.Optional(Type.Boolean({ description: "Must equal true for /goal-sis drafting, false for /goal-set drafting. Schema-enforced via B1 gate." })),
+			sisyphus: Type.Optional(Type.Boolean({ description: "Must equal true for /goal-sisyphus drafting, false for /goal-set drafting. Schema-enforced via B1 gate." })),
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -2054,7 +2055,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					`Do not call more tools; end the turn with a brief summary and yield to the user.`,
 			};
 		}
-		// Phase 5 C3: drafting whitelist. During /goal-set, /goal-sis, or /goal-tweak
+		// Phase 5 C3: drafting whitelist. During /goal-set, /goal-sisyphus, or /goal-tweak
 		// drafting, block all work tools (bash/write/edit/read/grep/find/ls/step_complete/...)
 		// except the dedicated drafting tools. Drafting is a CONVERSATION;
 		// reconnaissance is forbidden. This is the schema-level closure of the
@@ -2069,6 +2070,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			tweakApplyToolName: TWEAK_APPLY_TOOL_NAME,
 		});
 		if (draftingGate.block) return draftingGate;
+		if (draftingFor && isQuestionLikeToolName(event.toolName)) {
+			draftingFor = { ...draftingFor, questionsAsked: draftingFor.questionsAsked + 1 };
+		}
 		// Track for #4 empty-turn gate.
 		if (GOAL_WORK_TOOL_SET.has(event.toolName)) {
 			goalWorkToolCalledThisTurn = true;

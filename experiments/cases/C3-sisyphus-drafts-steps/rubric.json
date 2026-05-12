@@ -7,7 +7,7 @@
   },
   {
     "id": "create-goal-is-sisyphus",
-    "desc": "create_goal.sisyphus should be true (came through /goal-sis).",
+    "desc": "create_goal.sisyphus should be true (came through /goal-sisyphus).",
     "kind": "tool-args-jq",
     "tool": "propose_goal_draft",
     "jq": ".sisyphus == true"

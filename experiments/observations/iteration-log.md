@@ -199,7 +199,7 @@ fi
 
 A. **Schema 层移除 agent 对 tokenBudget 的写入**（Task 21）：
 - `create_goal` tool 参数中彻底移除 `tokenBudget`
-- 模块级 `pendingBudget` — 只在 `/goal-set` / `/goal-sis` 时从用户 topic 解析预算
+- 模块级 `pendingBudget` — 只在 `/goal-set` / `/goal-sisyphus` 时从用户 topic 解析预算
 - agent 无法再通过工具调用自设 budget
 - 相关 rubric (`no-self-imposed-budget`) 删除
 
@@ -386,7 +386,7 @@ Next direction (not in this iter): drafting-time schema or stricter drafting pro
    - `create_goal` is HIDDEN from agent (no shortcut). `propose_goal_draft` is the only commit path.
 
 2. **B1 drafting focus consistency** (schema gate):
-   - `draftingFor.focus` set by /goal-set or /goal-sis command. propose_goal_draft REJECTS proposals with `sisyphus !== (focus === "sisyphus")`.
+   - `draftingFor.focus` set by /goal-set or /goal-sisyphus command. propose_goal_draft REJECTS proposals with `sisyphus !== (focus === "sisyphus")`.
    - Closes C2 fullspec failure (agent misclassified /goal-set as sisyphus).
 
 3. **B2 plan-step preservation** (schema gate):

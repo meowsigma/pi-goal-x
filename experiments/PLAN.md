@@ -6,7 +6,7 @@
 
 被测的关键行为：
 
-1. **Drafting-first 命令**：`/goal-set` 与 `/goal-sis` 进入起草反问，而不是立即创建 goal
+1. **Drafting-first 命令**：`/goal-set` 与 `/goal-sisyphus` 进入起草反问，而不是立即创建 goal
 2. **Drafting 收敛后**：agent 自己调 `create_goal({objective, sisyphus, autoContinue, tokenBudget?})`，且 args 形状正确
 3. **Sisyphus 模式**：objective 内嵌 `=== Sisyphus Goal ===` 块、numbered steps、per-step done criterion
 4. **`/goal-tweak`**：在现有 goal 上进入起草反问 → 收敛后 agent 编辑 active goal 文件，**不**调 `create_goal` / `update_goal`
@@ -73,7 +73,7 @@
 |---|---|---|---|
 | C1 | `/goal-set` vague 主题应反问 | `/goal-set 帮我整理一下笔记` | ❌ create_goal；✅ 最终文本含问号；✅ 不动 sandbox 内任何文件 |
 | C2 | `/goal-set` 完整 spec 应直接 create | `/goal-set 把 sandbox/README.md 第一行从 hello 改成 Hello World，验证: head -1 README.md 输出 Hello World` | ✅ create_goal；sisyphus=false；objective.length 合理；✅ 产物 `active_goal_*.md` 出现 |
-| C3 | `/goal-sis` 应产 numbered steps | `/goal-sis 把 sandbox/README.md 的 hello world 改成大写并验证` | ✅ create_goal sisyphus=true；✅ objective 含 `=== Sisyphus Goal ===` 与 `Steps:`、至少 2 个 numbered step；❌ 不开始干活 |
+| C3 | `/goal-sisyphus` 应产 numbered steps | `/goal-sisyphus 把 sandbox/README.md 的 hello world 改成大写并验证` | ✅ create_goal sisyphus=true；✅ objective 含 `=== Sisyphus Goal ===` 与 `Steps:`、至少 2 个 numbered step；❌ 不开始干活 |
 | C4 | `/goal-tweak` 起草后改文件 | 预置 goal，再发 `/goal-tweak 把成功标准改成: head -2 输出两行` | ❌ create_goal；❌ update_goal；✅ active_goal_*.md 的 `# Goal Prompt` 段被修改 |
 | C5 | 不可能任务应触发 pause_goal | `/goal-set 读取 /this/definitely/does/not/exist/file.txt 并把内容写到 sandbox/output.txt` | (经 1-2 个 continue turn 后) ✅ pause_goal 被调，reason 含 "not exist" 或类似 |
 | C6 | sisyphus 缺前提应触发 pause_goal | sisyphus 起草后给一步要求"运行 deploy.sh"但 sandbox 里无此文件 | ✅ pause_goal；reason 提及缺失 |

@@ -55,7 +55,7 @@ Phase 4: schema-level `turnStoppedFor` is set when `apply_goal_tweak` / `pause_g
 
 ### C2 fullspec drafting (1 / 3 runs)
 Failure: agent set `sisyphus: true` on a `/goal-set` invocation that should NOT be sisyphus.
-Root cause: drafting prompt doesn't strongly enough disambiguate `/goal-set` from `/goal-sis`. Pre-existing issue, not Phase-4-related. Possible fix: add an explicit "if focus=goal, NEVER set sisyphus=true" line in drafting prompt or schema-reject sisyphus=true when drafting focus was `goal`.
+Root cause: drafting prompt doesn't strongly enough disambiguate `/goal-set` from `/goal-sisyphus`. Pre-existing issue, not Phase-4-related. Possible fix: add an explicit "if focus=goal, NEVER set sisyphus=true" line in drafting prompt or schema-reject sisyphus=true when drafting focus was `goal`.
 
 ### C6 sisyphus blocked (1 / 3 runs)
 Failure: agent drafted a 3-step plan (added a self-invented "step 1: check existing.txt") instead of the user's 2-step plan. Then on its self-added reconnaissance step 1, it found existing.txt missing and paused — without ever calling step_complete(1) on the actual step 1 (create a.txt).

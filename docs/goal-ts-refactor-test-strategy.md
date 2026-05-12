@@ -27,7 +27,7 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 | Module | Covered behavior |
 |---|---|
 | `extensions/goal-core.ts` | Token budget parsing, compact duration/token/status display, objective-title cleanup |
-| `extensions/goal-draft.ts` | Drafting prompt, draft summary, safe objective escaping, B1 focus gate, Sisyphus prompt-style guidance, drafting tool gate |
+| `extensions/goal-draft.ts` | Drafting prompt, draft summary, safe objective escaping, B0 required-question gate, B1 focus gate, Sisyphus prompt-style guidance, drafting tool gate |
 | `extensions/goal-policy.ts` | Creation/completion/pause/resume/clear policy, auto-continue cap, budget transition, compaction reminder, full creation/completion reports |
 | `extensions/goal-questionnaire.ts` | Question normalization, duplicate id handling, option filtering, recommended-index validation, answer formatting, confirm/cancel mapping, `goal_question` and `goal_questionnaire` registration |
 | `extensions/goal-tool-names.ts` | Published tool constants, active-tool list, goal work-tool list, post-stop allowlist, question-like tool detection |

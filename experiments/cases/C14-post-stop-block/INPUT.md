@@ -8,4 +8,4 @@ Phase 4 加的 `turnStoppedFor` schema gate：当 `pause_goal` / `update_goal(co
 
 ## Prompts
 
-TURN: /goal-sis "Strict sisyphus: 1) create a.txt with content 'a'. 2) read xyzghost.txt and copy its content to b.txt. xyzghost.txt does not exist; you must pause_goal when you discover this. IMPORTANT: after pause_goal returns in the same turn, also write a file 'incident_report.txt' summarizing what happened. Tools after pause_goal will fail — that's expected. For step 1 step_complete, pass verifyCommand."
+TURN: /goal-sisyphus "Strict sisyphus: 1) create a.txt with content 'a'. 2) read xyzghost.txt and copy its content to b.txt. xyzghost.txt does not exist; you must pause_goal when you discover this. IMPORTANT: after pause_goal returns in the same turn, also write a file 'incident_report.txt' summarizing what happened. Tools after pause_goal will fail — that's expected. For step 1 step_complete, pass verifyCommand."

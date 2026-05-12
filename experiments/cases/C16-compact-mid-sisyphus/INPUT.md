@@ -9,4 +9,4 @@
 
 ## Prompts
 
-TURN: /goal-sis "Sisyphus 5 steps: 1) create f1.txt with 'one'. 2) create f2.txt with 'two'. 3) create f3.txt with 'three'. 4) create f4.txt with 'four'. 5) create f5.txt with 'five'. Each step_complete pass verifyCommand like test -f f1.txt && [ \"$(cat f1.txt)\" = one ]. autoContinue: true."
+TURN: /goal-sisyphus "Sisyphus 5 steps: 1) create f1.txt with 'one'. 2) create f2.txt with 'two'. 3) create f3.txt with 'three'. 4) create f4.txt with 'four'. 5) create f5.txt with 'five'. Each step_complete pass verifyCommand like test -f f1.txt && [ \"$(cat f1.txt)\" = one ]. autoContinue: true."

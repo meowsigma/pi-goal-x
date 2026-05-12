@@ -123,7 +123,7 @@ REAL fireworks/kimi-k2p6-turbo + thinking=high + turn_timeout=360s：
    - headless 模式自动确认（test harness 兼容）
    - **create_goal 工具在 drafting 期间被 hidden**（强制走 confirm 流）
 2. **B1 drafting focus consistency**（schema gate）
-   - `draftingFor.focus` 由 /goal-set 或 /goal-sis 设置；propose_goal_draft 校验 `params.sisyphus === (focus === "sisyphus")`，不一致即 REJECT
+   - `draftingFor.focus` 由 /goal-set 或 /goal-sisyphus 设置；propose_goal_draft 校验 `params.sisyphus === (focus === "sisyphus")`，不一致即 REJECT
 3. **B2 plan-step preservation**（schema gate）
    - 保存用户原 topic 中的 step 数；propose_goal_draft 校验 proposed steps ≤ user steps + 1，否则 REJECT（关闭 C6 step inflation 故障）
 4. **C1 `<pi_goal_continuation goal_id="...">` 前缀**（pi-codex-goal 借鉴）

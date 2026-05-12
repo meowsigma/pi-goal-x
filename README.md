@@ -189,12 +189,15 @@ bash harness/run.sh C1-vague-goal-set --count 3 --grade --no-smoke
 The npm package ships only the runtime extension, docs, and package metadata. The extension is split into small modules:
 
 ```text
-extensions/goal.ts                 orchestration, commands, file IO, events, timers
+extensions/goal.ts                 orchestration, commands, tools, events, timers
+extensions/goal-record.ts          goal record types, normalization, creation helpers
 extensions/goal-core.ts            parsing and display helpers
 extensions/goal-draft.ts           drafting prompt, proposal validation, drafting tool gate
 extensions/goal-policy.ts          lifecycle, pause/resume/complete, Sisyphus, budget policy
 extensions/goal-questionnaire.ts   built-in question UI and question tool registration
 extensions/goal-tool-names.ts      centralized published tool names and allowlists
+extensions/prompts/goal-prompts.ts active, continuation, budget, tweak, and stale prompts
+extensions/storage/goal-files.ts   goal file paths, serialization, parsing, archive IO
 extensions/widgets/goal-widget.ts  above-editor goal beacon component
 extensions/widgets/goal-notifications.ts widget-style notification text
 ```

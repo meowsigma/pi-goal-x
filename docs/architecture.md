@@ -9,20 +9,22 @@ This document describes the shipped `pi-goal` extension as it exists now. It foc
 - slash commands;
 - tool registration;
 - session events;
-- active/archived goal file IO;
 - auto-continue timers;
 - usage accounting;
-- above-editor widget rendering.
+- coordination with extracted prompt, storage, policy, questionnaire, and widget modules.
 
 Reusable logic is split into smaller modules:
 
 | Module | Responsibility |
 |---|---|
+| `goal-record.ts` | Goal record types, creation, cloning, usage normalization, persisted-record migration |
 | `goal-core.ts` | Token-budget parsing, compact display formatting, status labels, objective title cleanup |
 | `goal-draft.ts` | Drafting prompts, plain-text draft confirmation report, draft proposal validation, drafting-stage tool gate |
 | `goal-policy.ts` | Lifecycle policy, pause/resume/complete validation, budget/compaction policy, full result reports |
 | `goal-questionnaire.ts` | Built-in questionnaire types, normalization, answer formatting, TUI question runner, proposal confirmation dialog, question-tool registration |
 | `goal-tool-names.ts` | Published tool-name constants, active-tool lists, post-stop allowlist, goal work-tool list, question-like tool detection |
+| `prompts/goal-prompts.ts` | Active-goal, continuation, budget-limit, tweak-drafting, and stale-checkpoint prompt builders |
+| `storage/goal-files.ts` | Goal path safety, serialization/parsing, active-file writes, archive writes, prompt-body merge from disk |
 | `widgets/goal-widget.ts` | Above-editor Goal Beacon component, blocker/budget/status rendering |
 | `widgets/goal-notifications.ts` | Widget-style notification text for goal lifecycle toasts |
 

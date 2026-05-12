@@ -32,6 +32,7 @@ The current extension also adds behavior specific to goal drafting and lifecycle
 - **Centralized tool names**: published tool names and allowlists live in `goal-tool-names.ts`.
 - **Questionnaire componentization**: normalization, answer formatting, proposal confirmation, and question-tool registration live in `goal-questionnaire.ts`.
 - **Widget module split**: the above-editor Goal Beacon and widget-style notification text live under `extensions/widgets/`.
+- **Record/prompt/storage split**: goal record normalization, prompt construction, and disk serialization now live in separate tested modules instead of the orchestration file.
 
 ## Current validation
 

@@ -19,6 +19,9 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 - `tests/goal-policy.test.ts`
 - `tests/goal-questionnaire.test.ts`
 - `tests/goal-tool-names.test.ts`
+- `tests/goal-record.test.ts`
+- `tests/goal-files.test.ts`
+- `tests/goal-prompts.test.ts`
 
 ## Extracted modules
 
@@ -26,11 +29,14 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 
 | Module | Covered behavior |
 |---|---|
+| `extensions/goal-record.ts` | Goal creation, normalization/migration, usage cloning, persisted record shape |
 | `extensions/goal-core.ts` | Token budget parsing, compact duration/token/status display, objective-title cleanup |
 | `extensions/goal-draft.ts` | Drafting prompt, draft summary, safe objective escaping, B0 required-question gate, B1 focus gate, Sisyphus prompt-style guidance, drafting tool gate |
 | `extensions/goal-policy.ts` | Creation/completion/pause/resume/clear policy, auto-continue cap, budget transition, compaction reminder, full creation/completion reports |
 | `extensions/goal-questionnaire.ts` | Question normalization, duplicate id handling, option filtering, recommended-index validation, answer formatting, confirm/cancel mapping, `goal_question` and `goal_questionnaire` registration |
 | `extensions/goal-tool-names.ts` | Published tool constants, active-tool list, goal work-tool list, post-stop allowlist, question-like tool detection |
+| `extensions/prompts/goal-prompts.ts` | Active-goal, continuation, budget-limit, tweak-drafting, and stale-checkpoint prompt text |
+| `extensions/storage/goal-files.ts` | Safe goal paths, serialize/parse round trip, prompt-body disk edits, active/archive writes |
 | `extensions/widgets/goal-widget.ts` | Goal Beacon rendering, Sisyphus style label, budget/status/path lines, blocker/suggested-action display |
 | `extensions/widgets/goal-notifications.ts` | Widget-style notification text for goal lifecycle toasts |
 
@@ -46,7 +52,6 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 
 The following remain intentionally in `goal.ts` until a stronger mock `ExtensionAPI` / `ExtensionContext` harness exists:
 
-- file IO and archive path handling;
 - pi command registration;
 - tool registration beyond the questionnaire pair;
 - session event hooks;

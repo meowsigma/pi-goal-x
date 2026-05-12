@@ -37,6 +37,7 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 | `extensions/goal-core.ts` | Token budget parsing, compact duration/token/status display, objective-title cleanup |
 | `extensions/goal-draft.ts` | Drafting prompt, draft identity binding, draft summary, safe objective escaping, B0 required-question gate, B1 focus gate, Sisyphus prompt-style guidance, drafting tool gate, multi-open draft creation allowance |
 | `extensions/goal-policy.ts` | Creation/completion-from-active-or-paused, abort/pause/resume/clear policy, multi-open creation slot allowance, auto-continue cap, budget transition, `/goal-budget` parsing/recovery, compaction reminder, full creation/completion reports |
+| `extensions/goal-auditor.ts` | Independent pi auditor agent config parsing, prompt construction, approval marker parsing, and completion audit execution |
 | `extensions/goal-questionnaire.ts` | Question normalization, duplicate id handling, option filtering, recommended-index validation, answer formatting, confirm/cancel mapping, `goal_question` and `goal_questionnaire` registration |
 | `extensions/goal-tool-names.ts` | Published tool constants, active/paused/drafting tool lists, goal work-tool list, progress-tool list for empty-turn gating, post-stop allowlist, question-like tool detection |
 | `extensions/prompts/goal-prompts.ts` | Active-goal, continuation, budget-limit, tweak-drafting, stale-checkpoint, and unfocused multi-open prompt text |
@@ -74,6 +75,7 @@ The current suite specifically covers the multi-open goal architecture through p
 - multi-open draft creation allowance, stale draft identity rejection, required-question tool guidance, concrete-topic convergence guidance, and draft prompt identity text in `tests/goal-draft.test.ts`;
 - no-focus prompt guidance and budget-recovery prompt text in `tests/goal-prompts.test.ts`;
 - per-goal auto-continue cap policy and `/goal-budget` parsing/reactivation in `tests/goal-policy.test.ts`;
+- auditor marker/config/prompt behavior in `tests/goal-auditor.test.ts`;
 - drafting-phase lifecycle-tool suspension and progress-tool exclusion of `get_goal`, question tools, and draft proposal tools in `tests/goal-tool-names.test.ts`;
 - focused widget `+N open` and unfocused `/goal-focus` guidance in `tests/goal-widget.test.ts`.
 

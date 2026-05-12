@@ -31,6 +31,7 @@ Reusable logic is split into smaller modules:
 | `goal-core.ts` | Token-budget parsing, compact display formatting, status labels, objective title cleanup |
 | `goal-draft.ts` | Drafting prompts, plain-text draft confirmation report, draft proposal validation, drafting-stage tool gate |
 | `goal-policy.ts` | Lifecycle policy, abort/pause/resume/complete validation, budget/compaction policy, full result reports |
+| `goal-auditor.ts` | Independent pi auditor agent prompt/config/decision parsing and completion audit execution |
 | `goal-questionnaire.ts` | Built-in questionnaire types, normalization, answer formatting, TUI question runner, proposal confirmation dialog, question-tool registration |
 | `goal-tool-names.ts` | Published tool-name constants, active-tool lists, post-stop allowlist, goal work-tool list, question-like tool detection |
 | `prompts/goal-prompts.ts` | Active-goal, continuation, budget-limit, tweak-drafting, and stale-checkpoint prompt builders |
@@ -54,7 +55,7 @@ Reusable logic is split into smaller modules:
   │    ├─ autoContinue queues checkpoint turns
   │    ├─ pause_goal pauses on real blockers
   │    ├─ abort_goal aborts/archives obsolete or impossible goals
-  │    └─ update_goal complete archives and prints full completion report
+  │    └─ update_goal starts independent auditor; <approved/> archives and prints full completion report
   │
   ├─ paused goal
   │    ├─ /goal-resume restarts autoContinue
@@ -142,6 +143,7 @@ It no longer rejects merely because another open goal exists. Confirming a draft
 - `/goal-tweak` revises only the focused active, budget-limited, or paused goal; when unfocused with open goals, it asks the user to choose one.
 - `/goal-pause` and `/goal-budget` also ask the user to choose when the session is unfocused and open goals exist.
 - `/goal-budget <tokens|none>` raises, sets, or removes the focused goal's token budget. If a budget-limited goal now has room to continue, it becomes active again and its continuation cap starts fresh.
+- `/goal-settings` opens extension settings. The current settings screen contains `auditor`, where provider/model/thinking_level are edited via free-text inputs.
 
 When `propose_goal_draft` asks for confirmation, the UI shows a full plain-text draft report rather than a Markdown preview. On confirmation, the result prints the full finalized objective in the conversation. The same objective is also written to the active goal file.
 
@@ -194,13 +196,23 @@ Continuation prompts include a goal id so stale prompts can be detected and neut
 
 ## Completion output
 
-Completion is intentionally verbose in the tool result. `update_goal(status="complete")` is valid for active, budget-limited, and paused goals; paused goals do not need to be resumed just to record completion when existing evidence is sufficient. The user sees:
+Completion is intentionally verbose in the tool result and guarded by an independent auditor agent. `update_goal(status="complete")` is valid for active, budget-limited, and paused goals; paused goals do not need to be resumed just to record completion when existing evidence is sufficient.
+
+Before archiving, the tool starts a separate in-memory pi session with a focused auditor prompt. The auditor receives the objective, executor completion summary, and goal metadata, can inspect the workspace with `read`, `grep`, `find`, `ls`, and `bash`, and must end with exactly one marker:
+
+- `<approved/>` allows archiving;
+- `<disapproved/>`, no marker, an error, or abort rejects completion and leaves the goal open.
+
+The auditor uses the current/default model unless `.pi/goal-auditor.json` or `PI_GOAL_AUDITOR_PROVIDER`, `PI_GOAL_AUDITOR_MODEL`, and `PI_GOAL_AUDITOR_THINKING_LEVEL` override provider/model/thinking. `/goal-settings` opens a small UI menu with an `auditor` item; inside it, `provider`, `model`, and `thinking_level` each open a free-text input and save back to `.pi/goal-auditor.json`.
+
+The user sees:
 
 - a `Goal complete.` header;
-- the agent's optional completion summary/evidence;
+- the executor's optional completion summary/evidence;
+- the auditor's approval report;
 - the full current goal details.
 
-This mirrors creation: the finalized goal is visible when created, and the final report is visible when completed.
+This mirrors creation: the finalized goal is visible when created, and the final report is visible when completed. The gate is intentionally semantic rather than paperwork-based: scaffold-only, alpha, generated-template, proxy-metric, build-only, or weakly verified completions should be disapproved by the auditor.
 
 ## Tests
 
@@ -219,6 +231,7 @@ They cover:
 - questionnaire normalization and answer formatting;
 - tool-name constants and question-like detection;
 - lifecycle policy, including abort and paused-goal completion;
+- auditor config/prompt/marker parsing, including disapproval winning over approval;
 - goal-pool and focus resolution helpers;
 - active goal file scanning;
 - unfocused prompt guidance;

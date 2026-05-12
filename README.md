@@ -77,6 +77,7 @@ Sisyphus mode is for patient ordered execution. It uses the same lifecycle and t
 /goal-pause             Pause the focused active goal
 /goal-resume            Resume a paused goal
 /goal-budget <n|none>   Raise, set, or remove the focused goal's token budget
+/goal-settings          Configure pi-goal settings, including auditor model settings
 /goal-abort             Abort/archive the focused goal or cancel drafting
 /goal-clear             Archive the focused goal or cancel drafting
 ```
@@ -138,19 +139,42 @@ When a focused goal reaches its token budget, it becomes `budgetLimited` and sto
 
 ## Completion behavior
 
-Completion is also explicit. The agent should call:
+Completion is also explicit and is checked by an independent pi auditor agent. The executor calls `update_goal` with its completion claim:
 
 ```json
-{"status":"complete","completionSummary":"What was completed and what evidence proves it."}
+{
+  "status": "complete",
+  "completionSummary": "What was completed and what evidence proves it."
+}
 ```
+
+Before archiving the goal, `update_goal` starts a separate pi agent in an isolated in-memory session. The auditor receives the objective, the executor's completion claim, and current goal metadata, then can inspect the workspace with read-only-oriented tools (`read`, `grep`, `find`, `ls`, and `bash`). It must end its report with exactly one marker:
+
+- `<approved/>` archives the goal as complete.
+- `<disapproved/>`, no marker, an error, or an abort rejects completion and leaves the goal open.
+
+The auditor is semantic, not a paperwork checklist: it should reject scaffold-only, alpha, generated-template, proxy-metric, build-only, or weakly verified completions when the real user outcome is not satisfied.
+
+By default the auditor uses the current/default pi model. Configure it interactively with `/goal-settings` -> `auditor`, then click `provider`, `model`, or `thinking_level` and type the value directly. The settings are saved to `.pi/goal-auditor.json`. You can also edit the file or override it with environment variables:
+
+```json
+{
+  "provider": "fireworks",
+  "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+  "thinking_level": "high"
+}
+```
+
+Environment variables `PI_GOAL_AUDITOR_PROVIDER`, `PI_GOAL_AUDITOR_MODEL`, and `PI_GOAL_AUDITOR_THINKING_LEVEL` take precedence over `/goal-settings`.
 
 The completion result prints a full report into the conversation:
 
 - `Goal complete.`
-- optional completion summary / evidence supplied by the agent
+- optional completion summary / evidence supplied by the executor
+- the auditor's approval report
 - full current goal details, including objective, status, usage, budget, mode, and file path
 
-Sisyphus goals use the same completion tool as regular goals. The stricter part is the prompt/criteria standard: the agent should only complete after the whole ordered objective is actually satisfied. A paused goal can also be completed directly when the agent already has enough evidence that every requirement is satisfied; it does not need a resume just to call `update_goal`.
+Sisyphus goals use the same completion tool as regular goals. The stricter part is the prompt/criteria standard: the agent should only call completion after the whole ordered objective is actually satisfied and likely to survive independent auditing. A paused goal can also be completed directly when the agent already has enough evidence that every requirement is satisfied; it does not need a resume just to call `update_goal`.
 
 ## Schema gates
 
@@ -163,7 +187,7 @@ The shipped gates are intentionally small and mechanical.
 | Required drafting question | The agent directly agreeing to a goal without grilling the user on criteria or constraints |
 | Confirm-before-commit | The agent silently creating or replacing a goal |
 | Draft identity gate | A stale overlapping draft prompt creating or focusing a goal after a newer draft starts |
-| Completion gate | Completing stale, missing, or already completed goals; paused goals remain completable when evidence is sufficient |
+| Completion auditor gate | Archiving completion unless an independent pi auditor agent returns `<approved/>` |
 | Abort gate | Aborting missing, stale, completed, or reasonless goals |
 | Direct-create rejection | Hidden `create_goal` calls creating goals without the confirmation flow |
 | Post-stop block | Continuing to call tools after `pause_goal`, `abort_goal`, `update_goal`, or `apply_goal_tweak` stops the turn |
@@ -227,6 +251,7 @@ extensions/goal-pool.ts            open-goal pool, focus resolution, list/select
 extensions/goal-core.ts            parsing and display helpers
 extensions/goal-draft.ts           drafting prompt, proposal validation, drafting tool gate
 extensions/goal-policy.ts          lifecycle, pause/resume/complete, Sisyphus, budget policy
+extensions/goal-auditor.ts         independent pi auditor agent for completion approval
 extensions/goal-questionnaire.ts   built-in question UI and question tool registration
 extensions/goal-tool-names.ts      centralized published tool names and allowlists
 extensions/prompts/goal-prompts.ts active, continuation, budget, tweak, and stale prompts

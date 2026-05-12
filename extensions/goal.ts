@@ -20,6 +20,13 @@ import {
 	type GoalDraftingFocus,
 } from "./goal-draft.ts";
 import {
+	goalAuditorConfigPath,
+	loadGoalAuditorFileConfig,
+	runGoalCompletionAuditor,
+	saveGoalAuditorFileConfig,
+	type GoalAuditorConfig,
+} from "./goal-auditor.ts";
+import {
 	isHeadlessQuestionSufficientForDraft,
 	proposalDialogFailureMessage,
 	registerQuestionnaireTools,
@@ -1340,6 +1347,67 @@ Drafting is still active, but your last response did not use a question tool. Pl
 		ctx.ui.notify(`Goal budget updated: ${parsed.label}.`, "info");
 	}
 
+	function auditorConfigValue(config: GoalAuditorConfig, key: keyof GoalAuditorConfig): string {
+		return config[key] ?? "(default)";
+	}
+
+	function auditorSettingsLines(config: GoalAuditorConfig): string[] {
+		return [
+			`provider: ${auditorConfigValue(config, "provider")}`,
+			`model: ${auditorConfigValue(config, "model")}`,
+			`thinking_level: ${auditorConfigValue(config, "thinkingLevel")}`,
+		];
+	}
+
+	async function handleGoalAuditorSettings(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) {
+			ctx.ui.notify(`Goal auditor settings file: ${goalAuditorConfigPath(ctx.cwd)}`, "info");
+			return;
+		}
+		const fieldLabels = ["provider", "model", "thinking_level"] as const;
+		while (true) {
+			const config = loadGoalAuditorFileConfig(ctx.cwd);
+			const options = [
+				`provider: ${auditorConfigValue(config, "provider")}`,
+				`model: ${auditorConfigValue(config, "model")}`,
+				`thinking_level: ${auditorConfigValue(config, "thinkingLevel")}`,
+			];
+			const selected = await ctx.ui.select("Goal auditor settings", options);
+			if (!selected) return;
+			const index = options.indexOf(selected);
+			const field = fieldLabels[index];
+			if (!field) return;
+			const key = field === "thinking_level" ? "thinkingLevel" : field;
+			const currentValue = auditorConfigValue(config, key);
+			const input = await ctx.ui.input(`Set auditor ${field}`, currentValue === "(default)" ? "Leave empty for default" : currentValue);
+			if (input === undefined) continue;
+			const next: GoalAuditorConfig = { ...config };
+			const trimmed = input.trim();
+			if (!trimmed) {
+				delete next[key];
+			} else if (key === "thinkingLevel") {
+				if (!["off", "minimal", "low", "medium", "high", "xhigh"].includes(trimmed)) {
+					ctx.ui.notify("thinking_level must be one of: off, minimal, low, medium, high, xhigh", "warning");
+					continue;
+				}
+				next.thinkingLevel = trimmed as GoalAuditorConfig["thinkingLevel"];
+			} else {
+				next[key] = trimmed;
+			}
+			saveGoalAuditorFileConfig(ctx.cwd, next);
+			ctx.ui.notify(`Goal auditor settings saved:\n${auditorSettingsLines(loadGoalAuditorFileConfig(ctx.cwd)).join("\n")}`, "info");
+		}
+	}
+
+	async function handleGoalSettings(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) {
+			ctx.ui.notify(`Goal settings require UI. Auditor config file: ${goalAuditorConfigPath(ctx.cwd)}`, "warning");
+			return;
+		}
+		const selected = await ctx.ui.select("Goal settings", ["auditor"]);
+		if (selected === "auditor") await handleGoalAuditorSettings(ctx);
+	}
+
 	async function handleGoalClear(ctx: ExtensionContext): Promise<void> {
 		if (draftingFor !== null || tweakDraftingFor !== null) {
 			draftingFor = null;
@@ -1402,7 +1470,7 @@ Drafting is still active, but your last response did not use a question tool. Pl
 		},
 	};
 	pi.registerCommand("goal", {
-		description: "Show focused goal status. Manage goals with /goal-set, /goal-sisyphus, /goal-list, /goal-focus, /goal-tweak, /goal-replace, /goal-clear, /goal-abort, /goal-pause, /goal-resume.",
+		description: "Show focused goal status. Manage goals with /goal-set, /goal-sisyphus, /goal-list, /goal-focus, /goal-settings, /goal-tweak, /goal-replace, /goal-clear, /goal-abort, /goal-pause, /goal-resume.",
 		handler: statusCommand.handler,
 	});
 	pi.registerCommand("goal-status", statusCommand);
@@ -1418,6 +1486,12 @@ Drafting is still active, but your last response did not use a question tool. Pl
 		description: "Choose which open goal this session should focus on.",
 		handler: async (_rawArgs, ctx) => {
 			await focusGoalCommand(ctx);
+		},
+	});
+	pi.registerCommand("goal-settings", {
+		description: "Open pi-goal settings, including auditor provider/model/thinking_level.",
+		handler: async (_rawArgs, ctx) => {
+			await handleGoalSettings(ctx);
 		},
 	});
 
@@ -1703,17 +1777,18 @@ Drafting is still active, but your last response did not use a question tool. Pl
 		promptSnippet: "Mark the active or paused pi goal complete when the objective is achieved.",
 		promptGuidelines: [
 			"Use update_goal with status=complete only when the pi goal objective has actually been achieved and no required work remains.",
-			"Before calling update_goal, map every explicit requirement in the objective to concrete evidence from files, command output, test results, PR state, or other real artifacts; uncertainty means the goal is not complete.",
+			"Before calling update_goal, summarize the evidence you believe proves completion; the tool will launch an independent pi auditor agent to inspect the workspace and judge the claim.",
+			"The auditor is authoritative: completion is archived only if the auditor report ends with <approved/>. If it ends with <disapproved/> or no approval marker, update_goal is rejected and the goal remains open.",
 			"Do not call update_goal merely because work is stopping, substantial progress was made, tests passed without covering every requirement, or the token budget is nearly exhausted.",
 			"Do not use update_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
 			"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
 		],
 		parameters: Type.Object({
 			status: StringEnum([COMPLETE_STATUS] as const, { description: "Set to complete only when the objective is achieved." }),
-			completionSummary: Type.Optional(Type.String({ description: "Optional concise completion report or evidence summary to show verbatim in the tool result." })),
+			completionSummary: Type.Optional(Type.String({ description: "Concise completion claim and evidence summary passed to the independent auditor agent." })),
 		}),
 		executionMode: "sequential",
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			reconcileFocusedGoalFromDisk(ctx);
 			if (params.status !== COMPLETE_STATUS) throw new Error("update_goal only supports status=complete.");
 			const completionGate = validateGoalCompletion({ goal: state.goal, runningGoalId });
@@ -1724,9 +1799,32 @@ Drafting is still active, but your last response did not use a question tool. Pl
 				};
 			}
 			if (!state.goal) throw new Error("Goal disappeared during completion validation.");
+			const auditTarget = mergeGoalPromptFromDisk(ctx, state.goal);
+			const auditor = await runGoalCompletionAuditor({
+				ctx,
+				goal: auditTarget,
+				completionSummary: params.completionSummary,
+				detailedSummary: detailedSummary(auditTarget),
+				signal,
+			});
+			if (!auditor.approved) {
+				return {
+					content: [{
+						type: "text",
+						text: [
+							"Goal completion rejected by independent auditor.",
+							auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
+							auditor.error ? `Auditor error: ${auditor.error}` : undefined,
+							"",
+							auditor.output || "Auditor produced no approval marker.",
+						].filter((line): line is string => line !== undefined).join("\n"),
+					}],
+					details: goalDetails(state.goal),
+				};
+			}
 			// Account for any remaining elapsed time before stopping.
 			accountProgress(ctx, { allowBudgetSteering: false, accountBudgetLimited: true });
-			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
+			state.goal = auditTarget;
 			stopActiveGoal("complete", "agent", ctx);
 			const completedGoal = state.goal;
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
@@ -1745,6 +1843,7 @@ Drafting is still active, but your last response did not use a question tool. Pl
 					text: buildCompletionReport({
 						detailedSummary: detailedSummary(completedGoal),
 						completionSummary: params.completionSummary,
+						auditorReport: auditor.output,
 					}),
 				}],
 				details: goalDetails(completedGoal),

@@ -26,6 +26,7 @@
   "files": [
     "extensions",
     "README.md",
+    "docs",
     "LICENSE"
   ],
   "pi": {
@@ -34,7 +35,8 @@
     ]
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

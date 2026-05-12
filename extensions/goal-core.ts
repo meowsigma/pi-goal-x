@@ -1,0 +1,138 @@
+export interface GoalUsageLike {
+	tokensUsed: number;
+	activeSeconds: number;
+}
+
+export interface GoalDisplayRecordLike {
+	objective: string;
+	status: "active" | "paused" | "budgetLimited" | "complete";
+	autoContinue: boolean;
+	tokenBudget: number | null;
+	usage: GoalUsageLike;
+	sisyphus: boolean;
+	stopReason?: "user" | "agent";
+}
+
+export { isQuestionLikeToolName } from "./goal-tool-names.ts";
+
+
+export function countUserSteps(topic: string): number {
+	const lines = topic.split(/\r?\n/);
+	const stepNumbers = new Set<number>();
+	for (const rawLine of lines) {
+		const m = rawLine.match(/^\s*(\d{1,3})[.)、]\s*\S/);
+		if (m) {
+			const n = Number(m[1]);
+			if (Number.isFinite(n) && n >= 1 && n <= 999) stepNumbers.add(n);
+		}
+	}
+	if (stepNumbers.size > 0) return Math.max(...stepNumbers);
+	// Conservative non-Arabic fallback: at least two markers before treating prose as steps.
+	const cnMarkers = [/(?:^|[\s,;.，；。])第[一二三四五六七八九十]/g];
+	let cnHits = 0;
+	for (const re of cnMarkers) {
+		const matches = topic.match(re);
+		if (matches) cnHits += matches.length;
+	}
+	return cnHits >= 2 ? cnHits : 0;
+}
+
+export function parseTokenBudgetFromTopic(topic: string): number | null {
+	// Look for patterns like "5000 tokens", "10000 token budget", "预算 20000".
+	const beforeKeyword = topic.match(/\b(\d{3,})\s*(tokens?|token[-\s]?budget|token[-\s]?cap)\b/i)
+		?? topic.match(/(\d{3,})\s*预算/);
+	const afterBudgetWord = topic.match(/(?:token[-\s]?budget|token[-\s]?cap)\s*(\d{3,})\b/i)
+		?? topic.match(/预算\s*(\d{3,})/);
+	const raw = beforeKeyword?.[1] ?? afterBudgetWord?.[1];
+	if (!raw) return null;
+	const n = Number(raw);
+	return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+export function parseSisyphusStepCount(objective: string): number | null {
+	const lines = objective.split(/\r?\n/);
+	const stepNumbers = new Set<number>();
+	for (const rawLine of lines) {
+		const m = rawLine.match(/^\s*(\d{1,3})\.\s+\S/);
+		if (m) {
+			const n = Number(m[1]);
+			if (Number.isFinite(n) && n >= 1 && n <= 999) stepNumbers.add(n);
+		}
+	}
+	if (stepNumbers.size === 0) return null;
+	let max = 0;
+	for (const n of stepNumbers) if (n > max) max = n;
+	return max;
+}
+
+export function truncateText(value: string, max = 120): string {
+	const oneLine = value.replace(/\s+/g, " ").trim();
+	return oneLine.length > max ? `${oneLine.slice(0, max - 3)}...` : oneLine;
+}
+
+export function displayObjectiveTitle(objective: string): string {
+	const lines = objective.replace(/\r/g, "").split("\n").map((line) => line.trim()).filter(Boolean);
+	const sectionHeader = /^(success criteria|boundaries|constraints|steps|order rules|don'ts|if blocked|if blocked \/ unclear \/ failing|sisyphus reminder)\s*[:：]/i;
+	for (const line of lines) {
+		if (/^=+\s*(?:sisyphus\s+)?goal\s*=+$/i.test(line)) continue;
+		const objectiveMatch = line.match(/^(?:objective|目标)\s*[:：]\s*(.+)$/i);
+		if (objectiveMatch?.[1]) return objectiveMatch[1].trim();
+		if (sectionHeader.test(line)) continue;
+		return line;
+	}
+	return truncateText(objective);
+}
+
+export function formatTokenValue(value: number): string {
+	const safe = Math.max(0, Math.floor(value));
+	const compact =
+		safe >= 1_000_000_000
+			? `${(safe / 1_000_000_000).toFixed(safe >= 10_000_000_000 ? 0 : 1).replace(/\.0$/, "")}B`
+			: safe >= 1_000_000
+				? `${(safe / 1_000_000).toFixed(safe >= 10_000_000 ? 0 : 1).replace(/\.0$/, "")}M`
+				: safe >= 10_000
+					? `${(safe / 1_000).toFixed(0)}K`
+					: safe >= 1_000
+						? `${(safe / 1_000).toFixed(1).replace(/\.0$/, "")}K`
+						: String(safe);
+	const exact = safe.toLocaleString("en-US");
+	if (compact === exact) return `${exact} tokens`;
+	return `${compact} (${exact}) tokens`;
+}
+
+export function formatDuration(seconds: number): string {
+	const total = Math.max(0, Math.floor(seconds));
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const secs = total % 60;
+	if (hours > 0) return `${hours}h${minutes.toString().padStart(2, "0")}m${secs.toString().padStart(2, "0")}s`;
+	if (minutes > 0) return `${minutes}m${secs.toString().padStart(2, "0")}s`;
+	return `${secs}s`;
+}
+
+export function formatTokenBudget(goal: Pick<GoalDisplayRecordLike, "tokenBudget">): string {
+	return goal.tokenBudget === null ? "none" : formatTokenValue(goal.tokenBudget);
+}
+
+export function formatRemainingTokens(goal: Pick<GoalDisplayRecordLike, "tokenBudget" | "usage">): string {
+	if (goal.tokenBudget === null) return "unbounded";
+	return formatTokenValue(Math.max(0, goal.tokenBudget - goal.usage.tokensUsed));
+}
+
+export function statusLabel(goal: Pick<GoalDisplayRecordLike, "sisyphus" | "status" | "autoContinue" | "stopReason">): string {
+	const prefix = goal.sisyphus ? "sisyphus " : "";
+	if (goal.status === "active" && goal.autoContinue) return `${prefix}running`;
+	if (goal.status === "budgetLimited") return `${prefix}budget_limited`;
+	if (goal.status === "paused" && goal.stopReason === "agent") return `${prefix}paused (agent)`;
+	return `${prefix}${goal.status}`;
+}
+
+export function footerStatus(goal: GoalDisplayRecordLike): string {
+	const usageBits: string[] = [];
+	if (goal.usage.activeSeconds > 0) usageBits.push(formatDuration(goal.usage.activeSeconds));
+	if (goal.usage.tokensUsed > 0) usageBits.push(formatTokenValue(goal.usage.tokensUsed).split(" ")[0]);
+	if (goal.tokenBudget !== null) usageBits.push(`/ ${formatTokenValue(goal.tokenBudget).split(" ")[0]}`);
+	const usage = usageBits.length > 0 ? ` [${usageBits.join(" ")}]` : "";
+	const prefix = goal.sisyphus ? "goal✊" : "goal";
+	return `${prefix}: ${statusLabel(goal)}${usage} - ${truncateText(goal.objective, 60)}`;
+}

@@ -9,7 +9,7 @@ import {
 	formatTokenValue,
 	truncateText,
 	type GoalDisplayRecordLike,
-} from "./goal-core.ts";
+} from "../goal-core.ts";
 
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;

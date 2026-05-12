@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { renderGoalWidgetLines, type GoalWidgetRecord } from "../extensions/goal-widget.ts";
+import { renderGoalWidgetLines, type GoalWidgetRecord } from "../extensions/widgets/goal-widget.ts";
 
 const theme = {
 	fg: (_color: string, value: string) => value,

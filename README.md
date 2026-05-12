@@ -195,7 +195,8 @@ extensions/goal-draft.ts           drafting prompt, proposal validation, draftin
 extensions/goal-policy.ts          lifecycle, pause/resume/complete, Sisyphus, budget policy
 extensions/goal-questionnaire.ts   built-in question UI and question tool registration
 extensions/goal-tool-names.ts      centralized published tool names and allowlists
-extensions/goal-widget.ts          above-editor goal beacon component
+extensions/widgets/goal-widget.ts  above-editor goal beacon component
+extensions/widgets/goal-notifications.ts widget-style notification text
 ```
 
 ## Design principles

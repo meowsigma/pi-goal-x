@@ -31,7 +31,7 @@ The current extension also adds behavior specific to goal drafting and lifecycle
 - **Built-in question tools**: `goal_question` and `goal_questionnaire` provide package-local user-dialogue tools with `goal_` prefixes.
 - **Centralized tool names**: published tool names and allowlists live in `goal-tool-names.ts`.
 - **Questionnaire componentization**: normalization, answer formatting, proposal confirmation, and question-tool registration live in `goal-questionnaire.ts`.
-- **Goal Beacon widget**: the above-editor status display is a dedicated TUI component.
+- **Widget module split**: the above-editor Goal Beacon and widget-style notification text live under `extensions/widgets/`.
 
 ## Current validation
 

@@ -37,7 +37,8 @@ import {
 	GOAL_WORK_TOOL_NAMES,
 	TWEAK_APPLY_TOOL_NAME,
 } from "./goal-tool-names.ts";
-import { GoalWidgetComponent } from "./goal-widget.ts";
+import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
+import { GoalWidgetComponent } from "./widgets/goal-widget.ts";
 
 import {
 	buildAutoContinueCapPause,
@@ -1316,8 +1317,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		autoContinueLimitWarnedFor = null;
 		// A goal was committed — clear drafting state if any.
 		draftingFor = null;
-		const modeLabel = config.sisyphus ? "Sisyphus goal" : "Goal";
-		ctx.ui.notify(`${modeLabel} running: ${truncateText(config.objective)}`, "info");
+		ctx.ui.notify(buildGoalRunningNotification(config), "info");
 		if (startNow && goal?.autoContinue) queueContinuation(ctx, true);
 	}
 

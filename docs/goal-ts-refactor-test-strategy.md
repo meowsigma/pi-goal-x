@@ -31,7 +31,8 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 | `extensions/goal-policy.ts` | Creation/completion/pause/resume/clear policy, auto-continue cap, budget transition, compaction reminder, full creation/completion reports |
 | `extensions/goal-questionnaire.ts` | Question normalization, duplicate id handling, option filtering, recommended-index validation, answer formatting, confirm/cancel mapping, `goal_question` and `goal_questionnaire` registration |
 | `extensions/goal-tool-names.ts` | Published tool constants, active-tool list, goal work-tool list, post-stop allowlist, question-like tool detection |
-| `extensions/goal-widget.ts` | Goal Beacon rendering, Sisyphus style label, budget/status/path lines, blocker/suggested-action display |
+| `extensions/widgets/goal-widget.ts` | Goal Beacon rendering, Sisyphus style label, budget/status/path lines, blocker/suggested-action display |
+| `extensions/widgets/goal-notifications.ts` | Widget-style notification text for goal lifecycle toasts |
 
 ## Refactor rule
 

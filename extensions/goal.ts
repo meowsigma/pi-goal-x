@@ -1,6 +1,6 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
-import { defineTool, DynamicBorder, type ExtensionAPI, type ExtensionContext, getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, matchesKey, type SelectItem, SelectList, Spacer, Text, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -16,6 +16,19 @@ const SISYPHUS_STEP_TOOL_NAME = "step_complete";
 const TWEAK_APPLY_TOOL_NAME = "apply_goal_tweak";
 const PROPOSE_DRAFT_TOOL_NAME = "propose_goal_draft";
 const CREATE_GOAL_TOOL_NAME = "create_goal";
+const QUESTION_TOOL_NAME = "question";
+const QUESTIONNAIRE_TOOL_NAME = "questionnaire";
+
+function isQuestionLikeToolName(toolName: string): boolean {
+	const lower = toolName.toLowerCase();
+	return lower === QUESTION_TOOL_NAME
+		|| lower === QUESTIONNAIRE_TOOL_NAME
+		|| lower.includes("question")
+		|| lower.includes("questionnaire")
+		|| lower.includes("ask")
+		|| lower.includes("clarify")
+		|| lower.includes("confirm");
+}
 
 /**
  * Hard cap on consecutive autoContinue turns per active goal. Borrowed from
@@ -45,6 +58,8 @@ const SISYPHUS_WORK_TOOL_NAMES = new Set<string>([
 	"apply_goal_tweak",
 	"create_goal",
 	"propose_goal_draft",
+	"question",
+	"questionnaire",
 	"get_goal",
 	"write",
 	"edit",
@@ -130,66 +145,347 @@ function buildDraftSummaryMarkdown(args: {
 	return lines.join("\n");
 }
 
+interface GoalQuestionnaireQuestion {
+	id: string;
+	question: string;
+	context?: string;
+	options: string[];
+	recommended?: number;
+	allowCustom?: boolean;
+}
+
+interface GoalQuestionnaireAnswer {
+	id: string;
+	question: string;
+	answer: string;
+	wasCustom: boolean;
+}
+
+interface GoalQuestionnaireResult {
+	questions: GoalQuestionnaireQuestion[];
+	answers: GoalQuestionnaireAnswer[];
+	cancelled: boolean;
+}
+
 /**
- * Show the propose_goal_draft confirm dialog. Returns "confirm" or "continue".
- * Escape / cancel maps to "continue" so the user is never trapped — matches the
- * "no place to get stuck" UX requirement.
+ * Shared question UI used by both the agent-callable questionnaire tool and
+ * the internal draft-confirm prompt. This keeps pi-goal self-contained and
+ * avoids depending on external question/questionnaire packages.
+ */
+async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: GoalQuestionnaireQuestion[]): Promise<GoalQuestionnaireResult> {
+	if (!ctx.hasUI) {
+		return { questions: [], answers: [], cancelled: true };
+	}
+
+	const seenIds = new Set<string>();
+	const questions: GoalQuestionnaireQuestion[] = rawQuestions.map((q, i) => {
+		let id = q.id.trim() || `q${i + 1}`;
+		if (seenIds.has(id)) id = `${id}-${i + 1}`;
+		seenIds.add(id);
+		const options = q.options.filter((option) => option.trim().length > 0);
+		const recommended = q.recommended !== undefined && q.recommended >= 0 && q.recommended < options.length
+			? q.recommended
+			: undefined;
+		return { ...q, id, options, recommended, allowCustom: q.allowCustom ?? true };
+	});
+
+	const isMulti = questions.length > 1;
+	const totalTabs = questions.length + 1;
+
+	return await ctx.ui.custom<GoalQuestionnaireResult>((tui, theme, _kb, done) => {
+		let currentTab = 0;
+		let optionIndex = 0;
+		let inputMode = false;
+		let inputQuestionId: string | null = null;
+		let cachedLines: string[] | undefined;
+		const answers = new Map<string, GoalQuestionnaireAnswer>();
+		const drafts = new Map<string, string>();
+
+		const editorTheme: EditorTheme = {
+			borderColor: (s) => theme.fg("accent", s),
+			selectList: {
+				selectedPrefix: (t) => theme.fg("accent", t),
+				selectedText: (t) => theme.fg("accent", t),
+				description: (t) => theme.fg("muted", t),
+				scrollInfo: (t) => theme.fg("dim", t),
+				noMatch: (t) => theme.fg("warning", t),
+			},
+		};
+		const editor = new Editor(tui, editorTheme);
+
+		function refresh() {
+			cachedLines = undefined;
+			tui.requestRender();
+		}
+
+		function submit(cancelled: boolean) {
+			const ordered = questions.map((q) => answers.get(q.id)).filter((a): a is GoalQuestionnaireAnswer => !!a);
+			done({ questions, answers: ordered, cancelled });
+		}
+
+		function currentQuestion(): GoalQuestionnaireQuestion | undefined {
+			return questions[currentTab];
+		}
+
+		function displayOptions(): Array<{ label: string; isCustom?: boolean }> {
+			const q = currentQuestion();
+			if (!q) return [];
+			const opts: Array<{ label: string; isCustom?: boolean }> = q.options.map((label) => ({ label }));
+			if (q.allowCustom !== false) opts.push({ label: "Write your own answer...", isCustom: true });
+			return opts;
+		}
+
+		function allAnswered(): boolean {
+			return questions.every((q) => answers.has(q.id));
+		}
+
+		function enterQuestion(q: GoalQuestionnaireQuestion) {
+			const existing = answers.get(q.id);
+			const draft = drafts.get(q.id);
+			if (q.options.length === 0) {
+				inputMode = true;
+				inputQuestionId = q.id;
+				editor.setText(draft ?? (existing?.wasCustom ? existing.answer : ""));
+			} else if (existing?.wasCustom) {
+				optionIndex = q.options.length;
+			} else if (existing && !existing.wasCustom) {
+				const idx = q.options.indexOf(existing.answer);
+				optionIndex = idx >= 0 ? idx : 0;
+			} else {
+				optionIndex = q.recommended ?? 0;
+			}
+		}
+
+		function advanceAfterAnswer() {
+			if (!isMulti) {
+				submit(false);
+				return;
+			}
+			if (currentTab < questions.length - 1) currentTab++;
+			else currentTab = questions.length;
+			const nextQ = currentQuestion();
+			if (nextQ) enterQuestion(nextQ);
+			else optionIndex = 0;
+			refresh();
+		}
+
+		function saveAnswer(qId: string, value: string, wasCustom: boolean) {
+			const q = questions.find((qq) => qq.id === qId);
+			answers.set(qId, { id: qId, question: q?.question ?? qId, answer: value, wasCustom });
+		}
+
+		editor.onSubmit = (value) => {
+			if (!inputQuestionId) return;
+			const trimmed = value.trim();
+			if (!trimmed) {
+				refresh();
+				return;
+			}
+			drafts.delete(inputQuestionId);
+			saveAnswer(inputQuestionId, trimmed, true);
+			inputMode = false;
+			inputQuestionId = null;
+			editor.setText("");
+			advanceAfterAnswer();
+		};
+
+		function exitEditor() {
+			if (inputQuestionId) {
+				const text = editor.getText();
+				if (text.trim()) drafts.set(inputQuestionId, text);
+				else drafts.delete(inputQuestionId);
+			}
+			inputMode = false;
+			inputQuestionId = null;
+			editor.setText("");
+		}
+
+		enterQuestion(questions[0]);
+
+		function handleInput(data: string) {
+			if (inputMode) {
+				if (matchesKey(data, Key.escape)) {
+					const q = currentQuestion();
+					if (q && q.options.length === 0 && !isMulti) submit(true);
+					else {
+						exitEditor();
+						refresh();
+					}
+					return;
+				}
+				if (isMulti && (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab")))) {
+					exitEditor();
+					currentTab = matchesKey(data, Key.tab) ? (currentTab + 1) % totalTabs : (currentTab - 1 + totalTabs) % totalTabs;
+					const nextQ = currentQuestion();
+					if (nextQ) enterQuestion(nextQ);
+					else optionIndex = 0;
+					refresh();
+					return;
+				}
+				editor.handleInput(data);
+				refresh();
+				return;
+			}
+
+			const q = currentQuestion();
+			const opts = displayOptions();
+
+			if (isMulti) {
+				if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
+					currentTab = (currentTab + 1) % totalTabs;
+					const nextQ = currentQuestion();
+					if (nextQ) enterQuestion(nextQ);
+					else optionIndex = 0;
+					refresh();
+					return;
+				}
+				if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
+					currentTab = (currentTab - 1 + totalTabs) % totalTabs;
+					const nextQ = currentQuestion();
+					if (nextQ) enterQuestion(nextQ);
+					else optionIndex = 0;
+					refresh();
+					return;
+				}
+			}
+
+			if (currentTab === questions.length) {
+				if (matchesKey(data, Key.enter) && allAnswered()) submit(false);
+				else if (matchesKey(data, Key.escape)) submit(true);
+				return;
+			}
+
+			if (matchesKey(data, Key.up)) {
+				optionIndex = Math.max(0, optionIndex - 1);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.down)) {
+				optionIndex = Math.min(opts.length - 1, optionIndex + 1);
+				refresh();
+				return;
+			}
+
+			if (matchesKey(data, Key.enter) && q) {
+				if (q.options.length === 0 || opts[optionIndex]?.isCustom) {
+					inputMode = true;
+					inputQuestionId = q.id;
+					const draft = drafts.get(q.id);
+					const existing = answers.get(q.id);
+					editor.setText(draft ?? (existing?.wasCustom ? existing.answer : ""));
+					refresh();
+					return;
+				}
+				const opt = opts[optionIndex];
+				if (opt) {
+					saveAnswer(q.id, opt.label, false);
+					advanceAfterAnswer();
+				}
+				return;
+			}
+
+			if (matchesKey(data, Key.escape)) submit(true);
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const safeWidth = Math.max(20, width);
+			const lines: string[] = [];
+			const q = currentQuestion();
+			const opts = displayOptions();
+			const add = (s: string) => lines.push(truncateToWidth(s, safeWidth, "…", true));
+			const addWrapped = (s: string) => lines.push(...wrapTextWithAnsi(s, safeWidth));
+
+			add(theme.fg("accent", "─".repeat(safeWidth)));
+			if (isMulti) {
+				const tabs: string[] = ["← "];
+				for (let i = 0; i < questions.length; i++) {
+					const isActive = i === currentTab;
+					const isAnswered = answers.has(questions[i].id);
+					const label = ` ${isAnswered ? "■" : "□"} ${questions[i].id} `;
+					tabs.push(isActive ? theme.bg("selectedBg", theme.fg("text", label)) : theme.fg(isAnswered ? "success" : "muted", label));
+					tabs.push(" ");
+				}
+				const submitText = " ✓ Submit ";
+				tabs.push(currentTab === questions.length ? theme.bg("selectedBg", theme.fg("text", submitText)) : theme.fg(allAnswered() ? "success" : "dim", submitText));
+				tabs.push(" →");
+				add(` ${tabs.join("")}`);
+				lines.push("");
+			}
+
+			function renderOptions() {
+				for (let i = 0; i < opts.length; i++) {
+					const opt = opts[i];
+					const selected = i === optionIndex;
+					const prefix = selected ? theme.fg("accent", "> ") : "  ";
+					const recTag = !opt.isCustom && q?.recommended === i ? theme.fg("success", " ★") : "";
+					add(prefix + theme.fg(selected ? "accent" : "text", `${i + 1}. ${opt.label}`) + recTag);
+				}
+			}
+
+			if (inputMode && q) {
+				addWrapped(theme.fg("text", ` ${q.question}`));
+				if (q.context) addWrapped(theme.fg("muted", ` ${q.context}`));
+				lines.push("");
+				if (q.options.length > 0) {
+					renderOptions();
+					lines.push("");
+				}
+				add(theme.fg("muted", " Your answer:"));
+				for (const line of editor.render(safeWidth - 2)) add(` ${line}`);
+				lines.push("");
+				add(theme.fg("dim", " Enter to submit • Esc to cancel"));
+			} else if (currentTab === questions.length) {
+				add(theme.fg("accent", theme.bold(" Ready to submit")));
+				lines.push("");
+				for (const question of questions) {
+					const answer = answers.get(question.id);
+					add(`${theme.fg("muted", ` ${question.id}: `)}${answer ? theme.fg("text", `${answer.wasCustom ? "(wrote) " : ""}${answer.answer}`) : theme.fg("warning", "(unanswered)")}`);
+				}
+				lines.push("");
+				add(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
+			} else if (q) {
+				addWrapped(theme.fg("text", ` ${q.question}`));
+				if (q.context) addWrapped(theme.fg("muted", ` ${q.context}`));
+				const existing = answers.get(q.id);
+				if (existing) add(theme.fg("dim", ` Current: ${existing.wasCustom ? "(wrote) " : ""}${existing.answer}`));
+				lines.push("");
+				if (opts.length > 0) renderOptions();
+				else add(theme.fg("muted", " Press Enter to write your answer"));
+			}
+
+			lines.push("");
+			if (!inputMode) add(theme.fg("dim", isMulti ? " Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel" : " ↑↓ navigate • Enter select • Esc cancel"));
+			add(theme.fg("accent", "─".repeat(safeWidth)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return { render, invalidate: () => { cachedLines = undefined; }, handleInput };
+	});
+}
+
+/**
+ * Confirm a proposed draft through the shared questionnaire UI. Escape / cancel
+ * maps to "continue" so the user is never trapped.
  */
 async function showProposalDialog(
 	ctx: ExtensionContext,
 	markdownBody: string,
 	focus: GoalDraftingFocus,
 ): Promise<"confirm" | "continue"> {
-	const items: SelectItem[] = [
-		{ value: "confirm", label: "✓ Confirm — create this goal now", description: "Locks in the draft and starts execution." },
-		{ value: "continue", label: "✎ Continue chatting — keep refining", description: "Returns to the drafting interview. Nothing is created." },
-	];
 	const headerTitle = focus === "sisyphus" ? "Confirm Sisyphus Goal Draft" : "Confirm Goal Draft";
-
-	const result = await ctx.ui.custom<"confirm" | "continue">(
-		(tui, theme, _kb, done) => {
-			const container = new Container();
-			container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-			container.addChild(new Text(theme.fg("accent", theme.bold(headerTitle)), 1, 0));
-			container.addChild(new Spacer(1));
-			container.addChild(new Markdown(markdownBody, 1, 0, getMarkdownTheme()));
-			container.addChild(new Spacer(1));
-
-			const selectList = new SelectList(items, items.length, {
-				selectedPrefix: (t) => theme.fg("accent", t),
-				selectedText: (t) => theme.fg("accent", t),
-				description: (t) => theme.fg("muted", t),
-				scrollInfo: (t) => theme.fg("dim", t),
-				noMatch: (t) => theme.fg("warning", t),
-			});
-			selectList.onSelect = (item) => done((item.value as "confirm" | "continue"));
-			selectList.onCancel = () => done("continue"); // esc = continue chatting (no trap)
-			container.addChild(selectList);
-			container.addChild(new Spacer(1));
-			container.addChild(new Text(theme.fg("dim", "↑↓ navigate  •  enter select  •  esc = continue chatting"), 1, 0));
-			container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-			return {
-				render: (w: number) => container.render(w),
-				invalidate: () => container.invalidate(),
-				handleInput: (data: string) => {
-					selectList.handleInput(data);
-					tui.requestRender();
-				},
-			};
-		},
-		{
-			overlay: true,
-			overlayOptions: {
-				width: "80%",
-				minWidth: 60,
-				maxHeight: "85%",
-				anchor: "center",
-			},
-		},
-	);
-
-	return result ?? "continue";
+	const result = await runGoalQuestionnaire(ctx, [{
+		id: "confirm",
+		question: headerTitle,
+		context: markdownBody,
+		options: ["Confirm — create this goal now", "Continue chatting — keep refining"],
+		recommended: 0,
+		allowCustom: false,
+	}]);
+	if (result.cancelled) return "continue";
+	const answer = result.answers[0]?.answer ?? "";
+	return answer.startsWith("Confirm") ? "confirm" : "continue";
 }
 
 function countUserSteps(topic: string): number {
@@ -347,6 +643,19 @@ function normalizeRelPath(relPath: string): string {
 function truncateText(value: string, max = 120): string {
 	const oneLine = value.replace(/\s+/g, " ").trim();
 	return oneLine.length > max ? `${oneLine.slice(0, max - 3)}...` : oneLine;
+}
+
+function displayObjectiveTitle(objective: string): string {
+	const lines = objective.replace(/\r/g, "").split("\n").map((line) => line.trim()).filter(Boolean);
+	const sectionHeader = /^(success criteria|boundaries|constraints|steps|order rules|don'ts|if blocked|if blocked \/ unclear \/ failing|sisyphus reminder)\s*[:：]/i;
+	for (const line of lines) {
+		if (/^=+\s*(?:sisyphus\s+)?goal\s*=+$/i.test(line)) continue;
+		const objectiveMatch = line.match(/^(?:objective|目标)\s*[:：]\s*(.+)$/i);
+		if (objectiveMatch?.[1]) return objectiveMatch[1].trim();
+		if (sectionHeader.test(line)) continue;
+		return line;
+	}
+	return truncateText(objective);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -695,10 +1004,12 @@ function goalDraftingPrompt(topic: string, focus: DraftingFocus): string {
 	const commonProtocol = [
 		"Drafting protocol — apply common sense, do NOT over-interrogate:",
 		"- If the topic the user provided is already a complete, unambiguous specification, just acknowledge in one sentence and call propose_goal_draft in this same turn. Do not invent unnecessary questions.",
-		"- If the topic is vague or missing key information, ask focused questions. Prefer numbered options or yes/no over open-ended questions. Batch related questions together.",
+		"- If the topic is vague or missing key information, ask focused questions. Prefer numbered options or yes/no over open-ended questions. Batch related questions together; for structured grilling, prefer the built-in questionnaire tool, but plain chat and other question-like tools are fine too.",
 		"- Aim to converge in 1-3 rounds of Q&A. Do not drag drafting out.",
-		"- Drafting is a CONVERSATION with the user, not reconnaissance. Do NOT call any tool during drafting — not bash, not read, not grep, not find, not write, not edit, not pause_goal. If you need to know something about the codebase or filesystem to ask a sharper question, ASK THE USER instead. The user is your source of truth, not the disk.",
-		"- The ONLY tool you are permitted to call during drafting is propose_goal_draft, and only after the items below are clear. If the topic is impossibly vague (e.g. empty), ask the user for the topic itself; do not call propose_goal_draft with placeholder content.",
+		"- Drafting is a CONVERSATION with the user, not reconnaissance. Do NOT call workhorse tools during drafting — not bash, not read, not grep, not find, not ls, not write, not edit, not pause_goal, not Todo. The runtime treats plain prose, question, questionnaire, and other question-like user-dialogue tools as the same kind of thing: asking the user, not doing task work.",
+		"- Be relaxed about the medium: if you ask in plain chat, use A/B/C or numbered options; if a question-like tool is available, you may use it. Prefer pi-goal's built-in questionnaire for multi-question grills because it is self-contained and returns Q&A text into the conversation.",
+		"- If you need to know something about the codebase or filesystem to ask a sharper question, ASK THE USER instead. The user is your source of truth, not the disk.",
+		"- The only task-affecting tool you may call during drafting is propose_goal_draft, and only after the items below are clear. Before that, you may ask/clarify via plain chat or question-like tools; get_goal is allowed for read-only state. If the topic is impossibly vague (e.g. empty), ask the user for the topic itself; do not call propose_goal_draft with placeholder content.",
 		"- Do not call propose_goal_draft until the items below are clear, EITHER from the original topic OR from your Q&A.",
 		"- propose_goal_draft will show the user a [Confirm] / [Continue Chatting] dialog. If they Confirm, the goal is created. If they Continue Chatting, you go back to interviewing them. There is no 'create_goal' shortcut anymore; everything goes through propose_goal_draft.",
 		"- IMPORTANT for Sisyphus: do NOT add reconnaissance / verification / preflight / 'check that X exists' steps that the user did not ask for. Use the user's numbered steps as-is. Schema gate B2 will REJECT proposals whose step count exceeds the user's original step count.",
@@ -847,6 +1158,7 @@ function goalTweakDraftingPrompt(current: GoalRecord, hint: string): string {
 		"- Do NOT call pause_goal during this drafting interview (it pauses execution \u2014 you are not executing, you are revising).",
 		"- Do NOT call step_complete during this drafting interview.",
 		"- Do NOT use bash, write, edit, or read to modify the goal file directly. The goal file is managed by the extension.",
+		"- You MAY clarify via plain chat, the built-in question/questionnaire tools, or any question-like user-dialogue tool. They all return user intent into the conversation; treat them the same. Do NOT use workhorse/reconnaissance tools for clarification.",
 		"- Do NOT start new task work in this turn.",
 		"",
 		...focusItems,
@@ -1263,6 +1575,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	function syncGoalTools(): void {
 		try {
 			const active = new Set(pi.getActiveTools());
+			active.add(QUESTION_TOOL_NAME);
+			active.add(QUESTIONNAIRE_TOOL_NAME);
 			const goalRunning = goal?.status === "active" || goal?.status === "budgetLimited";
 			for (const name of ACTIVE_GOAL_TOOL_NAMES) {
 				if (goalRunning) active.add(name);
@@ -1273,14 +1587,20 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			else active.delete(SISYPHUS_STEP_TOOL_NAME);
 			// apply_goal_tweak is only available during a /goal-tweak drafting flow.
 			// Note: tweak drafting can run against active OR paused goals.
-			if (goal && tweakDraftingFor === goal.id) active.add(TWEAK_APPLY_TOOL_NAME);
-			else active.delete(TWEAK_APPLY_TOOL_NAME);
+			if (goal && tweakDraftingFor === goal.id) {
+				active.add(TWEAK_APPLY_TOOL_NAME);
+				active.add(QUESTION_TOOL_NAME);
+				active.add(QUESTIONNAIRE_TOOL_NAME);
+			} else {
+				active.delete(TWEAK_APPLY_TOOL_NAME);
+			}
 			// Phase 5 D: propose_goal_draft is only active during /goal-set or
 			// /goal-sis drafting; create_goal is HIDDEN during drafting (forcing
 			// the agent through the confirm dialog). Outside drafting, neither
 			// is shown until a /goal-* command starts a new flow.
 			if (draftingFor !== null) {
 				active.add(PROPOSE_DRAFT_TOOL_NAME);
+				active.add(QUESTIONNAIRE_TOOL_NAME);
 				active.delete(CREATE_GOAL_TOOL_NAME);
 			} else {
 				active.delete(PROPOSE_DRAFT_TOOL_NAME);
@@ -1459,13 +1779,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	 *
 	 * Layout (sisyphus, running):
 	 *   ◆ Sisyphus  [▰▰▰▱▱] 3/5
-	 *   ├─ 1) extract validator … 2) wire it … 3) update tests.
+	 *   ├─ ⟡ extract validator … wire it … update tests.
 	 *   ├─ Status: sisyphus running · auto-continue · 14m 21s · 24.3k tokens
 	 *   └─ .pi/goals/active_goal_xxx.md
 	 *
 	 * Layout (paused with blocker):
 	 *   ⊘ Goal paused
-	 *   ├─ improve benchmark coverage for the parser
+	 *   ├─ ⟡ improve benchmark coverage for the parser
 	 *   ├─ Status: paused (agent) · 2m 14s · 12.4k tokens
 	 *   ├─ Blocker: cannot find the tests directory
 	 *   └─ Suggested: ask the user for the test location
@@ -1528,8 +1848,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const branch = (s: string): string => trunc(`${theme.fg("dim", "├─")} ${s}`);
 		const tail = (s: string): string => trunc(`${theme.fg("dim", "└─")} ${s}`);
 
-		// Objective line — always shown
-		lines.push(branch(theme.fg("text", truncateText(g.objective, Math.max(20, width - 4)))));
+
+		// Objective line — show a clean title instead of raw "=== Goal ===" blocks.
+		const objectiveTitle = displayObjectiveTitle(g.objective);
+		lines.push(branch(`${theme.fg("accent", "⟡")} ${theme.fg("text", truncateText(objectiveTitle, Math.max(20, width - 6)))}`));
 
 		// Status / autoContinue / usage line
 		const statusBits: string[] = [statusLabel(g)];
@@ -2049,6 +2371,158 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool(defineTool({
+		name: QUESTION_TOOL_NAME,
+		label: "question",
+		description:
+			"Ask the user a focused single question through pi-goal's built-in question UI. " +
+			"This is the single-question alias for questionnaire and is allowed during drafting.",
+		promptSnippet: "Ask the user one focused question with optional choices.",
+		promptGuidelines: [
+			"Use question when exactly one user decision is required before proceeding.",
+			"During drafting this is allowed; it returns user Q&A into the conversation and is not task execution.",
+			"Prefer concise options. Use allowFreeText=false only when the user must pick from fixed choices.",
+		],
+		parameters: Type.Object({
+			question: Type.String({ description: "Question to ask the user." }),
+			context: Type.Optional(Type.String({ description: "Short context explaining why the answer is needed." })),
+			options: Type.Optional(Type.Array(Type.String({ description: "Suggested answer option." }))),
+			recommended: Type.Optional(Type.Integer({ minimum: 0, description: "0-based index of the recommended option." })),
+			allowFreeText: Type.Optional(Type.Boolean({ description: "Allow the user to write a custom answer. Defaults to true." })),
+		}),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!ctx.hasUI) {
+				return {
+					content: [{ type: "text", text: "Error: UI not available (running in non-interactive mode). Ask the user in plain chat instead." }],
+					details: { answer: undefined, cancelled: true },
+				};
+			}
+
+			const result = await runGoalQuestionnaire(ctx, [{
+				id: "answer",
+				question: params.question,
+				context: params.context,
+				options: params.options ?? [],
+				recommended: params.recommended,
+				allowCustom: params.allowFreeText ?? true,
+			}]);
+
+			if (result.cancelled) {
+				return {
+					content: [{ type: "text", text: "User cancelled the question." }],
+					details: { ...result, answer: undefined },
+				};
+			}
+
+			const answer = result.answers[0]?.answer ?? "";
+			return {
+				content: [{ type: "text", text: `User answered: ${answer}` }],
+				details: { ...result, answer },
+			};
+		},
+		renderCall(args, theme) {
+			return new Text(theme.fg("toolTitle", theme.bold("question ")) + theme.fg("muted", truncateText(args?.question ?? "", 80)), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const details = result.details as { answer?: string; cancelled?: boolean } | undefined;
+			if (details?.cancelled) return new Text(theme.fg("warning", "(cancelled)"), 0, 0);
+			if (details?.answer !== undefined) return new Text(theme.fg("success", "✓ ") + theme.fg("muted", details.answer), 0, 0);
+			const text = result.content[0];
+			return new Text(text?.type === "text" ? text.text : "", 0, 0);
+		},
+	}));
+
+	pi.registerTool(defineTool({
+		name: QUESTIONNAIRE_TOOL_NAME,
+		label: "questionnaire",
+		description:
+			"Ask the user one or more questions via pi-goal's built-in questionnaire UI. " +
+			"Use this during drafting when you need structured grill/Q&A before propose_goal_draft; " +
+			"batch related questions into one call. Returns Q&A records in the conversation history.",
+		promptSnippet: "Ask the user one or more structured questions with choices and optional free-text answers.",
+		promptGuidelines: [
+			"Use questionnaire when a user decision or missing requirement blocks a concrete draft.",
+			"During /goal-set or /goal-sis drafting, questionnaire is allowed; workhorse/reconnaissance tools are not.",
+			"Prefer 1-3 focused questions. Batch related choices in one questionnaire call instead of repeatedly interrupting the user.",
+			"Use recommended to mark the best default choice when there is one. Set allowCustom=false only for strict binary/choice prompts such as confirmation.",
+		],
+		parameters: Type.Object({
+			questions: Type.Array(
+				Type.Object({
+					id: Type.String({ description: "Short stable identifier, e.g. 'scope', 'success', 'constraints'." }),
+					question: Type.String({ description: "The question to ask the user." }),
+					context: Type.Optional(Type.String({ description: "Optional background, trade-offs, or why the answer matters." })),
+					options: Type.Optional(Type.Array(Type.String({ description: "Suggested answer option." }), { description: "Suggested answers. Free-text is still available unless allowCustom=false." })),
+					recommended: Type.Optional(Type.Integer({ minimum: 0, description: "0-based index of the recommended option. Shown with a star and selected by default." })),
+					allowCustom: Type.Optional(Type.Boolean({ description: "Allow the user to write a custom answer. Defaults to true." })),
+				}),
+				{ minItems: 1 },
+			),
+		}),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!ctx.hasUI) {
+				return {
+					content: [{ type: "text", text: "Error: UI not available (running in non-interactive mode). Ask the user in plain chat instead." }],
+					details: { questions: [], answers: [], cancelled: true } satisfies GoalQuestionnaireResult,
+				};
+			}
+
+			const rawQuestions = params.questions.map((q) => ({
+				id: q.id,
+				question: q.question,
+				context: q.context,
+				options: q.options ?? [],
+				recommended: q.recommended,
+				allowCustom: q.allowCustom ?? true,
+			}));
+
+			const result = await runGoalQuestionnaire(ctx, rawQuestions);
+			if (result.cancelled) {
+				return {
+					content: [{ type: "text", text: "(questionnaire dismissed)" }],
+					details: result,
+				};
+			}
+
+			const records = result.answers.map((answer) => {
+				const question = result.questions.find((q) => q.id === answer.id);
+				const lines = [`**Q:** ${answer.question}`];
+				if (question?.context) lines.push(`\n${question.context}`);
+				if (question && question.options.length > 0) lines.push(`\nOptions: ${question.options.join(" / ")}`);
+				lines.push(`\n**A:** ${answer.answer}`);
+				return lines.join("");
+			});
+
+			return {
+				content: [{ type: "text", text: records.join("\n\n---\n\n") }],
+				details: result,
+			};
+		},
+		renderCall(args, theme) {
+			const qs = (args.questions as Array<{ id: string; question: string }>) || [];
+			const labels = qs.map((q) => q.id).join(", ");
+			let text = theme.fg("toolTitle", theme.bold("questionnaire "));
+			text += theme.fg("muted", `${qs.length} question${qs.length !== 1 ? "s" : ""}`);
+			if (labels) text += theme.fg("dim", ` (${truncateToWidth(labels, 40)})`);
+			return new Text(text, 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const details = result.details as GoalQuestionnaireResult | undefined;
+			if (!details) {
+				const text = result.content[0];
+				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+			}
+			if (details.cancelled) return new Text(theme.fg("warning", "(dismissed)"), 0, 0);
+			const lines = details.answers.map((answer) => {
+				const prefix = answer.wasCustom ? "(wrote) " : "";
+				return `${theme.fg("success", "✓ ")}${theme.fg("accent", answer.id)}: ${theme.fg("muted", prefix)}${answer.answer}`;
+			});
+			return new Text(lines.join("\n"), 0, 0);
+		},
+	}));
+
+	pi.registerTool(defineTool({
 		name: "get_goal",
 		label: "Get Goal",
 		description: "Get the current pi goal for this session: objective, status, auto-continue, token budget, usage, and local file paths.",
@@ -2123,20 +2597,20 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}));
 
 	// Phase 5 D + B1 + B2: agent's drafting-time entry point. Replaces create_goal
-	// during /goal-set or /goal-sis drafting. Shows the user a markdown preview
-	// of the draft with two choices: [Confirm] (creates the goal) or [Continue
-	// Chatting] (returns control to the agent for more interview). Schema gates:
+	// during /goal-set or /goal-sis drafting. Shows the user a questionnaire-style
+	// preview of the draft with two choices: [Confirm] (creates the goal) or
+	// [Continue Chatting] (returns control to the agent for more interview). Schema gates:
 	//   B1 focus-vs-sisyphus consistency
 	//   B2 step-count preservation (no agent-invented steps)
 	// In headless mode (no UI), auto-confirms — harness-friendly.
 	pi.registerTool(defineTool({
 		name: PROPOSE_DRAFT_TOOL_NAME,
 		label: "Propose Goal Draft",
-		description: "During /goal-set or /goal-sis drafting, propose the goal draft to the user. The user sees a markdown preview and clicks Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during drafting.",
-		promptSnippet: "Propose the drafted goal to the user with a Confirm / Continue Chatting dialog.",
+		description: "During /goal-set or /goal-sis drafting, propose the goal draft to the user. The user sees a questionnaire-style preview and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during drafting.",
+		promptSnippet: "Propose the drafted goal to the user with a Confirm / Continue Chatting questionnaire.",
 		promptGuidelines: [
 			"Call propose_goal_draft ONLY when you are inside a /goal-set or /goal-sis drafting flow AND you have gathered enough info to write a concrete goal. If you have not asked enough questions, keep interviewing the user — do not propose prematurely.",
-			"The user will see the full objective text rendered as markdown plus a [Confirm] / [Continue Chatting] choice. Confirm creates the goal; Continue Chatting returns control to you to ask follow-up questions.",
+			"The user will see the full objective text plus a [Confirm] / [Continue Chatting] questionnaire choice. Confirm creates the goal; Continue Chatting returns control to you to ask follow-up questions.",
 			"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT propose again immediately with the same content; iterate based on their feedback first.",
 			"The sisyphus field must match the user's drafting focus: /goal-sis → sisyphus=true, /goal-set → sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
 			"For sisyphus goals, the objective MUST include the user's numbered steps verbatim — do not add steps the user did not request (e.g. extra 'verify the precondition' steps), do not merge steps, do not reorder. The schema rejects drafts whose step count exceeds the user's original by more than 1.",
@@ -2754,23 +3228,23 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 		// Phase 5 C3: drafting whitelist. During /goal-set, /goal-sis, or /goal-tweak
 		// drafting, block all work tools (bash/write/edit/read/grep/find/ls/step_complete/...)
-		// except the dedicated drafting commit tools. Drafting is a CONVERSATION;
+		// except the dedicated drafting tools. Drafting is a CONVERSATION;
 		// reconnaissance is forbidden. This is the schema-level closure of the
 		// "agent calls bash during drafting to look at the filesystem" failure mode
 		// the drafting prompt already prohibits in language.
 		if (draftingFor !== null) {
-			if (event.toolName !== PROPOSE_DRAFT_TOOL_NAME && event.toolName !== "get_goal") {
+			if (event.toolName !== PROPOSE_DRAFT_TOOL_NAME && event.toolName !== "get_goal" && !isQuestionLikeToolName(event.toolName)) {
 				return {
 					block: true,
-					reason: `Drafting is in progress (focus=${draftingFor.focus}). During /goal-set or /goal-sis drafting, the ONLY tool you may call is propose_goal_draft. Ask the user for any info you need — DO NOT use bash, read, write, edit, grep, find, ls, or any other workhorse tool. When the draft is ready, call propose_goal_draft.`,
+					reason: `Drafting is in progress (focus=${draftingFor.focus}). During /goal-set or /goal-sis drafting, you may ask/clarify via plain chat or any question-like user-dialogue tool, may call get_goal for read-only state, and may call propose_goal_draft to commit. DO NOT use bash, read, write, edit, grep, find, ls, or any other workhorse tool.`,
 				};
 			}
 		}
 		if (tweakDraftingFor !== null && goal && tweakDraftingFor === goal.id) {
-			if (event.toolName !== TWEAK_APPLY_TOOL_NAME && event.toolName !== "get_goal") {
+			if (event.toolName !== TWEAK_APPLY_TOOL_NAME && event.toolName !== "get_goal" && !isQuestionLikeToolName(event.toolName)) {
 				return {
 					block: true,
-					reason: `Tweak drafting is in progress for goal ${tweakDraftingFor}. During /goal-tweak, the ONLY tool you may call is apply_goal_tweak. Ask the user for the revision details — DO NOT use bash, read, write, edit, or any workhorse tool. When the revision is ready, call apply_goal_tweak.`,
+					reason: `Tweak drafting is in progress for goal ${tweakDraftingFor}. You may ask/clarify via plain chat or any question-like user-dialogue tool, may call get_goal for read-only state, and may call apply_goal_tweak to commit. DO NOT use bash, read, write, edit, or any workhorse tool.`,
 				};
 			}
 		}

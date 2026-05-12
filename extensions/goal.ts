@@ -16,8 +16,8 @@ const SISYPHUS_STEP_TOOL_NAME = "step_complete";
 const TWEAK_APPLY_TOOL_NAME = "apply_goal_tweak";
 const PROPOSE_DRAFT_TOOL_NAME = "propose_goal_draft";
 const CREATE_GOAL_TOOL_NAME = "create_goal";
-const QUESTION_TOOL_NAME = "question";
-const QUESTIONNAIRE_TOOL_NAME = "questionnaire";
+const QUESTION_TOOL_NAME = "goal_question";
+const QUESTIONNAIRE_TOOL_NAME = "goal_questionnaire";
 
 function isQuestionLikeToolName(toolName: string): boolean {
 	const lower = toolName.toLowerCase();
@@ -58,8 +58,8 @@ const SISYPHUS_WORK_TOOL_NAMES = new Set<string>([
 	"apply_goal_tweak",
 	"create_goal",
 	"propose_goal_draft",
-	"question",
-	"questionnaire",
+	"goal_question",
+	"goal_questionnaire",
 	"get_goal",
 	"write",
 	"edit",
@@ -168,7 +168,7 @@ interface GoalQuestionnaireResult {
 }
 
 /**
- * Shared question UI used by both the agent-callable questionnaire tool and
+ * Shared question UI used by both the agent-callable goal_questionnaire tool and
  * the internal draft-confirm prompt. This keeps pi-goal self-contained and
  * avoids depending on external question/questionnaire packages.
  */
@@ -1004,10 +1004,10 @@ function goalDraftingPrompt(topic: string, focus: DraftingFocus): string {
 	const commonProtocol = [
 		"Drafting protocol — apply common sense, do NOT over-interrogate:",
 		"- If the topic the user provided is already a complete, unambiguous specification, just acknowledge in one sentence and call propose_goal_draft in this same turn. Do not invent unnecessary questions.",
-		"- If the topic is vague or missing key information, ask focused questions. Prefer numbered options or yes/no over open-ended questions. Batch related questions together; for structured grilling, prefer the built-in questionnaire tool, but plain chat and other question-like tools are fine too.",
+		"- If the topic is vague or missing key information, ask focused questions. Prefer numbered options or yes/no over open-ended questions. Batch related questions together; for structured grilling, prefer the built-in goal_questionnaire tool, but plain chat and other question-like tools are fine too.",
 		"- Aim to converge in 1-3 rounds of Q&A. Do not drag drafting out.",
-		"- Drafting is a CONVERSATION with the user, not reconnaissance. Do NOT call workhorse tools during drafting — not bash, not read, not grep, not find, not ls, not write, not edit, not pause_goal, not Todo. The runtime treats plain prose, question, questionnaire, and other question-like user-dialogue tools as the same kind of thing: asking the user, not doing task work.",
-		"- Be relaxed about the medium: if you ask in plain chat, use A/B/C or numbered options; if a question-like tool is available, you may use it. Prefer pi-goal's built-in questionnaire for multi-question grills because it is self-contained and returns Q&A text into the conversation.",
+		"- Drafting is a CONVERSATION with the user, not reconnaissance. Do NOT call workhorse tools during drafting — not bash, not read, not grep, not find, not ls, not write, not edit, not pause_goal, not Todo. The runtime treats plain prose, goal_question, goal_questionnaire, question, questionnaire, and other question-like user-dialogue tools as the same kind of thing: asking the user, not doing task work.",
+		"- Be relaxed about the medium: if you ask in plain chat, use A/B/C or numbered options; if a question-like tool is available, you may use it. Prefer pi-goal's built-in goal_questionnaire for multi-question grills because it is self-contained and returns Q&A text into the conversation.",
 		"- If you need to know something about the codebase or filesystem to ask a sharper question, ASK THE USER instead. The user is your source of truth, not the disk.",
 		"- The only task-affecting tool you may call during drafting is propose_goal_draft, and only after the items below are clear. Before that, you may ask/clarify via plain chat or question-like tools; get_goal is allowed for read-only state. If the topic is impossibly vague (e.g. empty), ask the user for the topic itself; do not call propose_goal_draft with placeholder content.",
 		"- Do not call propose_goal_draft until the items below are clear, EITHER from the original topic OR from your Q&A.",
@@ -1158,7 +1158,7 @@ function goalTweakDraftingPrompt(current: GoalRecord, hint: string): string {
 		"- Do NOT call pause_goal during this drafting interview (it pauses execution \u2014 you are not executing, you are revising).",
 		"- Do NOT call step_complete during this drafting interview.",
 		"- Do NOT use bash, write, edit, or read to modify the goal file directly. The goal file is managed by the extension.",
-		"- You MAY clarify via plain chat, the built-in question/questionnaire tools, or any question-like user-dialogue tool. They all return user intent into the conversation; treat them the same. Do NOT use workhorse/reconnaissance tools for clarification.",
+		"- You MAY clarify via plain chat, the built-in goal_question/goal_questionnaire tools, or any question-like user-dialogue tool. They all return user intent into the conversation; treat them the same. Do NOT use workhorse/reconnaissance tools for clarification.",
 		"- Do NOT start new task work in this turn.",
 		"",
 		...focusItems,
@@ -2372,13 +2372,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool(defineTool({
 		name: QUESTION_TOOL_NAME,
-		label: "question",
+		label: "goal_question",
 		description:
-			"Ask the user a focused single question through pi-goal's built-in question UI. " +
-			"This is the single-question alias for questionnaire and is allowed during drafting.",
-		promptSnippet: "Ask the user one focused question with optional choices.",
+			"Ask the user a focused single question through pi-goal's built-in goal_question UI. " +
+			"This is the single-question alias for goal_questionnaire and is allowed during drafting.",
+		promptSnippet: "Ask the user one focused goal-related question with optional choices.",
 		promptGuidelines: [
-			"Use question when exactly one user decision is required before proceeding.",
+			"Use goal_question when exactly one user decision is required before proceeding.",
 			"During drafting this is allowed; it returns user Q&A into the conversation and is not task execution.",
 			"Prefer concise options. Use allowFreeText=false only when the user must pick from fixed choices.",
 		],
@@ -2421,7 +2421,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			};
 		},
 		renderCall(args, theme) {
-			return new Text(theme.fg("toolTitle", theme.bold("question ")) + theme.fg("muted", truncateText(args?.question ?? "", 80)), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("goal_question ")) + theme.fg("muted", truncateText(args?.question ?? "", 80)), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			const details = result.details as { answer?: string; cancelled?: boolean } | undefined;
@@ -2434,15 +2434,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool(defineTool({
 		name: QUESTIONNAIRE_TOOL_NAME,
-		label: "questionnaire",
+		label: "goal_questionnaire",
 		description:
-			"Ask the user one or more questions via pi-goal's built-in questionnaire UI. " +
+			"Ask the user one or more questions via pi-goal's built-in goal_questionnaire UI. " +
 			"Use this during drafting when you need structured grill/Q&A before propose_goal_draft; " +
 			"batch related questions into one call. Returns Q&A records in the conversation history.",
 		promptSnippet: "Ask the user one or more structured questions with choices and optional free-text answers.",
 		promptGuidelines: [
-			"Use questionnaire when a user decision or missing requirement blocks a concrete draft.",
-			"During /goal-set or /goal-sis drafting, questionnaire is allowed; workhorse/reconnaissance tools are not.",
+			"Use goal_questionnaire when a user decision or missing requirement blocks a concrete draft.",
+			"During /goal-set or /goal-sis drafting, goal_questionnaire is allowed; workhorse/reconnaissance tools are not.",
 			"Prefer 1-3 focused questions. Batch related choices in one questionnaire call instead of repeatedly interrupting the user.",
 			"Use recommended to mark the best default choice when there is one. Set allowCustom=false only for strict binary/choice prompts such as confirmation.",
 		],
@@ -2480,7 +2480,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const result = await runGoalQuestionnaire(ctx, rawQuestions);
 			if (result.cancelled) {
 				return {
-					content: [{ type: "text", text: "(questionnaire dismissed)" }],
+					content: [{ type: "text", text: "(goal_questionnaire dismissed)" }],
 					details: result,
 				};
 			}
@@ -2502,7 +2502,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		renderCall(args, theme) {
 			const qs = (args.questions as Array<{ id: string; question: string }>) || [];
 			const labels = qs.map((q) => q.id).join(", ");
-			let text = theme.fg("toolTitle", theme.bold("questionnaire "));
+			let text = theme.fg("toolTitle", theme.bold("goal_questionnaire "));
 			text += theme.fg("muted", `${qs.length} question${qs.length !== 1 ? "s" : ""}`);
 			if (labels) text += theme.fg("dim", ` (${truncateToWidth(labels, 40)})`);
 			return new Text(text, 0, 0);
@@ -2597,7 +2597,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}));
 
 	// Phase 5 D + B1 + B2: agent's drafting-time entry point. Replaces create_goal
-	// during /goal-set or /goal-sis drafting. Shows the user a questionnaire-style
+	// during /goal-set or /goal-sis drafting. Shows the user a goal_questionnaire-style
 	// preview of the draft with two choices: [Confirm] (creates the goal) or
 	// [Continue Chatting] (returns control to the agent for more interview). Schema gates:
 	//   B1 focus-vs-sisyphus consistency
@@ -2606,11 +2606,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	pi.registerTool(defineTool({
 		name: PROPOSE_DRAFT_TOOL_NAME,
 		label: "Propose Goal Draft",
-		description: "During /goal-set or /goal-sis drafting, propose the goal draft to the user. The user sees a questionnaire-style preview and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during drafting.",
-		promptSnippet: "Propose the drafted goal to the user with a Confirm / Continue Chatting questionnaire.",
+		description: "During /goal-set or /goal-sis drafting, propose the goal draft to the user. The user sees a goal_questionnaire-style preview and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during drafting.",
+		promptSnippet: "Propose the drafted goal to the user with a Confirm / Continue Chatting goal_questionnaire.",
 		promptGuidelines: [
 			"Call propose_goal_draft ONLY when you are inside a /goal-set or /goal-sis drafting flow AND you have gathered enough info to write a concrete goal. If you have not asked enough questions, keep interviewing the user — do not propose prematurely.",
-			"The user will see the full objective text plus a [Confirm] / [Continue Chatting] questionnaire choice. Confirm creates the goal; Continue Chatting returns control to you to ask follow-up questions.",
+			"The user will see the full objective text plus a [Confirm] / [Continue Chatting] goal_questionnaire choice. Confirm creates the goal; Continue Chatting returns control to you to ask follow-up questions.",
 			"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT propose again immediately with the same content; iterate based on their feedback first.",
 			"The sisyphus field must match the user's drafting focus: /goal-sis → sisyphus=true, /goal-set → sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
 			"For sisyphus goals, the objective MUST include the user's numbered steps verbatim — do not add steps the user did not request (e.g. extra 'verify the precondition' steps), do not merge steps, do not reorder. The schema rejects drafts whose step count exceeds the user's original by more than 1.",

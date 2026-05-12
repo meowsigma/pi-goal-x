@@ -7,7 +7,6 @@ import {
 	formatRemainingTokens,
 	formatTokenBudget,
 	formatTokenValue,
-	statusLabel,
 	truncateText,
 	type GoalDisplayRecordLike,
 } from "./goal-core.ts";
@@ -70,8 +69,10 @@ function sisyphusBar(goal: GoalWidgetRecord, theme: Theme): string {
 	return `[${theme.fg("accent", "▰".repeat(filled))}${theme.fg("dim", "▱".repeat(empty))}] ${done}/${total}`;
 }
 
-function usageLine(goal: GoalWidgetRecord): string {
-	const bits = [statusLabel(goal)];
+function headingMeta(goal: GoalWidgetRecord, theme: Theme): string {
+	const bits: string[] = [];
+	const bar = sisyphusBar(goal, theme);
+	if (bar) bits.push(bar);
 	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
 	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
@@ -83,15 +84,13 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const safeWidth = Math.max(1, width);
 	const { icon, color, label } = displayIcon(goal);
 	const mode = goal.sisyphus ? "Sisyphus" : "Goal";
-	const bar = sisyphusBar(goal, theme);
 	const headingLeft = `${theme.fg(color, icon)} ${theme.fg(color, theme.bold(mode))} ${theme.fg("muted", label.replace(/^sisyphus |^goal /, ""))}`;
-	const headingRight = bar ? theme.fg("muted", bar) : "";
+	const headingRight = theme.fg("muted", headingMeta(goal, theme));
 	const lines: string[] = [ruleHeading(theme, safeWidth, headingLeft, headingRight)];
 
 	const titleWidth = Math.max(12, safeWidth - 8);
 	const objective = truncateText(displayObjectiveTitle(goal.objective), titleWidth);
 	lines.push(line(theme, safeWidth, "mid", `${theme.fg("accent", "⟡")} ${theme.fg("text", objective)}`));
-	lines.push(line(theme, safeWidth, "mid", `${theme.fg("dim", "pulse")} ${theme.fg("muted", usageLine(goal))}`));
 
 	if (goal.tokenBudget !== null) {
 		lines.push(line(theme, safeWidth, "mid", `${theme.fg("dim", "budget")} ${theme.fg("muted", `${formatTokenBudget(goal)} · remaining ${formatRemainingTokens(goal)}`)}`));

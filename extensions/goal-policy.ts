@@ -159,14 +159,13 @@ export function abortGoalCommandMessage(args: { archived: boolean; wasDrafting: 
 }
 
 export function buildCompletionReport(args: { detailedSummary: string; completionSummary?: string | null; auditorReport?: string | null }): string {
-	const lines = ["Goal complete."];
+	const auditorReport = args.auditorReport?.trim();
+	const lines = auditorReport
+		? ["Goal audit approved.", "", "Auditor approval:", auditorReport, "", "Goal complete."]
+		: ["Goal complete."];
 	const summary = args.completionSummary?.trim();
 	if (summary) {
 		lines.push("", "Completion summary:", summary);
-	}
-	const auditorReport = args.auditorReport?.trim();
-	if (auditorReport) {
-		lines.push("", "Auditor approval:", auditorReport);
 	}
 	lines.push("", args.detailedSummary);
 	return lines.join("\n");

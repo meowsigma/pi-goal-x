@@ -109,6 +109,14 @@ test("pause, resume, and clear policy preserve human-owned lifecycle affordances
 		"Goal complete.\n\nGoal: full objective",
 	);
 	assert.equal(
+		buildCompletionReport({
+			detailedSummary: "Goal: full objective\nStatus: complete",
+			completionSummary: "All requested checks passed.",
+			auditorReport: "Audit Report\n\n<approved/>",
+		}),
+		"Goal audit approved.\n\nAuditor approval:\nAudit Report\n\n<approved/>\n\nGoal complete.\n\nCompletion summary:\nAll requested checks passed.\n\nGoal: full objective\nStatus: complete",
+	);
+	assert.equal(
 		buildGoalCreatedReport({ objective: "# Objective\nShip the feature.", detailedSummary: "Status: active" }),
 		"Goal confirmed and created.\n\nFinalized goal:\n\n# Objective\nShip the feature.\n\nGoal details:\nStatus: active",
 	);

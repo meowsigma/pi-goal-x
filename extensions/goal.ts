@@ -125,6 +125,7 @@ import {
 const STATE_ENTRY = "pi-goal-state";
 const FOCUS_ENTRY = "pi-goal-focus";
 const GOAL_EVENT_ENTRY = "pi-goal-event";
+const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 const COMPLETE_STATUS = "complete";
 const CONTINUATION_IDLE_RETRY_MS = 50;
 const STATUS_REFRESH_MS = 1000;
@@ -236,7 +237,14 @@ function renderGoalResult(result: { details?: unknown; content: Array<{ type: st
 	if (!details || typeof details !== "object" || !("goal" in details)) {
 		return new Text(firstText, 0, 0);
 	}
-	if (firstText.startsWith("Goal complete.") || firstText.startsWith("Goal paused.") || firstText.startsWith("Goal aborted.") || firstText.startsWith("Goal confirmed and created.")) {
+	if (
+		firstText.startsWith("Goal audit ")
+		|| firstText.startsWith("Goal completion rejected")
+		|| firstText.startsWith("Goal complete.")
+		|| firstText.startsWith("Goal paused.")
+		|| firstText.startsWith("Goal aborted.")
+		|| firstText.startsWith("Goal confirmed and created.")
+	) {
 		return new Text(firstText, 0, 0);
 	}
 	return new Text(theme.fg("accent", "Goal ") + theme.fg("muted", oneLineSummary(details.goal)), 0, 0);
@@ -273,6 +281,12 @@ function normalizeGoalEventDetails(value: unknown): GoalEventDetails {
 	};
 }
 
+interface GoalAuditEventDetails {
+	phase: "started" | "approved" | "rejected";
+	goalId: string;
+	auditor?: string;
+}
+
 function renderGoalEvent(message: { details?: GoalEventDetails }, options: { expanded: boolean }, theme: Theme): Text {
 	const details = normalizeGoalEventDetails(message.details);
 	const label =
@@ -291,6 +305,17 @@ function renderGoalEvent(message: { details?: GoalEventDetails }, options: { exp
 	}
 	return new Text(
 		theme.fg("customMessageLabel", `Goal ${label}`) + "\n" + theme.fg("customMessageText", lines.join("\n")),
+		0,
+		0,
+	);
+}
+
+function renderGoalAuditEvent(message: { content?: unknown; details?: GoalAuditEventDetails }, _options: { expanded: boolean }, theme: Theme): Text {
+	const phase = message.details?.phase ?? "started";
+	const label = phase === "approved" ? "approved" : phase === "rejected" ? "rejected" : "started";
+	const content = typeof message.content === "string" ? message.content : `Goal audit ${label}.`;
+	return new Text(
+		theme.fg("customMessageLabel", `Goal audit ${label}`) + "\n" + theme.fg("customMessageText", content),
 		0,
 		0,
 	);
@@ -1498,6 +1523,7 @@ Drafting is still active. Your last response did not use a question tool. If the
 	}
 
 	pi.registerMessageRenderer<GoalEventDetails>(GOAL_EVENT_ENTRY, renderGoalEvent);
+	pi.registerMessageRenderer<GoalAuditEventDetails>(GOAL_AUDIT_ENTRY, renderGoalAuditEvent);
 
 	// /goal and /goal-status: read-only status display.
 	const statusCommand = {
@@ -1856,6 +1882,20 @@ Drafting is still active. Your last response did not use a question tool. If the
 				// Ledger append failure should not block completion
 			}
 			const auditorConfig = loadGoalAuditorFileConfig(ctx.cwd);
+			const auditorLabel = auditorConfig.provider || auditorConfig.model || auditorConfig.thinkingLevel
+				? `${auditorConfig.provider ?? "default"}/${auditorConfig.model ?? "default"}${auditorConfig.thinkingLevel ? `:${auditorConfig.thinkingLevel}` : ""}`
+				: "default";
+			pi.sendMessage<GoalAuditEventDetails>({
+				customType: GOAL_AUDIT_ENTRY,
+				content: [
+					"Auditor: I am starting the independent completion audit.",
+					`Goal id: ${auditTarget.id}`,
+					`Auditor model: ${auditorLabel}`,
+					params.completionSummary?.trim() ? `Completion claim: ${params.completionSummary.trim()}` : undefined,
+				].filter((line): line is string => line !== undefined).join("\n"),
+				display: true,
+				details: { phase: "started", goalId: auditTarget.id, auditor: auditorLabel },
+			});
 			// Append ledger: audit started
 			try {
 				appendGoalEvent(ctx, {
@@ -1890,20 +1930,38 @@ Drafting is still active. Your last response did not use a question tool. If the
 				// Ledger append failure should not block completion
 			}
 			if (!auditor.approved) {
+				const rejectionText = [
+					"Goal audit rejected.",
+					"",
+					"Goal completion rejected by independent auditor.",
+					auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
+					auditor.error ? `Auditor error: ${auditor.error}` : undefined,
+					"",
+					auditor.output || "Auditor produced no approval marker.",
+				].filter((line): line is string => line !== undefined).join("\n");
+				pi.sendMessage<GoalAuditEventDetails>({
+					customType: GOAL_AUDIT_ENTRY,
+					content: rejectionText,
+					display: true,
+					details: { phase: "rejected", goalId: auditTarget.id, auditor: auditor.model },
+				});
 				return {
-					content: [{
-						type: "text",
-						text: [
-							"Goal completion rejected by independent auditor.",
-							auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
-							auditor.error ? `Auditor error: ${auditor.error}` : undefined,
-							"",
-							auditor.output || "Auditor produced no approval marker.",
-						].filter((line): line is string => line !== undefined).join("\n"),
-					}],
+					content: [{ type: "text", text: rejectionText }],
 					details: goalDetails(state.goal),
 				};
 			}
+			const approvalText = [
+				"Auditor: I approve this completion claim.",
+				auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
+				"",
+				auditor.output || "Auditor approved completion.",
+			].filter((line): line is string => line !== undefined).join("\n");
+			pi.sendMessage<GoalAuditEventDetails>({
+				customType: GOAL_AUDIT_ENTRY,
+				content: approvalText,
+				display: true,
+				details: { phase: "approved", goalId: auditTarget.id, auditor: auditor.model },
+			});
 			// Account for any remaining elapsed time before stopping.
 			accountProgress(ctx, { allowBudgetSteering: false, accountBudgetLimited: true });
 			state.goal = auditTarget;
@@ -1936,7 +1994,6 @@ Drafting is still active. Your last response did not use a question tool. If the
 					text: buildCompletionReport({
 						detailedSummary: detailedSummary(completedGoal),
 						completionSummary: params.completionSummary,
-						auditorReport: auditor.output,
 					}),
 				}],
 				details: goalDetails(completedGoal),

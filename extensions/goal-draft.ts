@@ -69,7 +69,7 @@ export function validateGoalDraftProposal(input: DraftProposalInput): DraftPropo
 	if (input.intent === null) {
 		return {
 			ok: false,
-			message: "propose_goal_draft REJECTED: no /goal-set or /goal-sisyphus confirmation is in progress. Tell the user to invoke /goal-set <topic> or /goal-sisyphus <topic> first.",
+			message: "propose_goal_draft REJECTED: no /goals or /sisyphus intent discussion is in progress. Tell the user to invoke /goals <topic> or /sisyphus <topic> first, or use /goals-set / /sisyphus-set for immediate creation.",
 		};
 	}
 
@@ -78,7 +78,7 @@ export function validateGoalDraftProposal(input: DraftProposalInput): DraftPropo
 	if (actualSisyphus !== expectedSisyphus) {
 		return {
 			ok: false,
-			message: `propose_goal_draft REJECTED (focus gate): confirmation focus is "${input.intent.focus}" (user invoked ${input.intent.focus === "sisyphus" ? "/goal-sisyphus" : "/goal-set"}) but you passed sisyphus=${actualSisyphus}. Set sisyphus=${expectedSisyphus} to match the user's choice, then retry. Do NOT change the user's mode autonomously.`,
+			message: `propose_goal_draft REJECTED (focus gate): confirmation focus is "${input.intent.focus}" (user invoked ${input.intent.focus === "sisyphus" ? "/sisyphus" : "/goals"}) but you passed sisyphus=${actualSisyphus}. Set sisyphus=${expectedSisyphus} to match the user's choice, then retry. Do NOT change the user's mode autonomously.`,
 		};
 	}
 
@@ -93,22 +93,23 @@ export function validateGoalDraftProposal(input: DraftProposalInput): DraftPropo
 export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): string {
 	const safeTopic = promptSafeObjective(topic.trim() || "(no topic provided — ask the user what they want to accomplish)");
 	const header = focus === "sisyphus"
-		? "[GOAL CONFIRMATION focus=sisyphus]\nThe user invoked Sisyphus mode (/goal-sisyphus). Help turn their request into a confirmed goal contract. Do NOT start substantive work yet."
-		: "[GOAL CONFIRMATION focus=goal]\nThe user invoked /goal-set. Help turn their request into a confirmed goal contract. Do NOT start substantive work yet.";
+		? "[GOAL CONFIRMATION focus=sisyphus]\nThe user invoked Sisyphus intent discussion (/sisyphus). Help turn their request into a confirmed goal contract. Do NOT start substantive work yet."
+		: "[GOAL CONFIRMATION focus=goal]\nThe user invoked goal intent discussion (/goals). Help turn their request into a confirmed goal contract. Do NOT start substantive work yet.";
 
 	const commonProtocol = [
 		"Confirmation protocol:",
 		"- Treat this as a lightweight conversation with the user, not a separate long-running runtime phase.",
 		"- If the topic is vague, ask one focused question with a recommended default. Use goal_question or goal_questionnaire when a structured answer would help, but plain conversation is acceptable.",
+		"- Targeted read-only research is allowed when it helps define a better goal contract; do not start implementation before confirmation.",
 		"- If the topic is already concrete, you may proceed directly to propose_goal_draft.",
 		"- The goal contract should make the objective, success criteria, boundaries, constraints, and blocker rule explicit.",
-		"- Minimal read-only reconnaissance is allowed only when it improves the goal contract; do not begin implementation before confirmation.",
+		"- Keep grilling assumptions until the objective, success criteria, boundaries, constraints, and blocker rule are clear enough to confirm.",
 		"- propose_goal_draft opens the user's Confirm / Continue Chatting dialog. Confirm creates and focuses the goal; Continue Chatting means keep clarifying.",
 		"- create_goal is not a shortcut. Direct create_goal calls are rejected so the user keeps explicit say in goal creation.",
 	];
 
 	const goalFocusItems = [
-		"For /goal-set, propose a normal goal in this shape when ready:",
+		"For /goals, propose a normal goal in this shape when ready:",
 		"=== Goal ===",
 		"Objective: <one-sentence outcome>",
 		"Success criteria: <observable evidence the goal is done>",
@@ -119,7 +120,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 	];
 
 	const sisyphusFocusItems = [
-		"For /goal-sisyphus, remember that Sisyphus is a prompt/criteria style, not a separate step-counter mechanism.",
+		"For /sisyphus, remember that Sisyphus is a prompt/criteria style, not a separate step-counter mechanism.",
 		"Propose a Sisyphus goal in this shape when ready:",
 		"=== Sisyphus Goal ===",
 		"Objective: <one-sentence outcome>",

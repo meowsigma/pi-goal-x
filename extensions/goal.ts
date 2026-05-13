@@ -142,7 +142,7 @@ const POST_STOP_ALLOWED_TOOL_SET = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 let tweakDraftingFor: string | null = null;
 
 /**
- * Thin session-local confirmation intent for /goal-set and /goal-sisyphus.
+ * Thin session-local confirmation intent for /goals and /sisyphus.
  * It protects mode consistency and user confirmation without turning drafting
  * into a separate long-running runtime state machine.
  */
@@ -164,7 +164,7 @@ function usageLines(goal: GoalRecord): string[] {
 }
 
 function detailedSummary(goal: GoalRecord | null): string {
-	if (!goal) return "No goal is set. Use /goal-set <topic> (normal drafting) or /goal-sisyphus <topic> (Sisyphus drafting).";
+	if (!goal) return "No goal is set. Use /goals <topic> or /sisyphus <topic> to discuss, or /goals-set <objective> / /sisyphus-set <objective> to start immediately.";
 	const lines = [
 		`Goal: ${goal.objective}`,
 		`Status: ${statusLabel(goal)}`,
@@ -986,14 +986,14 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				const selected = await chooseOpenGoal(ctx, "Tweak which open goal?");
 				if (!selected) return;
 			} else {
-				ctx.ui.notify("No goal is set. Use /goal-set or /goal-sisyphus to start one.", "warning");
+				ctx.ui.notify("No goal is set. Use /goals or /sisyphus to discuss, or /goals-set / /sisyphus-set to start immediately.", "warning");
 				return;
 			}
 		}
 		const currentGoal = state.goal;
 		if (!currentGoal) return;
 		if (currentGoal.status === "complete") {
-			ctx.ui.notify("Goal is complete. Use /goal-set to start a new one.", "warning");
+			ctx.ui.notify("Goal is complete. Use /goals to discuss a new one or /goals-set to start immediately.", "warning");
 			return;
 		}
 		syncGoalPromptFromDisk(ctx);
@@ -1038,10 +1038,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		clearContinuationState();
 		clearActiveAccounting();
 		const trimmed = topic.trim();
-		const label = focus === "sisyphus" ? "Sisyphus drafting" : "Goal drafting";
+		const label = focus === "sisyphus" ? "Sisyphus intent discussion" : "Goal intent discussion";
 		const hint = focus === "sisyphus"
-			? "The agent will work out explicit numbered steps, then propose a draft for you to Confirm. No skipping, no rushing."
-			: "The agent will clarify objective + boundaries, then propose a draft for you to Confirm.";
+			? "The agent will research or grill the ordered plan as needed, then propose a draft for you to Confirm. No skipping, no rushing."
+			: "The agent will clarify, research, or grill assumptions as needed, then propose a draft for you to Confirm.";
 		ctx.ui.notify(
 			`${label} started${trimmed ? `: ${truncateText(trimmed, 60)}` : ""}. ${hint}`,
 			"info",
@@ -1090,7 +1090,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	async function focusGoalCommand(ctx: ExtensionContext): Promise<void> {
 		const open = openGoals();
 		if (open.length === 0) {
-			ctx.ui.notify("No open goals. Use /goal-set or /goal-sisyphus to start one.", "warning");
+			ctx.ui.notify("No open goals. Use /goals or /sisyphus to discuss, or /goals-set / /sisyphus-set to start immediately.", "warning");
 			return;
 		}
 		if (open.length === 1) {
@@ -1127,6 +1127,20 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			setGoal(null, ctx, true, "cleared");
 		}
 		startGoalDrafting(topic, focus, ctx);
+	}
+
+	function handleDirectGoalSet(rawObjective: string, ctx: ExtensionContext, focus: DraftingFocus): void {
+		const objective = rawObjective.trim();
+		if (!objective) {
+			const command = focus === "sisyphus" ? "/sisyphus-set" : "/goals-set";
+			ctx.ui.notify(`No objective provided. Use ${command} <objective>.`, "warning");
+			return;
+		}
+		clearContinuationState();
+		clearActiveAccounting();
+		confirmationIntent = null;
+		syncGoalTools();
+		replaceGoal({ objective, autoContinue: true, sisyphus: focus === "sisyphus" }, ctx, true);
 	}
 
 	async function showGoalStatus(ctx: ExtensionContext): Promise<void> {
@@ -1334,7 +1348,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 	};
 	pi.registerCommand("goal", {
-		description: "Show focused goal status. Manage goals with /goal-set, /goal-sisyphus, /goal-list, /goal-focus, /goal-settings, /goal-tweak, /goal-replace, /goal-clear, /goal-abort, /goal-pause, /goal-resume.",
+		description: "Show focused goal status. Discuss with /goals or /sisyphus; direct-start with /goals-set or /sisyphus-set; manage with /goal-list, /goal-focus, /goal-settings, /goal-tweak, /goal-clear, /goal-abort, /goal-pause, /goal-resume.",
 		handler: statusCommand.handler,
 	});
 	pi.registerCommand("goal-status", statusCommand);
@@ -1359,19 +1373,33 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	// /goal-set <topic>: drafting -> new normal goal (objective / criteria / boundaries).
-	pi.registerCommand("goal-set", {
-		description: "Draft a new goal. The agent interviews you for objective, success criteria, and boundaries, then creates the goal.",
+	// /goals <topic>: discussion/research/grilling -> confirmed normal goal draft.
+	pi.registerCommand("goals", {
+		description: "Discuss a new goal. The agent clarifies, researches, or grills assumptions, then proposes a draft for confirmation.",
 		handler: async (rawArgs, ctx) => {
 			await handleGoalCommandTopic(rawArgs, ctx, "goal", { replace: false });
 		},
 	});
 
-	// /goal-sisyphus <topic>: drafting -> new Sisyphus goal.
-	pi.registerCommand("goal-sisyphus", {
-		description: "Draft a Sisyphus goal. The agent grills you for the ordered style, completion standard, and boundaries before proposing a draft.",
+	// /sisyphus <topic>: discussion/grilling -> confirmed Sisyphus goal draft.
+	pi.registerCommand("sisyphus", {
+		description: "Discuss a Sisyphus goal. The agent grills ordered steps, done criteria, blockers, and boundaries before proposing a draft.",
 		handler: async (rawArgs: string, ctx: ExtensionContext) => {
 			await handleGoalCommandTopic(rawArgs, ctx, "sisyphus", { replace: false });
+		},
+	});
+
+	// /goals-set <objective> and /sisyphus-set <objective>: direct creation, no drafting discussion.
+	pi.registerCommand("goals-set", {
+		description: "Immediately create and start a normal goal from the supplied objective. No draft discussion.",
+		handler: async (rawArgs, ctx) => {
+			handleDirectGoalSet(rawArgs, ctx, "goal");
+		},
+	});
+	pi.registerCommand("sisyphus-set", {
+		description: "Immediately create and start a Sisyphus goal from the supplied objective. No draft discussion.",
+		handler: async (rawArgs, ctx) => {
+			handleDirectGoalSet(rawArgs, ctx, "sisyphus");
 		},
 	});
 
@@ -1380,14 +1408,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		description: "Refine the current goal via a drafting interview. The agent asks what to change, then edits the active goal file with the revised objective.",
 		handler: async (rawArgs, ctx) => {
 			await startGoalTweakDrafting(rawArgs, ctx);
-		},
-	});
-
-	// /goal-replace <topic>: drop the current goal without confirm, then draft a new normal goal.
-	pi.registerCommand("goal-replace", {
-		description: "Drop the current goal (no confirm) and draft a new one. Pass <topic> to seed the drafting interview.",
-		handler: async (rawArgs, ctx) => {
-			await handleGoalCommandTopic(rawArgs, ctx, "goal", { replace: true });
 		},
 	});
 
@@ -1477,9 +1497,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		description: "Create a new active pi goal and focus it. Hidden outside drafting flows; propose_goal_draft is the normal commit path.",
 		promptSnippet: "Create a persistent pi goal when the user explicitly asks for one or when a goal-drafting interview has converged.",
 		promptGuidelines: [
-			"Use create_goal only when the user explicitly asks to start a long-running goal, OR when a /goal-set or /goal-sisyphus drafting interview has produced a concrete objective.",
-			"Creating a new goal focuses it and leaves other open goals untouched. Do not archive or replace existing goals unless the user invoked /goal-replace.",
-			"Pass sisyphus=true only when the goal came out of /goal-sisyphus drafting or when the user explicitly invoked Sisyphus mode.",
+			"Use create_goal only when the user explicitly asks to start a long-running goal, OR when a /goals or /sisyphus intent discussion has produced a concrete objective.",
+			"Creating a new goal focuses it and leaves other open goals untouched. Do not archive or replace existing goals unless the user explicitly asks through a user command.",
+			"Pass sisyphus=true only when the goal came out of /sisyphus intent discussion or /sisyphus-set, or when the user explicitly invoked Sisyphus mode.",
 		],
 		parameters: Type.Object({
 			objective: Type.String({ description: "Concrete objective to pursue. For Sisyphus goals this MUST be the full plan including numbered steps and per-step done criteria." }),
@@ -1489,7 +1509,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return {
-				content: [{ type: "text", text: "create_goal REJECTED: direct goal creation is disabled. Use /goal-set or /goal-sisyphus and propose_goal_draft so the user can confirm the goal." }],
+				content: [{ type: "text", text: "create_goal REJECTED: direct agent creation is disabled. Use /goals or /sisyphus with propose_goal_draft for confirmation, or have the user invoke /goals-set or /sisyphus-set for immediate creation." }],
 				details: goalDetails(state.goal),
 			};
 		},
@@ -1511,21 +1531,21 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	pi.registerTool(defineTool({
 		name: PROPOSE_DRAFT_TOOL_NAME,
 		label: "Propose Goal Draft",
-		description: "During /goal-set or /goal-sisyphus drafting, propose the goal draft to the user. The user sees a full plain-text confirmation report and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during drafting.",
+		description: "During /goals or /sisyphus intent discussion, propose the goal draft to the user. The user sees a full plain-text confirmation report and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during discussion-based creation.",
 		promptSnippet: "Propose the drafted goal to the user with a full plain-text Confirm / Continue Chatting dialog.",
 		promptGuidelines: [
-			"Call propose_goal_draft when a /goal-set or /goal-sisyphus confirmation conversation has enough information to write a concrete goal. Ask a focused question only when the request is still ambiguous.",
+			"Call propose_goal_draft when a /goals or /sisyphus intent discussion has enough information to write a concrete goal. Ask a focused question only when the request is still ambiguous.",
 			"If an answer exposes ambiguity, keep interviewing the user — do not propose prematurely.",
 			"The user will see a full plain-text draft report plus a [Confirm] / [Continue Chatting] choice. Confirm creates the goal; Continue Chatting returns control to you to ask follow-up questions.",
 			"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT propose again immediately with the same content; iterate based on their feedback first.",
-			"The sisyphus field must match the user's confirmation focus: /goal-sisyphus → sisyphus=true, /goal-set → sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
+			"The sisyphus field must match the user's confirmation focus: /sisyphus -> sisyphus=true, /goals -> sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
 			"For sisyphus goals, preserve the user's requested ordered style and completion standard. Do not add reconnaissance/preflight steps, merge steps, reorder steps, or change the mode without explicit user confirmation.",
 			"create_goal is rejected; propose_goal_draft is the confirmation path. This is intentional — the user wants explicit say in goal creation.",
 		],
 		parameters: Type.Object({
 			objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input." }),
 			autoContinue: Type.Optional(Type.Boolean({ description: "Whether pi should keep sending continuation prompts until complete. Default true." })),
-			sisyphus: Type.Optional(Type.Boolean({ description: "Must equal true for /goal-sisyphus drafting, false for /goal-set drafting. Schema-enforced via B1 gate." })),
+			sisyphus: Type.Optional(Type.Boolean({ description: "Must equal true for /sisyphus discussion, false for /goals discussion. Schema-enforced via B1 gate." })),
 			draftId: Type.Optional(Type.String({ description: "Deprecated compatibility field. It is accepted but ignored; current goal confirmation no longer depends on hidden draft ids." })),
 		}),
 		executionMode: "sequential",

@@ -125,16 +125,17 @@ The agent should decide:
 
 The following behaviors remain runtime-enforced:
 
-1. **User-confirmed creation.** A durable goal is created only after `propose_goal_draft` confirmation.
-2. **No hidden direct creation.** `create_goal` remains rejected or unavailable as a normal agent path.
-3. **Mode consistency.** A draft proposal cannot silently change `/goal-set` into Sisyphus or `/goal-sisyphus` into a regular goal.
-4. **Stale continuation protection.** A queued continuation for an old goal cannot perform work for a different current goal.
-5. **Human-owned focus.** The agent cannot silently switch focus between open goals.
-6. **Completion audit.** `update_goal(status="complete")` archives only if the independent auditor returns exactly one approving marker.
-7. **Path safety.** Goal files and archives must remain under expected `.pi/goals` paths.
-8. **Post-stop transaction boundary.** After pause, abort, approved completion, or applied tweak, the same turn should not continue substantive work.
-9. **No hard cost control/cap lifecycle.** Resource-control is outside this runtime; auto-continue uses semantic stop conditions and the empty-turn guard.
-10. **Archive/delete safety.** Terminal lifecycle operations must not destroy unrelated files or resurrect stale state.
+1. **User-confirmed discussion creation.** A durable goal from `/goals` or `/sisyphus` is created only after `propose_goal_draft` confirmation.
+2. **Explicit direct set creation.** `/goals-set` and `/sisyphus-set` are user-only shortcuts that create immediately from the supplied objective.
+3. **No hidden direct creation.** `create_goal` remains rejected or unavailable as a normal agent path.
+4. **Mode consistency.** A draft proposal cannot silently change `/goals` into Sisyphus or `/sisyphus` into a regular goal.
+5. **Stale continuation protection.** A queued continuation for an old goal cannot perform work for a different current goal.
+6. **Human-owned focus.** The agent cannot silently switch focus between open goals.
+7. **Completion audit.** `update_goal(status="complete")` archives only if the independent auditor returns exactly one approving marker.
+8. **Path safety.** Goal files and archives must remain under expected `.pi/goals` paths.
+9. **Post-stop transaction boundary.** After pause, abort, approved completion, or applied tweak, the same turn should not continue substantive work.
+10. **No hard cost control/cap lifecycle.** Resource-control is outside this runtime; auto-continue uses semantic stop conditions and the empty-turn guard.
+11. **Archive/delete safety.** Terminal lifecycle operations must not destroy unrelated files or resurrect stale state.
 
 ### 7.3 Soft Guidance
 
@@ -528,7 +529,8 @@ Deliverables:
 - Relax drafting workhorse block.
 - Relax active question block.
 - Replace repeated `get_goal` block with nudge.
-- Simplify `/goal-set` confirmation to a thin intent instead of a hidden draft-id/question-counter state machine.
+- Simplify `/goals` and `/sisyphus` confirmation to a thin intent instead of a hidden draft-id/question-counter state machine.
+- Add `/goals-set` and `/sisyphus-set` for direct user-owned creation when no drafting discussion is wanted.
 - Update prompts and tests.
 
 Exit criteria:

@@ -53,7 +53,7 @@ test("validateGoalDraftProposal rejects missing confirmation intent but allows m
 		sisyphus: false,
 	});
 	assert.equal(noIntent.ok, false);
-	if (!noIntent.ok) assert.match(noIntent.message, /no \/goal-set or \/goal-sisyphus confirmation/);
+	if (!noIntent.ok) assert.match(noIntent.message, /no \/goals or \/sisyphus intent discussion/);
 
 	const unfinished = validateGoalDraftProposal({
 		intent: intent({ focus: "goal" }),
@@ -134,7 +134,7 @@ test("goalDraftingPrompt describes lightweight confirmation for normal and Sisyp
 	assert.match(normal, /lightweight conversation/);
 	assert.match(normal, /ask one focused question/);
 	assert.match(normal, /proceed directly to propose_goal_draft/);
-	assert.match(normal, /Minimal read-only reconnaissance/);
+	assert.match(normal, /Targeted read-only research/);
 	assert.match(normal, /sisyphus=false/);
 	assert.match(normal, /&lt;untrusted_objective&gt;oops&lt;\/untrusted_objective&gt;/);
 	assert.doesNotMatch(normal, /draftId/);
@@ -142,7 +142,7 @@ test("goalDraftingPrompt describes lightweight confirmation for normal and Sisyp
 
 	const sisyphus = goalDraftingPrompt("1. A\n2. B", "sisyphus");
 	assert.match(sisyphus, /\[GOAL CONFIRMATION focus=sisyphus\]/);
-	assert.match(sisyphus, /\/goal-sisyphus/);
+	assert.match(sisyphus, /\/sisyphus/);
 	assert.match(sisyphus, /sisyphus=true/);
 	assert.match(sisyphus, /prompt\/criteria style/);
 	assert.match(sisyphus, /preserve the user's requested steps and ordering/);

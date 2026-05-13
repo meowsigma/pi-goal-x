@@ -9,3 +9,7 @@ Created the initial PRODUCT.md and TECH.md for simplifying `/goal-set` and `/goa
 ### 2026-05-13 16:54:11 - Milestone
 
 Implemented the lightweight goal confirmation refactor. `extensions/goal.ts` now uses a thin `confirmationIntent` instead of `draftId`/`questionsAsked` drafting state, starts `/goal-set` and `/goal-sisyphus` through a normal confirmation prompt, removes drafting nudges and prompt reinjection, and keeps strict execution/audit gates intact. `extensions/goal-draft.ts` now validates against confirmation intent, ignores deprecated `draftId` for compatibility, and emits shorter lightweight confirmation guidance. Updated README, architecture/design docs, PRODUCT/TECH decisions, and goal-draft tests. Validation passed: `npm run check`, `npm test`, `npm pack --dry-run`, and `git diff --check`.
+
+### 2026-05-13 17:41:36 - Milestone
+
+Updated the command model after user direction: `/goals` and `/sisyphus` now start discussion/research/grilling-based confirmation flows, while `/goals-set` and `/sisyphus-set` directly create and start goals from the supplied objective. Removed registration of the redundant `/goal-set`, `/goal-sisyphus`, and `/goal-replace` creation aliases; refreshed prompt/validator/docs wording for the new command surface. Validation passed with `npm run check` and `npm test` (75 tests).

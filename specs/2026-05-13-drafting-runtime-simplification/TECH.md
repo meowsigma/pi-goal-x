@@ -8,7 +8,7 @@ Before this refactor, the code had already softened several drafting gates, but 
 
 Relevant files after implementation:
 
-- `extensions/goal.ts` - owns the thin `confirmationIntent`, command handlers, tool surface, proposal dialog, continuation, and strict lifecycle/audit hooks.
+- `extensions/goal.ts` - owns the thin `confirmationIntent`, command handlers, direct-set handlers, tool surface, proposal dialog, continuation, and strict lifecycle/audit hooks.
 - `extensions/goal-draft.ts` - owns lightweight confirmation prompt text, plain-text confirmation report formatting, safe objective escaping, no-op drafting tool gate, and proposal validation.
 - `extensions/goal-auditor.ts:186` - `runGoalCompletionAuditor()` is the independent completion gate and remains strict.
 - `extensions/goal-policy.ts:26` - lifecycle validators protect completion, pause, abort, and resume transitions.
@@ -31,7 +31,7 @@ interface GoalConfirmationIntent {
 
 Implementation notes:
 
-- Remove `draftId` and `questionsAsked` from the normal `/goal-set` confirmation flow.
+- Remove `draftId` and `questionsAsked` from the normal `/goals` and `/sisyphus` confirmation flow.
 - Remove `draftingNudgesByDraftId` and `queueDraftingNudge()`.
 - Keep the intent session-local; do not persist it to goal files or ledger.
 - Keep `/goal-clear` and `/goal-abort` able to clear this intent.
@@ -39,7 +39,7 @@ Implementation notes:
 
 Tradeoff: without draft ids, overlapping hidden drafting prompts are no longer treated as a hard runtime race. That is acceptable if `/goal-set` no longer depends on hidden prompt identity. The hard invariant moves to explicit user confirmation and mode validation.
 
-### 2. Make `/goal-set` and `/goal-sisyphus` send conversational drafting instructions
+### 2. Make `/goals` and `/sisyphus` send conversational intent instructions
 
 Update `startGoalDrafting()`:
 
@@ -48,6 +48,8 @@ Update `startGoalDrafting()`:
 - Send a visible or normal follow-up/steer message that asks the executor to clarify or propose a draft.
 - Avoid hidden custom-message prompts as the sole carrier of the drafting contract.
 - Prefer instruction text that mirrors `pi-specs`: outcome, success criteria, constraints, and final shape, without over-prescribing internal process.
+- For `/goals`, permit clarification and targeted read-only research that improves the goal contract.
+- For `/sisyphus`, emphasize grilling the ordered plan, done criteria, blockers, and step boundaries before proposing.
 
 The prompt should say:
 
@@ -71,7 +73,17 @@ Update `validateGoalDraftProposal()` and tool behavior:
 
 Recommended compatibility step: accept optional `draftId` for one release but ignore it, so older transcripts or prompt residue do not fail solely because a draft id was supplied.
 
-### 4. Simplify tool-surface synchronization
+### 4. Add direct set commands
+
+Add direct creation handlers:
+
+- Register `/goals-set <objective>` for normal goals.
+- Register `/sisyphus-set <objective>` for Sisyphus goals.
+- Both commands trim the objective, reject empty objectives with a warning, clear any pending confirmation intent, call the existing `replaceGoal()` creation path, and start execution immediately when auto-continue is enabled.
+- Keep direct set commands separate from `propose_goal_draft`; they are explicit user shortcuts, not agent tools.
+- Remove or stop registering redundant creation aliases (`/goal-set`, `/goal-sisyphus`) so the user-facing command surface has one discussion pair and one direct-set pair.
+
+### 5. Simplify tool-surface synchronization
 
 Update `syncGoalTools()` and related tests:
 
@@ -81,7 +93,7 @@ Update `syncGoalTools()` and related tests:
 - Continue hiding/rejecting `CREATE_GOAL_TOOL_NAME`.
 - Ensure active execution tools and lifecycle tools are restored immediately after confirmation.
 
-### 5. Remove drafting-specific turn hooks
+### 6. Remove drafting-specific turn hooks
 
 Update event hooks:
 
@@ -92,7 +104,7 @@ Update event hooks:
 - Keep `before_agent_start` execution-state logic for stale goal continuations, compaction reminders, and active prompts.
 - Stop reinjecting a full drafting prompt every turn; use the normal conversation and stable tool instead.
 
-### 6. Preserve strict execution and audit paths
+### 7. Preserve strict execution and audit paths
 
 Do not loosen these areas:
 
@@ -104,15 +116,15 @@ Do not loosen these areas:
 - visible audit started/approved/rejected messages.
 - auditor rejection memory in ledger/compaction prompts.
 
-### 7. Update documentation
+### 8. Update documentation
 
 Update at least:
 
-- `README.md` - describe lightweight goal confirmation, stable proposal tool, strict execution/audit.
-- `docs/agent-flow-design.md` - recast drafting as a thin conversational confirmation stage rather than a hard runtime phase.
-- `docs/architecture.md` if it still describes draft ids, hard tool visibility gates, or question counters.
+- `README.md` - document `/goals`, `/sisyphus`, `/goals-set`, and `/sisyphus-set`; remove old `/goal-set` and `/goal-sisyphus` examples from primary docs.
+- `docs/agent-flow-design.md` - recast drafting as a thin conversational confirmation stage rather than a hard runtime phase and name the new commands.
+- `docs/architecture.md` if it still describes draft ids, hard tool visibility gates, question counters, or old command names.
 
-### 8. Tests
+### 9. Tests
 
 Expected test changes:
 
@@ -127,7 +139,8 @@ Expected test changes:
 - `tests/goal-prompts.test.ts`
   - Update drafting prompt text expectations, if the helper remains.
 - Integration-style extension tests if available
-  - `/goal-set` starts confirmation without requiring question counters.
+  - `/goals` starts confirmation without requiring question counters.
+  - `/goals-set` creates a normal active goal directly and `/sisyphus-set` creates a Sisyphus active goal directly.
   - user confirmation creates a focused active goal.
   - Continue Chatting does not create a goal.
   - active goal auto-continues only after meaningful work.
@@ -137,13 +150,14 @@ Expected test changes:
 
 Map to PRODUCT.md behavior:
 
-- Behavior #1: unit tests for prompt/helper output; smoke/manual test `/goal-set` with a concrete topic and verify direct proposal path works.
+- Behavior #1: unit tests for prompt/helper output; smoke/manual test `/goals` with a concrete topic and verify direct proposal path works.
 - Behavior #2: unit tests for Sisyphus mode validation and prompt text; manual test ordered plan preservation.
-- Behavior #3: unit tests for `validateGoalDraftProposal()` empty objective, missing intent, mode mismatch, and optional `draftId` no-op compatibility.
-- Behavior #4: existing or new tests around proposal dialog result handling: confirm creates, Continue Chatting does not.
-- Behavior #5: existing tests plus `npm test` for active/paused/complete lifecycle, continuation, post-stop, compaction, and goal files.
-- Behavior #6: existing auditor tests plus manual transcript inspection or focused tests for visible audit events.
-- Behavior #7: `npm run check`, `npm test`, and `npm pack --dry-run`; grep shipped files for stale terms such as `questionsAsked`, `draftingNudgesByDraftId`, `draftId` in user-facing docs if removed.
+- Behavior #3: tests or smoke coverage for `/goals-set` and `/sisyphus-set` direct creation; empty objective warning remains user-facing.
+- Behavior #4: unit tests for `validateGoalDraftProposal()` empty objective, missing intent, mode mismatch, and optional `draftId` no-op compatibility.
+- Behavior #5: existing or new tests around proposal dialog result handling: confirm creates, Continue Chatting does not.
+- Behavior #6: existing tests plus `npm test` for active/paused/complete lifecycle, continuation, post-stop, compaction, and goal files.
+- Behavior #7: existing auditor tests plus manual transcript inspection or focused tests for visible audit events.
+- Behavior #8: `npm run check`, `npm test`, and `npm pack --dry-run`; grep shipped files for stale terms such as `questionsAsked`, `draftingNudgesByDraftId`, `draftId` in user-facing docs if removed.
 
 ## Risks and mitigations
 

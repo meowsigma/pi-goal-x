@@ -43,13 +43,16 @@ Reusable logic is split into smaller modules:
 
 ```text
 /user command
-  ├─ /goal-set or /goal-sisyphus
+  ├─ /goals or /sisyphus
   │    └─ confirmationIntent = {focus, originalTopic, startedAt}
-  │         ├─ agent clarifies only when needed, or proposes directly for concrete topics
-  │         ├─ minimal reconnaissance is prompt-guided, not hard-blocked
+  │         ├─ agent clarifies, researches, or grills only when needed
+  │         ├─ targeted reconnaissance is prompt-guided, not hard-blocked
   │         └─ propose_goal_draft validates focus/objective and asks user to confirm
   │              ├─ Continue Chatting: keep clarifying without creating a goal
   │              └─ Confirm: create active goal, write .pi/goals file, focus it, print full objective
+  │
+  ├─ /goals-set or /sisyphus-set
+  │    └─ direct user command creates active goal, writes .pi/goals file, focuses it, and starts execution
   │
   ├─ focused active goal
   │    ├─ autoContinue queues checkpoint turns
@@ -118,7 +121,7 @@ The legacy `step_complete` tool remains registered as a hidden compatibility no-
 
 ## Drafting and confirmation
 
-Drafting is now a lightweight user-intent confirmation conversation. For `/goal-set` and `/goal-sisyphus`, the runtime stores only a thin session-local `confirmationIntent` with the requested focus, original topic, and start time. The agent may ask a focused question when the topic is vague, or proceed directly to `propose_goal_draft` when the request is already concrete. Minimal reconnaissance is allowed when it improves the goal contract without starting substantive work.
+Drafting is now a lightweight user-intent confirmation conversation. For `/goals` and `/sisyphus`, the runtime stores only a thin session-local `confirmationIntent` with the requested focus, original topic, and start time. The agent may ask a focused question when the topic is vague, perform targeted read-only research when it improves the goal contract, grill assumptions or ordered steps, or proceed directly to `propose_goal_draft` when the request is already concrete.
 
 `propose_goal_draft` enforces:
 
@@ -130,12 +133,12 @@ A deprecated optional `draftId` parameter is accepted for compatibility but igno
 
 ## Command focus behavior
 
-- `/goal-set` and `/goal-sisyphus` create new open goals and focus the new goal.
+- `/goals` and `/sisyphus` start discussion-based confirmation before creating a new focused goal.
+- `/goals-set` and `/sisyphus-set` directly create and focus a new open goal from the supplied objective.
 - `/goal-list` prints all open goals with id, status, mode, usage, objective title, path, and a focus marker.
 - `/goal-focus` uses `ctx.ui.select` when multiple goals are open and updates only session focus.
 - `/goal-status` and `/goal` show the focused goal plus an `other open goals` hint.
 - `/goal-resume` resumes the focused paused goal; when unfocused with multiple open goals, it asks the user to choose. Choosing an already active goal only focuses it.
-- `/goal-replace` archives only the focused/selected goal before drafting the replacement.
 - `/goal-clear` and `/goal-abort` archive only the focused/selected goal and never clear the whole pool at once.
 - During goal confirmation, `/goal-clear` and `/goal-abort` only cancel the confirmation flow; they do not archive an unrelated focused goal unless the user invokes a lifecycle command after confirmation is cancelled.
 - `/goal-tweak` revises only the focused active or paused goal; when unfocused with open goals, it asks the user to choose one.

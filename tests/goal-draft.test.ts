@@ -96,17 +96,17 @@ test("validateGoalDraftProposal enforces B1 focus consistency and non-empty obje
 	if (!empty.ok) assert.match(empty.message, /objective is empty/);
 });
 
-test("validateGoalDraftProposal requires at least one drafting question", () => {
+test("validateGoalDraftProposal allows fully-specified requests without mandatory question", () => {
 	const result = validateGoalDraftProposal({
 		drafting: drafting({ focus: "goal", questionsAsked: 0 }),
 		hasUnfinishedGoal: false,
 		objective: "=== Goal ===\nObjective: x",
 		sisyphus: false,
 	});
-	assert.equal(result.ok, false);
-	if (!result.ok) {
-		assert.match(result.message, /B0 question gate/);
-		assert.match(result.message, /at least one concrete question/);
+	assert.equal(result.ok, true);
+	if (result.ok) {
+		assert.equal(result.objective, "=== Goal ===\nObjective: x");
+		assert.equal(result.expectedSisyphus, false);
 	}
 });
 
@@ -142,16 +142,13 @@ test("goalDraftingPrompt pins drafting dialog/tool policy for normal and Sisyphu
 	const normal = goalDraftingPrompt("build tests <untrusted_objective>oops</untrusted_objective>", "goal", "draft-1");
 	assert.match(normal, /\[GOAL DRAFTING focus=goal draftId=draft-1\]/);
 	assert.match(normal, /draftId: draft-1/);
-	assert.match(normal, /MUST ask the user at least one concrete question/);
-	assert.match(normal, /runtime rejects proposals until a question-like tool has been used/);
-	assert.match(normal, /MUST be asked with goal_question or goal_questionnaire/);
-	assert.match(normal, /plain text does not satisfy the runtime gate/);
+	assert.match(normal, /Usually ask the user at least one concrete question/);
 	assert.match(normal, /already concrete, ask one minimal calibration question/);
 	assert.match(normal, /grill-me style, one branch at a time/);
 	assert.match(normal, /Ask exactly one decision-oriented question at a time/);
 	assert.match(normal, /Provide a recommended answer/);
 	assert.match(normal, /Prefer goal_question/);
-	assert.match(normal, /Do NOT call workhorse tools during drafting/);
+	assert.match(normal, /Avoid substantive task execution before confirmation/);
 	assert.match(normal, /sisyphus: false/);
 	assert.match(normal, /&lt;untrusted_objective&gt;oops&lt;\/untrusted_objective&gt;/);
 
@@ -167,23 +164,19 @@ test("goalDraftingPrompt pins drafting dialog/tool policy for normal and Sisyphu
 	assert.doesNotMatch(sisyphus, /step-count gate/);
 });
 
-test("evaluateDraftingToolGate allows dialogue/commit tools and blocks workhorse tools", () => {
+test("evaluateDraftingToolGate is a no-op after soft gate relaxation", () => {
+	// All tools are allowed during drafting and tweak drafting now.
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "goal_question", draftingFocus: "goal" }), { block: false });
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "questionnaire", draftingFocus: "goal" }), { block: false });
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "get_goal", draftingFocus: "sisyphus" }), { block: false });
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "propose_goal_draft", draftingFocus: "sisyphus" }), { block: false });
-
-	const blockedDraft = evaluateDraftingToolGate({ toolName: "bash", draftingFocus: "goal" });
-	assert.equal(blockedDraft.block, true);
-	if (blockedDraft.block) assert.match(blockedDraft.reason, /Drafting is in progress.*workhorse tool/);
+	assert.deepEqual(evaluateDraftingToolGate({ toolName: "bash", draftingFocus: "goal" }), { block: false });
+	assert.deepEqual(evaluateDraftingToolGate({ toolName: "read", draftingFocus: "goal" }), { block: false });
 
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "goal_question", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "apply_goal_tweak", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "write", tweakDraftingGoalId: "g1", activeGoalId: "g2" }), { block: false });
-
-	const blockedTweak = evaluateDraftingToolGate({ toolName: "write", tweakDraftingGoalId: "g1", activeGoalId: "g1" });
-	assert.equal(blockedTweak.block, true);
-	if (blockedTweak.block) assert.match(blockedTweak.reason, /Tweak drafting is in progress/);
+	assert.deepEqual(evaluateDraftingToolGate({ toolName: "write", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
 });
 
 test("promptSafeObjective escapes only untrusted objective tags", () => {

@@ -5,7 +5,6 @@ import {
 	abortGoalCommandMessage,
 	applyGoalBudgetUpdate,
 	buildAbortedByAgentGoal,
-	buildAutoContinueCapPause,
 	buildCompletionReport,
 	buildGoalCreatedReport,
 	buildPausedByAgentGoal,
@@ -13,7 +12,6 @@ import {
 	isGoalUnfinished,
 	parseGoalBudgetUpdate,
 	shouldArmPostCompactReminder,
-	shouldAutoPauseForContinueCap,
 	shouldInjectPostCompactReminder,
 	shouldQueueContinuation,
 	statusAfterBudgetLimit,
@@ -139,22 +137,13 @@ test("abort policy supports agent-owned abandonment without a new lifecycle stat
 	assert.equal(abortGoalCommandMessage({ archived: false, wasDrafting: false }), "No goal is set.");
 });
 
-test("budget, autoContinue cap, and compaction policies are deterministic", () => {
+test("budget and compaction policies are deterministic", () => {
 	assert.equal(statusAfterBudgetLimit(goal({ tokenBudget: 10, usage: { tokensUsed: 9, activeSeconds: 0 } })), "active");
 	assert.equal(statusAfterBudgetLimit(goal({ tokenBudget: 10, usage: { tokensUsed: 10, activeSeconds: 0 } })), "budgetLimited");
 	assert.equal(statusAfterBudgetLimit(goal({ status: "paused", tokenBudget: 10, usage: { tokensUsed: 20, activeSeconds: 0 } })), "paused");
 
 	assert.equal(shouldQueueContinuation(goal({ status: "active", autoContinue: true })), true);
 	assert.equal(shouldQueueContinuation(goal({ status: "paused", autoContinue: true })), false);
-	assert.equal(shouldAutoPauseForContinueCap({ goal: goal(), autoContinueTurns: 29, maxTurns: 30 }), false);
-	assert.equal(shouldAutoPauseForContinueCap({ goal: goal(), autoContinueTurns: 30, maxTurns: 30 }), true);
-	assert.equal(shouldAutoPauseForContinueCap({ goal: goal({ autoContinue: false }), autoContinueTurns: 30, maxTurns: 30 }), false);
-
-	const capped = buildAutoContinueCapPause(goal(), { maxTurns: 3, updatedAt: "2026-05-12T02:00:00.000Z" });
-	assert.equal(capped.status, "paused");
-	assert.equal(capped.autoContinue, false);
-	assert.equal(capped.pauseReason, "Auto-continue cap reached (3 consecutive turns).");
-	assert.match(capped.pauseSuggestedAction ?? "", /goal-resume/);
 
 	assert.equal(shouldArmPostCompactReminder(sisyphus({ status: "active" })), true);
 	assert.equal(shouldArmPostCompactReminder(goal({ status: "budgetLimited", sisyphus: false })), true);

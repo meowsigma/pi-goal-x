@@ -66,25 +66,10 @@ export function evaluateDraftingToolGate(args: {
 	tweakApplyToolName?: string;
 	getGoalToolName?: string;
 }): ToolGateDecision {
-	const proposeToolName = args.proposeToolName ?? "propose_goal_draft";
-	const tweakApplyToolName = args.tweakApplyToolName ?? "apply_goal_tweak";
-	const getGoalToolName = args.getGoalToolName ?? "get_goal";
-	if (args.draftingFocus) {
-		if (args.toolName !== proposeToolName && args.toolName !== getGoalToolName && !isQuestionLikeToolName(args.toolName)) {
-			return {
-				block: true,
-				reason: `Drafting is in progress (focus=${args.draftingFocus}). During /goal-set or /goal-sisyphus drafting, you may ask/clarify via plain chat or any question-like user-dialogue tool, may call get_goal for read-only state, and may call propose_goal_draft to commit. DO NOT use bash, read, write, edit, grep, find, ls, or any other workhorse tool.`,
-			};
-		}
-	}
-	if (args.tweakDraftingGoalId && args.activeGoalId && args.tweakDraftingGoalId === args.activeGoalId) {
-		if (args.toolName !== tweakApplyToolName && args.toolName !== getGoalToolName && !isQuestionLikeToolName(args.toolName)) {
-			return {
-				block: true,
-				reason: `Tweak drafting is in progress for goal ${args.tweakDraftingGoalId}. You may ask/clarify via plain chat or any question-like user-dialogue tool, may call get_goal for read-only state, and may call apply_goal_tweak to commit. DO NOT use bash, read, write, edit, or any workhorse tool.`,
-			};
-		}
-	}
+	// Phase 5 soft gate relaxation: drafting and tweak drafting tool gates are now
+	// prompt-guided, not runtime-enforced. The agent should avoid substantive
+	// work before confirmation, but minimal reconnaissance is allowed.
+	void args;
 	return { block: false };
 }
 
@@ -104,12 +89,8 @@ export function validateGoalDraftProposal(input: DraftProposalInput): DraftPropo
 			message: "propose_goal_draft REJECTED: no /goal-set or /goal-sisyphus drafting is in progress. Tell the user to invoke /goal-set <topic> or /goal-sisyphus <topic> first.",
 		};
 	}
-	if (input.drafting.questionsAsked < 1) {
-		return {
-			ok: false,
-			message: "propose_goal_draft REJECTED (B0 question gate): before proposing a goal, you must ask the user at least one concrete question about objective, measurable success criteria, constraints, boundaries, priority, or blocker handling. Use goal_question or goal_questionnaire, then incorporate the answer and retry.",
-		};
-	}
+	// Phase 5 soft gate relaxation: B0 question gate is now prompt-guided, not runtime-enforced.
+	// The agent should usually ask a question, but fully specified requests may proceed directly.
 
 	const expectedSisyphus = input.drafting.focus === "sisyphus";
 	if (input.draftId !== undefined && input.drafting.draftId !== undefined && input.draftId !== input.drafting.draftId) {
@@ -143,17 +124,17 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus, draf
 
 	const commonProtocol = [
 		"Drafting protocol — grill-me style, one branch at a time:",
-		"- You MUST ask the user at least one concrete question before calling propose_goal_draft. This is required even if the topic already looks complete. The runtime rejects proposals until a question-like tool has been used.",
-		"- The required question MUST be asked with goal_question or goal_questionnaire. Do not merely write a question in normal assistant text; plain text does not satisfy the runtime gate and leaves drafting stuck.",
-		"- If the topic is already concrete, ask one minimal calibration question with a recommended default, then immediately call propose_goal_draft. Do not end the turn with optional preference questions about implementation details such as timeout/retry policy when the user's blocker rule is already clear.",
+		"- Usually ask the user at least one concrete question before calling propose_goal_draft, especially when the topic is vague or incomplete. If the topic is already fully specified, you may proceed directly to proposal after one minimal calibration question.",
+		"- Use goal_question or goal_questionnaire for structured questions. Plain text questions are NOT recommended — in headless or automated environments the user cannot reply to plain text, which leaves drafting stuck. Structured tools are the reliable path.",
+		"- If the topic is already concrete, ask one minimal calibration question with a recommended default, then call propose_goal_draft. Do not end the turn with optional preference questions about implementation details such as timeout/retry policy when the user's blocker rule is already clear.",
 		"- Ask exactly one decision-oriented question at a time. Target assumptions, measurable success criteria, constraints, boundaries, priorities, risks, trade-offs, unresolved dependencies, or blocker handling.",
 		"- Provide a recommended answer with the question: a concrete proposal the user can accept, reject, or modify. Avoid rhetorical or broad open-ended questions.",
-		"- Prefer goal_question for the required first grill because it supports a focused question plus recommended options. Use goal_questionnaire only when one UI interaction genuinely needs multiple tightly related choices.",
+		"- Prefer goal_question for focused questions because it supports a focused question plus recommended options. Use goal_questionnaire only when one UI interaction genuinely needs multiple tightly related choices.",
 		"- Resolve dependencies in order. Do not jump to downstream implementation details until the current decision branch is settled.",
-		"- Aim to converge in 1-3 rounds of Q&A. Do not drag drafting out after the required question has resolved the contract.",
-		"- Drafting is a CONVERSATION with the user, not reconnaissance. Do NOT call workhorse tools during drafting — not bash, not read, not grep, not find, not ls, not write, not edit, not pause_goal, not Todo. The runtime treats goal_question, goal_questionnaire, question, questionnaire, and other question-like user-dialogue tools as asking the user, not doing task work.",
-		"- If you need to know something about the codebase or filesystem to ask a sharper question, ASK THE USER instead. The user is your source of truth during goal drafting; get_goal is the only read-only state tool allowed.",
-		"- The only task-affecting tool you may call during drafting is propose_goal_draft, and only after the required question plus the items below are clear. Before that, you may ask/clarify via question-like tools; get_goal is allowed for read-only state. If the topic is impossibly vague (e.g. empty), ask the user for the topic itself; do not call propose_goal_draft with placeholder content.",
+		"- Aim to converge in 1-3 rounds of Q&A. Do not drag drafting out after the contract is clear.",
+		"- Drafting is a CONVERSATION with the user. Avoid substantive task execution before confirmation. Minimal read-only reconnaissance (e.g. one quick read or ls) is allowed if it directly improves the goal contract, but do not begin the actual work.",
+		"- If you need to know something about the codebase or filesystem to ask a sharper question, you may do minimal reconnaissance or ASK THE USER. The user is your source of truth during goal drafting.",
+		"- The only task-affecting commit tool during drafting is propose_goal_draft. Before that, ask/clarify via question-like tools; get_goal is allowed for read-only state. If the topic is impossibly vague (e.g. empty), ask the user for the topic itself; do not call propose_goal_draft with placeholder content.",
 		"- Do not call propose_goal_draft until the items below are clear from the original topic plus your Q&A.",
 		"- propose_goal_draft will show the user a [Confirm] / [Continue Chatting] dialog. If they Confirm, the goal is created. If they Continue Chatting, you go back to interviewing them. There is no 'create_goal' shortcut anymore; everything goes through propose_goal_draft.",
 		"- IMPORTANT for Sisyphus: do NOT add reconnaissance / verification / preflight / 'check that X exists' steps that the user did not ask for. Use the user's requested order/style as-is. Sisyphus is a prompt/criteria variant, not a separate step-counter mechanism.",

@@ -30,12 +30,6 @@
     "tool": "edit"
   },
   {
-    "id": "no-bash",
-    "desc": "Agent must NOT shell out during drafting",
-    "kind": "tool-not-called",
-    "tool": "bash"
-  },
-  {
     "id": "final-text-has-question",
     "desc": "Final assistant text should contain a question (drafting interview)",
     "kind": "final-text-matches",

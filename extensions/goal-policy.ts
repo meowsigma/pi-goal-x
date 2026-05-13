@@ -185,25 +185,6 @@ export function shouldQueueContinuation(goal: Pick<GoalPolicyRecordLike, "status
 	return !!goal && goal.status === "active" && goal.autoContinue;
 }
 
-export function shouldAutoPauseForContinueCap(args: {
-	goal: Pick<GoalPolicyRecordLike, "id" | "status" | "autoContinue"> | null;
-	autoContinueTurns: number;
-	maxTurns: number;
-}): boolean {
-	return shouldQueueContinuation(args.goal) && args.autoContinueTurns >= args.maxTurns;
-}
-
-export function buildAutoContinueCapPause<T extends GoalPolicyRecordLike>(goal: T, args: { maxTurns: number; updatedAt: string }): T {
-	return {
-		...goal,
-		status: "paused",
-		autoContinue: false,
-		stopReason: "agent",
-		pauseReason: `Auto-continue cap reached (${args.maxTurns} consecutive turns).`,
-		pauseSuggestedAction: "Review the goal's progress and /goal-resume, /goal-tweak, or /goal-clear.",
-		updatedAt: args.updatedAt,
-	};
-}
 
 export function shouldArmPostCompactReminder(goal: Pick<GoalPolicyRecordLike, "sisyphus" | "status"> | null): boolean {
 	return !!goal && isRunnableStatus(goal.status);

@@ -460,11 +460,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		stopAuditAnimation();
 		auditProgress = null;
 		goalWidgetComponent?.invalidate();
-		ctx.ui.notify("Audit aborted by user. Goal remains open.", "warning");
+		ctx.ui.notify("Audit skipped by user.", "warning");
 		if (state.goal) {
 			pi.sendMessage<GoalAuditEventDetails>({
 				customType: GOAL_AUDIT_ENTRY,
-				content: `Audit skipped by user for goal ${state.goal.id}. Goal remains open.`,
+				content: `Audit skipped by user for goal ${state.goal.id}.`,
 				display: true,
 				details: { phase: "skipped", goalId: state.goal.id },
 			});
@@ -1885,11 +1885,46 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 			// If the audit was aborted by the user (Esc), abortAudit already sent
 			// notifications and appended an audit_skipped ledger entry.
-			// Skip the normal post-audit processing to avoid duplicate messages.
+			// Treat this as a user bypass signal: skip the audit and complete the goal,
+			// mirroring the disabled-auditor bypass pattern just above.
 			if (auditor.error === "Auditor aborted.") {
+				// Mark goal complete directly (skip audit entirely)
+				accountProgress(ctx);
+				state.goal = auditTarget;
+				stopActiveGoal("complete", "agent", ctx);
+				const completedGoal = state.goal;
+				turnStoppedFor = completedGoal?.id ?? null;
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
-				return { content: [{ type: "text", text: "Audit was aborted by user. Goal remains open." }], details: goalDetails(state.goal) };
+				if (completedGoal) {
+					resetGetGoalNudgeState(completedGoal.id);
+					goalsById.delete(completedGoal.id);
+					focusedGoalId = null;
+					appendFocusEntry(null, "completed");
+					syncGoalTools();
+					updateUI(ctx);
+					try {
+						appendGoalEvent(ctx, {
+							type: "goal_completed",
+							goalId: completedGoal.id,
+							archivePath: completedGoal.archivedPath,
+							at: nowIso(),
+						});
+					} catch {
+						// Ledger append failure should not crash completion
+					}
+				}
+				return {
+					content: [{
+						type: "text",
+						text: buildCompletionReport({
+							detailedSummary: detailedSummary(completedGoal),
+							completionSummary: params.completionSummary,
+						}),
+					}],
+					details: goalDetails(completedGoal),
+					terminate: true,
+				};
 			}
 
 			// Show final audit output briefly before clearing

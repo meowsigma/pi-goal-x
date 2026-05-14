@@ -310,6 +310,20 @@ export async function runGoalCompletionAuditor(args: {
 			emitProgress();
 			unsubscribe();
 		}
+		// session.abort() does NOT throw — the agent loop returns normally with
+		// whatever output was captured before the abort. Check the signal after
+		// prompt completes and treat any abort as auditor-aborted regardless of
+		// whether an exception propagated.
+		if (args.signal?.aborted) {
+			return {
+				approved: false,
+				disapproved: true,
+				output: outputParts.join("\n\n").trim(),
+				model: modelLabel(model),
+				thinkingLevel,
+				error: "Auditor aborted.",
+			};
+		}
 		const output = outputParts.join("\n\n").trim();
 		const decision = parseAuditorDecision(output);
 		return { ...decision, output, model: modelLabel(model), thinkingLevel };

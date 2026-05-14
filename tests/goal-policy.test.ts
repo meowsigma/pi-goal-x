@@ -111,6 +111,26 @@ test("pause, resume, and clear policy preserve human-owned lifecycle affordances
 		}),
 		"Goal audit approved.\n\nAuditor approval:\nAudit Report\n\n<approved/>\n\nGoal complete.\n\nCompletion summary:\nAll requested checks passed.\n\nGoal: full objective\nStatus: complete",
 	);
+	// When the auditor approves, the full auditor output MUST be included in the
+	// completion report so the executor agent can see the auditor's reasoning.
+	// This validates the contract: the update_goal tool handler passes
+	// auditor.output as auditorReport (regression test for the fix).
+	const longAuditorReport = [
+		"I have inspected the codebase.",
+		"The implementation covers all requirements:",
+		"  - Feature A is fully implemented in src/a.ts",
+		"  - Feature B is tested in tests/b.test.ts",
+		"  - Documentation is updated in README.md",
+		"<approved/>",
+	].join("\n");
+	const result = buildCompletionReport({
+		detailedSummary: "Goal: Build X\nStatus: active",
+		completionSummary: "Done",
+		auditorReport: longAuditorReport,
+	});
+	assert.ok(result.includes(longAuditorReport), "completion report must include full auditor output");
+	assert.ok(result.includes("<approved/>"), "completion report must include the approval marker from the auditor");
+	assert.ok(result.includes("Goal audit approved."), "completion report must indicate audit approval");
 	assert.equal(
 		buildGoalCreatedReport({ objective: "# Objective\nShip the feature.", detailedSummary: "Status: active" }),
 		"Goal confirmed and created.\n\nFinalized goal:\n\n# Objective\nShip the feature.\n\nGoal details:\nStatus: active",

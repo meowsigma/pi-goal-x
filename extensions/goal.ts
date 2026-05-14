@@ -1878,6 +1878,16 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			auditAbortController = null;
 			// Clear auditor progress display
 			stopAuditAnimation();
+
+			// If the audit was aborted by the user (Esc), abortAudit already sent
+			// notifications and appended an audit_skipped ledger entry.
+			// Skip the normal post-audit processing to avoid duplicate messages.
+			if (auditor.error === "Auditor aborted.") {
+				auditProgress = null;
+				goalWidgetComponent?.invalidate();
+				return { content: [{ type: "text", text: "Audit was aborted by user. Goal remains open." }], details: goalDetails(state.goal) };
+			}
+
 			// Show final audit output briefly before clearing
 			if (auditProgress && auditor.output) {
 				const outputLines = auditor.output.split("\n").slice(0, 8);

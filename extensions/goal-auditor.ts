@@ -211,6 +211,12 @@ export async function runGoalCompletionAuditor(args: {
 	detailedSummary: string;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
+	/**
+	 * Optional factory for creating the auditor agent session.
+	 * Exposed for testing so a mock/controllable session can be injected.
+	 * Defaults to the real createAgentSession from @earendil-works/pi-coding-agent.
+	 */
+	createSession?: typeof createAgentSession;
 }): Promise<GoalAuditorResult> {
 	const config = loadGoalAuditorConfig(args.ctx.cwd);
 	const resolved = resolveAuditorModel(args.ctx, config);
@@ -221,7 +227,8 @@ export async function runGoalCompletionAuditor(args: {
 		return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: resolved.error };
 	}
 	try {
-		const { session } = await createAgentSession({
+		const createSession = args.createSession ?? createAgentSession;
+		const { session } = await createSession({
 			cwd: args.ctx.cwd,
 			model,
 			thinkingLevel,
@@ -287,12 +294,18 @@ export async function runGoalCompletionAuditor(args: {
 			progress.recentOutput = lines.slice(-8);
 			emitProgress();
 		});
+		// Wire the external AbortSignal to abort the running session when fired
+		// This is the mechanism that makes Esc-to-skip actually stop the auditor.
+		const abortSession = () => { session.abort(); };
+		args.signal?.addEventListener("abort", abortSession, { once: true });
+
 		// Emit initial progress
 		emitProgress();
 		try {
 			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
 			await session.prompt(buildGoalAuditorPrompt(args));
 		} finally {
+			args.signal?.removeEventListener("abort", abortSession);
 			progress.phase = "done";
 			emitProgress();
 			unsubscribe();
@@ -301,13 +314,14 @@ export async function runGoalCompletionAuditor(args: {
 		const decision = parseAuditorDecision(output);
 		return { ...decision, output, model: modelLabel(model), thinkingLevel };
 	} catch (error) {
+		const isAborted = args.signal?.aborted || (error instanceof Error && error.name === "AbortError");
 		return {
 			approved: false,
 			disapproved: true,
 			output: outputParts.join("\n\n").trim(),
 			model: modelLabel(model),
 			thinkingLevel,
-			error: error instanceof Error ? error.message : String(error),
+			error: isAborted ? "Auditor aborted." : (error instanceof Error ? error.message : String(error)),
 		};
 	}
 }

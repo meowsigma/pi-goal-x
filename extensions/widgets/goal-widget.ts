@@ -134,7 +134,7 @@ export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme:
 			theme,
 			safeWidth,
 			true,
-			theme.fg("warning", "Esc to skip") + theme.fg("dim", " — abort the audit and keep the goal open"),
+			theme.fg("warning", "Esc to skip") + theme.fg("dim", " — abort the audit and mark the goal complete"),
 		));
 	}
 

@@ -462,12 +462,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		goalWidgetComponent?.invalidate();
 		ctx.ui.notify("Audit skipped by user.", "warning");
 		if (state.goal) {
-			pi.sendMessage<GoalAuditEventDetails>({
-				customType: GOAL_AUDIT_ENTRY,
-				content: `Audit skipped by user for goal ${state.goal.id}.`,
-				display: true,
-				details: { phase: "skipped", goalId: state.goal.id },
-			});
 			try {
 				appendGoalEvent(ctx, {
 					type: "audit_skipped",
@@ -1883,11 +1877,19 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// Clear auditor progress display
 			stopAuditAnimation();
 
-			// If the audit was aborted by the user (Esc), abortAudit already sent
-			// notifications and appended an audit_skipped ledger entry.
-			// Treat this as a user bypass signal: skip the audit and complete the goal,
-			// mirroring the disabled-auditor bypass pattern just above.
+			// If the audit was aborted by the user (Esc), treat this as a user bypass
+			// signal: skip the audit and complete the goal, mirroring the
+			// disabled-auditor bypass pattern just above.
+			// The GOAL_AUDIT_ENTRY (skipped) is sent here with triggerTurn:true so the
+			// skip notification is exposed exactly once to the agent as part of the
+			// update_goal tool execution, matching the disabled-flow pattern exactly.
 			if (auditor.error === "Auditor aborted.") {
+				await pi.sendMessage<GoalAuditEventDetails>({
+					customType: GOAL_AUDIT_ENTRY,
+					content: `Auditor aborted — completion bypassed for goal ${auditTarget.id}.`,
+					display: true,
+					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
+				}, { triggerTurn: true });
 				// Mark goal complete directly (skip audit entirely)
 				accountProgress(ctx);
 				state.goal = auditTarget;

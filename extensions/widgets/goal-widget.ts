@@ -19,11 +19,21 @@ export interface GoalWidgetRecord extends GoalDisplayRecordLike {
 	pauseSuggestedAction?: string;
 }
 
+export interface AuditorWidgetProgress {
+	currentTool?: string;
+	currentToolArgs?: string;
+	currentToolStartedAt?: number;
+	recentOutput: string[];
+	phase: "running" | "tool_executing" | "producing_report" | "done";
+	elapsedMs: number;
+}
+
 export interface GoalWidgetOptions {
 	theme: Theme;
 	tui: TUI;
 	getGoal: () => GoalWidgetRecord | null;
 	getOpenGoalCount?: () => number;
+	getAuditorProgress?: () => AuditorWidgetProgress | null;
 }
 
 function fit(value: string, width: number): string {
@@ -62,7 +72,80 @@ function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0): string {
 	return bits.join(" · ");
 }
 
-export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number } = {}): string[] {
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function spinnerFrame(): string {
+	return SPINNER[Math.floor(Date.now() / 80) % SPINNER.length]!;
+}
+
+export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme: Theme, width: number): string[] {
+	const safeWidth = Math.max(1, width);
+	const isActive = progress.phase !== "done";
+	const icon = isActive ? theme.fg("accent", spinnerFrame()) : theme.fg("success", "✓");
+	const label = isActive ? "auditing" : "audit complete";
+	// formatDuration expects seconds, progress.elapsedMs is in milliseconds
+	const duration = formatDuration(Math.floor(progress.elapsedMs / 1000));
+	const lines: string[] = [
+		heading(
+			theme,
+			safeWidth,
+			`${icon} ${theme.fg("accent", theme.bold("Audit"))} ${theme.fg("muted", label)}`,
+			theme.fg("muted", duration),
+		),
+	];
+
+	if (isActive && progress.currentTool) {
+		const argText = progress.currentToolArgs
+			? truncateText(progress.currentToolArgs, Math.max(10, safeWidth - 24))
+			: "";
+		const toolDuration = progress.currentToolStartedAt
+			? ` ${theme.fg("dim", formatDuration(Date.now() - progress.currentToolStartedAt))}`
+			: "";
+		lines.push(branchLine(
+			theme,
+			safeWidth,
+			false,
+			`${theme.fg("accent", "tool")} ${theme.fg("text", progress.currentTool)}${argText ? ` ${theme.fg("dim", argText)}` : ""}${toolDuration}`,
+		));
+	}
+
+	if (progress.recentOutput.length > 0) {
+		// Show separator
+		lines.push(branchLine(
+			theme,
+			safeWidth,
+			!isActive,
+			theme.fg("dim", "─".repeat(Math.max(4, safeWidth - 6))),
+		));
+		for (const [index, line] of progress.recentOutput.entries()) {
+			const isLast = index === progress.recentOutput.length - 1 && !isActive;
+			lines.push(branchLine(
+				theme,
+				safeWidth,
+				isLast,
+				theme.fg("dim", truncateText(line, Math.max(8, safeWidth - 6))),
+			));
+		}
+	}
+
+	// Show skip hint when audit is actively running
+	if (isActive) {
+		lines.push(branchLine(
+			theme,
+			safeWidth,
+			true,
+			theme.fg("warning", "Esc to skip") + theme.fg("dim", " — abort the audit and keep the goal open"),
+		));
+	}
+
+	return lines;
+}
+
+export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null } = {}): string[] {
+	// When auditor progress is active, show auditor display instead of normal goal widget
+	if (options.auditorProgress) {
+		return renderAuditorWidgetLines(options.auditorProgress, theme, width);
+	}
 	if (!goal) {
 		const openGoalCount = options.openGoalCount ?? 0;
 		if (openGoalCount <= 0) return [];
@@ -109,12 +192,14 @@ export class GoalWidgetComponent implements Component {
 	private tui: TUI;
 	private getGoal: () => GoalWidgetRecord | null;
 	private getOpenGoalCount: () => number;
+	private getAuditorProgress: () => AuditorWidgetProgress | null;
 
 	constructor(options: GoalWidgetOptions) {
 		this.theme = options.theme;
 		this.tui = options.tui;
 		this.getGoal = options.getGoal;
 		this.getOpenGoalCount = options.getOpenGoalCount ?? (() => (this.getGoal() ? 1 : 0));
+		this.getAuditorProgress = options.getAuditorProgress ?? (() => null);
 	}
 
 	update(): void {
@@ -122,7 +207,10 @@ export class GoalWidgetComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		return renderGoalWidgetLines(this.getGoal(), this.theme, width, { openGoalCount: this.getOpenGoalCount() });
+		return renderGoalWidgetLines(this.getGoal(), this.theme, width, {
+			openGoalCount: this.getOpenGoalCount(),
+			auditorProgress: this.getAuditorProgress(),
+		});
 	}
 
 	invalidate(): void {

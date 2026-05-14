@@ -2022,6 +2022,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					text: buildCompletionReport({
 						detailedSummary: detailedSummary(completedGoal),
 						completionSummary: params.completionSummary,
+						auditorReport: auditor.output,
 					}),
 				}],
 				details: goalDetails(completedGoal),

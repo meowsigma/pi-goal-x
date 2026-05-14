@@ -60,3 +60,17 @@ Added the missing tests for success criterion 7:
 - `tests/goal-ledger.test.ts`: Added 3 tests — `audit_skipped` with disabled reason and full metadata, `audit_skipped` with user_aborted reason and minimal metadata, and `reconstructGoalLedger` handling of `audit_skipped` without changing goal status or setting auditor result.
 - `tests/goal-widget.test.ts`: Added 2 tests — `Esc to skip` hint visible when audit active, hint omitted when audit complete.
 - Also fixed a prior constraint violation: `audit_skipped` ledger event type now includes `provider?`, `model?`, `thinkingLevel?` fields matching `audit_started`, and both `appendGoalEvent` calls (disabled bypass and `abortAudit`) populate them from the loaded auditor config.
+
+### 2026-05-14 12:14:00 - Fix audit-cancellation loop (Esc-skip completes goal)
+
+When the user pressed Escape during a running completion audit, `abortAudit()` aborted the controller and appended an `audit_skipped` ledger event, but the `update_goal` tool's abort handler returned "Audit was aborted by user. Goal remains open." without setting `turnStoppedFor` or `terminate: true`. The agent interpreted "goal remains open" as a signal to retry completion, creating an infinite loop: agent calls `update_goal` → user Escapes → agent retries.
+
+Fix: changed the abort handler to treat a user-aborted audit as a bypass signal (mirroring the disabled-auditor bypass pattern). When `auditor.error === "Auditor aborted."`, the handler now:
+- Calls `accountProgress(ctx)`, `stopActiveGoal("complete", "agent", ctx)` — same steps as disabled bypass
+- Sets `turnStoppedFor = completedGoal.id` to block subsequent in-turn tool calls
+- Cleans up pool/focus state, appends `goal_completed` ledger event
+- Returns `buildCompletionReport(...)` with `terminate: true`
+
+Updated `abortAudit()` notification text from "Audit aborted by user. Goal remains open." to "Audit skipped by user." to avoid contradicting the pending completion.
+
+Validation: `npm run check` clean, `npm test` 89/89 pass.

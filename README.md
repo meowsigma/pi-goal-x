@@ -116,7 +116,7 @@ The extension exposes tools only when they make sense for the current lifecycle 
 | `get_goal` | always | Read the focused goal state; mentions other open goals when present |
 | `propose_goal_draft` | registered; accepted only during goal drafting | Submit a concrete draft for user confirmation |
 | `apply_goal_tweak` | tweak drafting only | Submit a revision to an existing goal |
-| `update_goal` | focused active or paused goal | Mark the focused goal complete when all requirements are satisfied |
+| `update_goal` | focused active or paused goal | Mark the focused goal complete when all requirements are satisfied. When the auditor is disabled, supply `confirmBypassAuditor: true` after user confirmation to bypass the audit |
 | `pause_goal` | focused active goal | Pause the focused goal because of a real blocker |
 | `abort_goal` | focused active or paused goal | Abort/archive an obsolete, impossible, unsafe, or user-cancelled focused goal |
 | `step_complete` | hidden / legacy | Compatibility no-op; Sisyphus no longer requires a step counter |
@@ -245,7 +245,8 @@ extensions/goal-pool.ts            open-goal pool, focus resolution, list/select
 extensions/goal-core.ts            display helpers
 extensions/goal-draft.ts           lightweight confirmation prompt, proposal validation, drafting tool gate
 extensions/goal-policy.ts          lifecycle, pause/resume/complete, and Sisyphus policy
-extensions/goal-auditor.ts         independent pi auditor agent for completion approval
+extensions/goal-auditor.ts         independent pi auditor agent for completion approval, config, and progress tracking
+extensions/goal-ledger.ts         event append, read, validation, sanitization, and reconstruction
 extensions/goal-questionnaire.ts   built-in question UI and question tool registration
 extensions/goal-tool-names.ts      centralized published tool names and allowlists
 extensions/prompts/goal-prompts.ts active, continuation, tweak, and stale prompts

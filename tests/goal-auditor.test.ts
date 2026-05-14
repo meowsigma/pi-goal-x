@@ -179,6 +179,56 @@ test("runGoalCompletionAuditor aborts running prompt when signal fires (abort du
 });
 
 /**
+ * Validate that when session.abort() DOES NOT throw (the real agent behavior),
+ * the post-prompt signal check catches the abort and returns the expected
+ * "Auditor aborted." error instead of treating it as a normal (empty) result.
+ */
+test("runGoalCompletionAuditor detects abort when session.prompt returns normally (no throw)", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
+	try {
+		const ctrl = new AbortController();
+		let abortCalledOnSession = false;
+		let promptResolve: () => void;
+
+		const mockSession = {
+			abort: () => {
+				abortCalledOnSession = true;
+				// Real session.abort() calls agent.abort() then await waitForIdle().
+				// The agent loop returns normally (no throw) with whatever output
+				// was captured before the abort. Simulate that by resolving prompt.
+				promptResolve?.();
+			},
+			subscribe: () => () => {},
+			prompt: () => new Promise<void>((resolve) => { promptResolve = resolve; }),
+		};
+
+		const resultPromise = runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			signal: ctrl.signal,
+			createSession: async () => ({ session: mockSession }) as any,
+		});
+
+		// Yield to let createSession resolve
+		await new Promise((r) => setTimeout(r, 0));
+
+		// Abort while prompt is still running — this triggers abortSession listener
+		// which calls session.abort(), which resolves the prompt.
+		ctrl.abort();
+
+		const result = await resultPromise;
+
+		assert.equal(result.error, "Auditor aborted.");
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, true);
+		assert.ok(abortCalledOnSession, "session.abort() must have been called via the signal listener");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+/**
  * Verify that the abort signal listener is properly cleaned up after a normal
  * (non-aborted) audit run resolves, preventing memory leaks.
  */

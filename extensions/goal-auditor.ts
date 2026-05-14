@@ -16,7 +16,25 @@ export interface GoalAuditorConfig {
 	provider?: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
+	disabled?: boolean;
 }
+
+export interface AuditorProgress {
+	/** Current tool being executed by the auditor, if any */
+	currentTool?: string;
+	/** Arguments passed to the current tool (truncated for display) */
+	currentToolArgs?: string;
+	/** When the current tool started (ms since epoch) */
+	currentToolStartedAt?: number;
+	/** Recent text output lines from the auditor's assistant messages */
+	recentOutput: string[];
+	/** Phase of the audit */
+	phase: "running" | "tool_executing" | "producing_report" | "done";
+	/** Elapsed ms since audit started */
+	elapsedMs: number;
+}
+
+export type AuditorProgressCallback = (progress: AuditorProgress) => void;
 
 export interface GoalAuditorResult {
 	approved: boolean;
@@ -52,6 +70,7 @@ export function parseGoalAuditorConfig(raw: unknown): GoalAuditorConfig {
 	if (provider) config.provider = provider;
 	if (model) config.model = model;
 	if (thinkingLevel) config.thinkingLevel = thinkingLevel;
+	if (record.disabled === true || record.disabled === "true") config.disabled = true;
 	return config;
 }
 
@@ -83,12 +102,14 @@ export function saveGoalAuditorFileConfig(cwd: string, config: GoalAuditorConfig
 	if (provider) clean.provider = provider;
 	if (model) clean.model = model;
 	if (thinkingLevel) clean.thinkingLevel = thinkingLevel;
+	if (config.disabled === true) clean.disabled = true;
 	const configPath = goalAuditorConfigPath(cwd);
 	fs.mkdirSync(path.dirname(configPath), { recursive: true });
-	const persisted: Record<string, string> = {};
+	const persisted: Record<string, unknown> = {};
 	if (clean.provider) persisted.provider = clean.provider;
 	if (clean.model) persisted.model = clean.model;
 	if (clean.thinkingLevel) persisted.thinking_level = clean.thinkingLevel;
+	if (clean.disabled) persisted.disabled = true;
 	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
 	return clean;
 }
@@ -189,6 +210,7 @@ export async function runGoalCompletionAuditor(args: {
 	completionSummary?: string | null;
 	detailedSummary: string;
 	signal?: AbortSignal;
+	onProgress?: AuditorProgressCallback;
 }): Promise<GoalAuditorResult> {
 	const config = loadGoalAuditorConfig(args.ctx.cwd);
 	const resolved = resolveAuditorModel(args.ctx, config);
@@ -209,18 +231,70 @@ export async function runGoalCompletionAuditor(args: {
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
 			tools: ["read", "grep", "find", "ls", "bash"],
 		});
+		const startedAt = Date.now();
+		const progress: AuditorProgress = {
+			recentOutput: [],
+			phase: "running",
+			elapsedMs: 0,
+		};
+		function emitProgress(): void {
+			progress.elapsedMs = Date.now() - startedAt;
+			args.onProgress?.({ ...progress });
+		}
 		const unsubscribe = session.subscribe((event) => {
+			if (event.type === "tool_execution_start") {
+				progress.currentTool = event.toolName;
+				progress.currentToolArgs = typeof event.args === "object" && event.args !== null
+					? JSON.stringify(event.args).slice(0, 120)
+					: String(event.args ?? "").slice(0, 120);
+				progress.currentToolStartedAt = Date.now();
+				progress.phase = "tool_executing";
+				emitProgress();
+				return;
+			}
+			if (event.type === "tool_execution_end") {
+				progress.currentTool = undefined;
+				progress.currentToolArgs = undefined;
+				progress.currentToolStartedAt = undefined;
+				progress.phase = "running";
+				emitProgress();
+				return;
+			}
+			if (event.type === "message_update") {
+				progress.phase = "producing_report";
+				const message = event.message as any;
+				if (message?.role === "assistant") {
+					for (const part of message.content ?? []) {
+						if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+							// Keep the last 5 non-empty text lines for live display
+							const lines = part.text.split("\n").filter((l: string) => l.trim());
+							progress.recentOutput = [...lines.slice(-5)];
+						}
+					}
+				}
+				emitProgress();
+				return;
+			}
 			if (event.type !== "message_end") return;
 			const message = event.message as any;
 			if (message.role !== "assistant") return;
 			for (const part of message.content ?? []) {
 				if (part.type === "text" && typeof part.text === "string") outputParts.push(part.text);
 			}
+			// Show the accumulated output in progress
+			const fullText = outputParts.join("\n\n");
+			const lines = fullText.split("\n").filter((l: string) => l.trim());
+			progress.recentOutput = lines.slice(-8);
+			emitProgress();
 		});
+		// Emit initial progress
+		emitProgress();
 		try {
 			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
 			await session.prompt(buildGoalAuditorPrompt(args));
 		} finally {
+			progress.phase = "done";
+			emitProgress();
 			unsubscribe();
 		}
 		const output = outputParts.join("\n\n").trim();

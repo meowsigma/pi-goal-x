@@ -11,6 +11,7 @@ import {
 	loadGoalAuditorFileConfig,
 	parseAuditorDecision,
 	parseGoalAuditorConfig,
+	runGoalCompletionAuditor,
 	saveGoalAuditorFileConfig,
 } from "../extensions/goal-auditor.ts";
 import type { GoalRecord } from "../extensions/goal-record.ts";
@@ -101,4 +102,119 @@ test("buildGoalAuditorPrompt demands semantic approval markers", () => {
 	assert.match(prompt, /<approved\/>/);
 	assert.match(prompt, /<disapproved\/>/);
 	assert.match(prompt, /Generated a VitePress scaffold/);
+});
+
+test("runGoalCompletionAuditor returns aborted error when signal is already aborted (pre-flight)", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
+	try {
+		const ctrl = new AbortController();
+		ctrl.abort(); // Already aborted before call
+
+		let abortCalledOnSession = false;
+		const mockSession = {
+			abort: () => { abortCalledOnSession = true; },
+			subscribe: () => () => {},
+			prompt: () => { throw new Error("prompt should not be called"); },
+		};
+
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			signal: ctrl.signal,
+			createSession: async () => ({ session: mockSession }) as any,
+		});
+
+		assert.equal(result.error, "Auditor aborted.");
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, true);
+		assert.equal(result.output, "");
+		// The signal listener for the already-aborted signal should have been
+		// cleaned up in the inner finally before session.abort() could fire.
+		assert.equal(abortCalledOnSession, false, "session.abort() should not be called for pre-flight abort");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor aborts running prompt when signal fires (abort during prompt)", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
+	try {
+		const ctrl = new AbortController();
+		let abortCalledOnSession = false;
+		let promptReject: (e: Error) => void;
+
+		const mockSession = {
+			abort: () => {
+				abortCalledOnSession = true;
+				promptReject?.(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+			},
+			subscribe: () => () => {},
+			prompt: () => new Promise<void>((_, reject) => { promptReject = reject; }),
+		};
+
+		const resultPromise = runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			signal: ctrl.signal,
+			createSession: async () => ({ session: mockSession }) as any,
+		});
+
+		// Yield to let the async setup run (createSession resolves, prompt is entered)
+		await new Promise((r) => setTimeout(r, 0));
+
+		// At this point prompt() should be "running" — trigger the abort
+		ctrl.abort();
+
+		const result = await resultPromise;
+
+		assert.equal(result.error, "Auditor aborted.");
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, true);
+		assert.ok(abortCalledOnSession, "session.abort() must have been called via the signal listener");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+/**
+ * Verify that the abort signal listener is properly cleaned up after a normal
+ * (non-aborted) audit run resolves, preventing memory leaks.
+ */
+test("runGoalCompletionAuditor cleans up abort listener on normal completion", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
+	try {
+		const ctrl = new AbortController();
+		let abortCalledOnSession = false;
+
+		const mockSession = {
+			abort: () => { abortCalledOnSession = true; },
+			subscribe: () => () => {},
+			prompt: async () => {
+				// Simulate a normal prompt that completes without abort
+			},
+		};
+
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			signal: ctrl.signal,
+			createSession: async () => ({ session: mockSession }) as any,
+		});
+
+		// Normal completion — no abort occurred, no approval/disapproval markers
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, false); // Empty output has no disapproval marker
+		assert.equal(result.error, undefined); // No error
+		assert.equal(abortCalledOnSession, false, "session.abort() should not have been called");
+
+		// Also verify the signal listener was cleaned up: triggering the signal after
+		// completion should NOT call session.abort()
+		ctrl.abort();
+		assert.equal(abortCalledOnSession, false, "session.abort() should not fire after cleanup");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
 });

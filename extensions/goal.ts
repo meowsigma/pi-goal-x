@@ -928,13 +928,17 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 		terminalInputUnsubscribe?.();
 		terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
-			// If an audit is running, Escape aborts the audit instead of pausing
+			// If an audit is running, Escape aborts the audit instead of pausing.
+			// Must return { consume: true } so the TUI doesn't also process the key
+			// and abort the running tool execution, which would cascade into pausing
+			// the entire goal (agent_end sees ctx.signal?.aborted and calls pauseActiveGoal).
 			if (matchesKey(data, "escape") && auditProgress) {
 				abortAudit(ctx);
-				return undefined;
+				return { consume: true };
 			}
 			if (matchesKey(data, "escape") && state.goal?.status === "active" && state.goal.autoContinue) {
 				pauseActiveGoal(ctx);
+				return { consume: true };
 			}
 			return undefined;
 		});

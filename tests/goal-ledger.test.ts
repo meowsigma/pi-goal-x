@@ -265,3 +265,72 @@ test("reconstructGoalLedger handles repeated pause and resume events", () => {
   // goal_resumed clears pauseReason, so latestPauseReason should be undefined
   assert.equal(g1?.latestPauseReason, undefined);
 });
+
+test("appendGoalEvent persists audit_skipped with disabled reason and metadata", () => {
+  const ctx = tempCtx();
+  try {
+    appendGoalEvent(ctx, {
+      type: "audit_skipped",
+      goalId: "g1",
+      reason: "disabled",
+      provider: "fireworks",
+      model: "kimi",
+      thinkingLevel: "high",
+      at: "2024-01-01T00:00:00.000Z",
+    });
+
+    const result = readGoalLedger(ctx);
+    assert.equal(result.events.length, 1);
+    const evt = result.events[0] as { type: string; reason: string; provider?: string; model?: string; thinkingLevel?: string };
+    assert.equal(evt.type, "audit_skipped");
+    assert.equal(evt.reason, "disabled");
+    assert.equal(evt.provider, "fireworks");
+    assert.equal(evt.model, "kimi");
+    assert.equal(evt.thinkingLevel, "high");
+    assert.equal(result.malformed, 0);
+  } finally {
+    cleanup(ctx);
+  }
+});
+
+test("appendGoalEvent persists audit_skipped with user_aborted reason and minimal metadata", () => {
+  const ctx = tempCtx();
+  try {
+    appendGoalEvent(ctx, {
+      type: "audit_skipped",
+      goalId: "g1",
+      reason: "user_aborted",
+      at: "2024-01-01T00:00:00.000Z",
+    });
+
+    const result = readGoalLedger(ctx);
+    assert.equal(result.events.length, 1);
+    const evt = result.events[0] as { type: string; reason: string; provider?: string; model?: string };
+    assert.equal(evt.type, "audit_skipped");
+    assert.equal(evt.reason, "user_aborted");
+    assert.equal(evt.provider, undefined);
+    assert.equal(evt.model, undefined);
+    assert.equal(result.malformed, 0);
+  } finally {
+    cleanup(ctx);
+  }
+});
+
+test("reconstructGoalLedger handles audit_skipped without changing goal status", () => {
+  const events: GoalLedgerEvent[] = [
+    { type: "goal_created", goalId: "g1", objective: "o1", sisyphus: false, autoContinue: true, at: "2024-01-01T00:00:00.000Z" },
+    { type: "goal_focused", goalId: "g1", reason: "created", at: "2024-01-01T00:00:01.000Z" },
+    { type: "audit_skipped", goalId: "g1", reason: "disabled", provider: "fireworks", model: "kimi", at: "2024-01-01T00:00:02.000Z" },
+    { type: "audit_skipped", goalId: "g1", reason: "user_aborted", at: "2024-01-01T00:00:03.000Z" },
+  ];
+
+  const state = reconstructGoalLedger(events);
+  // Goal should remain active (not terminal)
+  assert.equal(state.goals.has("g1"), true);
+  assert.equal(state.terminalGoals.has("g1"), false);
+  assert.equal(state.goals.get("g1")?.latestStatus, "active");
+  // audit_skipped should NOT set latestAuditorResult
+  assert.equal(state.goals.get("g1")?.latestAuditorResult, undefined);
+  // Focus should remain
+  assert.equal(state.focusedGoalId, "g1");
+});

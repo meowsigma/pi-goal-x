@@ -7,6 +7,7 @@ import test from "node:test";
 import {
 	buildGoalAuditorPrompt,
 	goalAuditorConfigPath,
+	loadGoalAuditorConfig,
 	loadGoalAuditorFileConfig,
 	parseAuditorDecision,
 	parseGoalAuditorConfig,
@@ -44,6 +45,13 @@ test("parseGoalAuditorConfig supports provider/model and thinking_level aliases"
 	assert.deepEqual(parseGoalAuditorConfig({ provider: " ", model: 123, thinkingLevel: "ludicrous" }), {});
 });
 
+test("parseGoalAuditorConfig reads disabled flag", () => {
+	assert.deepEqual(parseGoalAuditorConfig({ disabled: true }), { disabled: true });
+	assert.deepEqual(parseGoalAuditorConfig({ disabled: "true" }), { disabled: true });
+	assert.deepEqual(parseGoalAuditorConfig({ disabled: false }), {});
+	assert.deepEqual(parseGoalAuditorConfig({}), {});
+});
+
 test("saveGoalAuditorFileConfig persists UI-editable auditor settings", () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
 	try {
@@ -60,9 +68,26 @@ test("saveGoalAuditorFileConfig persists UI-editable auditor settings", () => {
 		assert.equal(goalAuditorConfigPath(cwd), path.join(cwd, ".pi", "goal-auditor.json"));
 		assert.deepEqual(loadGoalAuditorFileConfig(cwd), saved);
 		assert.match(fs.readFileSync(goalAuditorConfigPath(cwd), "utf8"), /"thinking_level": "high"/);
+
+		// Save with disabled flag
+		const saved2 = saveGoalAuditorFileConfig(cwd, {
+			provider: "fireworks",
+			model: "accounts/fireworks/routers/kimi",
+			thinkingLevel: "high",
+			disabled: true,
+		});
+		assert.equal(saved2.disabled, true);
+		assert.match(fs.readFileSync(goalAuditorConfigPath(cwd), "utf8"), /"disabled": true/);
+		assert.deepEqual(loadGoalAuditorFileConfig(cwd), saved2);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
+});
+
+test("loadGoalAuditorConfig merges env and file config", () => {
+	assert.equal(loadGoalAuditorConfig("/tmp", { PI_GOAL_AUDITOR_PROVIDER: "fireworks", PI_GOAL_AUDITOR_MODEL: "kimi" }).provider, "fireworks");
+	// disabled is file-only, not read from env
+	assert.equal(loadGoalAuditorConfig("/tmp", { PI_GOAL_AUDITOR_DISABLED: "true" }).disabled, undefined);
 });
 
 test("buildGoalAuditorPrompt demands semantic approval markers", () => {

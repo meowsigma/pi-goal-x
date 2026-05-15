@@ -1,6 +1,8 @@
-# pi-goal
+# pi-goal-x
 
-`pi-goal` is a long-running goal extension for [pi](https://github.com/earendil-works/pi-coding-agent). It gives the agent a durable objective, a visible lifecycle, and schema-gated tools for drafting, executing, pausing, resuming, and completing work.
+> **Fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal).** Upstream changes can be merged from the original repository.
+
+`pi-goal-x` is a long-running goal extension for [pi](https://github.com/earendil-works/pi-coding-agent). It gives the agent a durable objective, a visible lifecycle, and schema-gated tools for drafting, executing, pausing, resuming, and completing work.
 
 The extension is designed around one rule: **the user owns intent; the agent executes only after the goal is explicit and confirmed**.
 
@@ -26,7 +28,7 @@ The extension is designed around one rule: **the user owns intent; the agent exe
 From npm:
 
 ```bash
-pi install npm:@capyup/pi-goal
+pi install npm:pi-goal-x
 ```
 
 From a local checkout:
@@ -264,6 +266,37 @@ extensions/widgets/goal-notifications.ts widget-style notification text
 - **Lifecycle-shaped tool surface**: the agent sees only tools appropriate to the current phase.
 - **Disk-backed continuity**: goal state survives context churn and can be audited from `.pi/goals/`.
 - **Human-owned focus**: the agent may work on the focused goal, but only user commands/UI selection switch focus.
+
+## Divergence from upstream
+
+This fork adds the following features beyond `@capyup/pi-goal`:
+
+| Feature | Description |
+|---|---|
+| **Auditor progress widget** | Live spinner, current tool tracking, and recent output lines displayed during audit runs |
+| **Escape-to-skip audit** | Press `Escape` during a running audit to abort it; the goal completes as bypassed |
+| **Disable the auditor** | `disabled` flag in `GoalAuditorConfig`, toggleable from `/goal-settings` |
+| **`confirmBypassAuditor`** | `update_goal` accepts `confirmBypassAuditor: true` to skip the auditor without running it |
+| **`audit_skipped` ledger event** | New event type recording `disabled` or `user_aborted` bypasses in the goal ledger |
+| **Audit lifecycle hardening** | Abort signal wiring, escape-key consumption, proper cleanup, and completion-on-abort instead of leaving the goal open |
+
+See the git log for the full commit history:
+
+```bash
+git log upstream/main..HEAD
+```
+
+## Upstream
+
+This repository is a downstream fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal). To sync with upstream changes:
+
+```bash
+git fetch upstream
+git merge upstream/main
+# resolve conflicts, test, commit
+```
+
+The `upstream` remote should point to `https://github.com/capyup/pi-goal.git`.
 
 ## Release policy
 

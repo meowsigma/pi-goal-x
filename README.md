@@ -6,6 +6,16 @@
 
 The extension is designed around one rule: **the user owns intent; the agent executes only after the goal is explicit and confirmed**.
 
+## What's new in pi-goal-x
+
+pi-goal-x adds a handful of quality-of-life features on top of the original:
+
+- **See what the auditor is doing.** When a goal completes and the auditor kicks in, you get a live view — a spinner, the tool it's running, and recent output lines. No more wondering if anything is happening.
+- **Skip the audit with Escape.** If you're in a hurry or just don't need an audit right now, press Escape. The goal completes immediately without waiting.
+- **Turn off the auditor entirely.** If you never want audits, set it once in `/goal-settings` and you're done. The agent can bypass it by asking you to confirm.
+- **Know why an audit was skipped.** Whether you pressed Escape or had it disabled, the ledger records the reason.
+- **Faster, safer audit lifecycle.** The audit starts and stops cleanly — no more stuck goals, ghost states, or having to kill the session.
+
 ## What it provides
 
 - **Two goal styles**: regular goals for open-ended work, and Sisyphus goals for patient ordered execution.
@@ -266,25 +276,6 @@ extensions/widgets/goal-notifications.ts widget-style notification text
 - **Lifecycle-shaped tool surface**: the agent sees only tools appropriate to the current phase.
 - **Disk-backed continuity**: goal state survives context churn and can be audited from `.pi/goals/`.
 - **Human-owned focus**: the agent may work on the focused goal, but only user commands/UI selection switch focus.
-
-## Divergence from upstream
-
-This fork adds the following features beyond `@capyup/pi-goal`:
-
-| Feature | Description |
-|---|---|
-| **Auditor progress widget** | Live spinner, current tool tracking, and recent output lines displayed during audit runs |
-| **Escape-to-skip audit** | Press `Escape` during a running audit to abort it; the goal completes as bypassed |
-| **Disable the auditor** | `disabled` flag in `GoalAuditorConfig`, toggleable from `/goal-settings` |
-| **`confirmBypassAuditor`** | `update_goal` accepts `confirmBypassAuditor: true` to skip the auditor without running it |
-| **`audit_skipped` ledger event** | New event type recording `disabled` or `user_aborted` bypasses in the goal ledger |
-| **Audit lifecycle hardening** | Abort signal wiring, escape-key consumption, proper cleanup, and completion-on-abort instead of leaving the goal open |
-
-See the git log for the full commit history:
-
-```bash
-git log upstream/main..HEAD
-```
 
 ## Upstream
 

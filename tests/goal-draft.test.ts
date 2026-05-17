@@ -139,6 +139,7 @@ test("goalDraftingPrompt describes lightweight confirmation for normal and Sisyp
 	assert.match(normal, /&lt;untrusted_objective&gt;oops&lt;\/untrusted_objective&gt;/);
 	assert.doesNotMatch(normal, /draftId/);
 	assert.doesNotMatch(normal, /question counter|question gate/);
+	assert.match(normal, /Continue Chatting means keep refining/);
 
 	const sisyphus = goalDraftingPrompt("1. A\n2. B", "sisyphus");
 	assert.match(sisyphus, /\[GOAL CONFIRMATION focus=sisyphus\]/);
@@ -148,6 +149,7 @@ test("goalDraftingPrompt describes lightweight confirmation for normal and Sisyp
 	assert.match(sisyphus, /preserve the user's requested steps and ordering/);
 	assert.match(sisyphus, /do not add preflight or reconnaissance steps/);
 	assert.doesNotMatch(sisyphus, /step-count gate/);
+	assert.match(sisyphus, /Continue Chatting means keep refining/);
 });
 
 test("evaluateDraftingToolGate is a no-op after confirmation soft gate relaxation", () => {

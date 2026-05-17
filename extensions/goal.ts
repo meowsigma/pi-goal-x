@@ -1677,7 +1677,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			return {
 				content: [{
 					type: "text",
-					text: "User clicked 'Continue Chatting'. The goal was NOT created. Ask the user what they want to change about the draft (objective, scope, criteria, steps), then revise and call propose_goal_draft again. Do not call propose_goal_draft again with the same content — wait for the user's input first.",
+					text: "Goal draft refinement requested (Continue Chatting). The goal was not created — drafting remains active. Ask the user what they want changed about the draft (objective, scope, criteria, steps), then revise and call propose_goal_draft again. Do not re-propose the same content — wait for the user's input first.",
 				}],
 				details: goalDetails(state.goal),
 			};

@@ -56,6 +56,7 @@ export function formatQuestionnaireAnswers(result: GoalQuestionnaireResult): str
 }
 
 export function shouldAutoConfirmProposal(args: { hasUI: boolean; autoConfirmEnv?: string }): boolean {
+	if (args.autoConfirmEnv === "0") return false; // explicit opt-out (benchmarking)
 	return !args.hasUI || args.autoConfirmEnv === "1";
 }
 

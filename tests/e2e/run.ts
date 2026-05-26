@@ -129,7 +129,13 @@ function testFixture() {
 }
 
 /** Create a workspace, session JSONL, and force-tool prompt for a deterministic fork test. */
-function forkFixture(instruction: string): { cleanup: () => void; run: () => { stdout: string; stderr: string } } {
+function forkFixture(instruction: string): {
+	cleanup: () => void;
+	run: () => { stdout: string; stderr: string };
+	cwd: string;
+	goalId: string;
+	activePath: string;
+} {
 	const cwd = mkdtempSync(path.join(tmpdir(), "pi-goal-fork-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	const goalId = `mpme2e${Date.now().toString(36)}`;
@@ -173,6 +179,9 @@ function forkFixture(instruction: string): { cleanup: () => void; run: () => { s
 
 	return {
 		run,
+		cwd,
+		goalId,
+		activePath,
 		cleanup: () => rmSync(cwd, { recursive: true, force: true }),
 	};
 }
@@ -357,6 +366,21 @@ describe("Subagent E2E", () => {
 				assert.equal(res.details?.goal?.status, "complete",
 					"result must show complete status");
 			});
+
+			// Filesystem verification: the goal file must exist on disk after the fork.
+			// The fork session may have archived it via turn_end, so check both
+			// active and archived directories.
+			const activeFile = path.join(f.cwd, f.activePath);
+			const archivedDir = path.join(f.cwd, ".pi", "goals", "archived");
+			let fileFound = false;
+			try { fileFound = readFileSync(activeFile, "utf8").length > 0; } catch {}
+			if (!fileFound) {
+				const archives = readdirSync(archivedDir).filter((n) => n.includes(f.goalId));
+				fileFound = archives.length > 0;
+			}
+			assert.ok(fileFound,
+				`goal file must exist on disk after fork (active or archived).\n` +
+				`Active: ${activeFile}\nArchived: ${readdirSync(archivedDir).length} files`);
 		} finally { f.cleanup(); }
 	});
 });

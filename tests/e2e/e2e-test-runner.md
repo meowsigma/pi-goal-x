@@ -15,7 +15,7 @@ and verifying the results.
 
 Follow these steps in order:
 
-### 1. Bootstrap — Create a goal file
+### 1. Bootstrap — Create a goal file + verify state entry
 
 Write a valid goal file to `.pi/goals/` using the `write` tool. Use this format:
 
@@ -31,6 +31,12 @@ e2e bootstrap: initial objective
 ```
 
 Verify the file exists with `ls -la .pi/goals/`.
+
+Also verify the session provides a `pi-goal-state` custom entry. Run:
+```bash
+cat session.jsonl 2>/dev/null | grep pi-goal-state || echo 'NO state entry found'
+```
+If missing, note it but continue — the forked session should provide one.
 
 ### 2. Read initial state
 

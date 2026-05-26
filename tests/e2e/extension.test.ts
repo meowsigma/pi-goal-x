@@ -125,122 +125,7 @@ describe("Extension E2E", () => {
 		return t;
 	}
 
-	// ── 1: Quick-sync ──────────────────────────────────────────────────────
-	it("e2e: quick-sync objective via update_goal handler", async () => {
-		const f = testFixture();
-		try {
-			// Fire session_start to load state and set focusedGoalId/state.goal
-			const ss = lifecycleHandlers.get("session_start");
-			assert.ok(ss, "session_start handler must be registered");
-			await ss({ reason: "start" }, f.mockCtx);
-
-			apiCalls = []; // reset call tracking
-
-			const updateGoal = getTool("update_goal");
-			const result = await (updateGoal.execute as Function)(
-				"call-1",
-				{ updatedObjective: "E2E test: quick-synced" },
-				new AbortController().signal,
-				undefined,
-				f.mockCtx,
-			);
-
-			// Handler must not terminate for quick-sync only
-			assert.ok(result, "result must be defined");
-			assert.equal(result.turnStoppedFor, undefined,
-				"quick-sync must NOT set turnStoppedFor");
-			assert.equal(result.terminate, undefined,
-				"quick-sync must NOT return terminate: true");
-			assert.equal(result.content?.[0]?.text, "Goal objective updated.",
-				"must respond with 'Goal objective updated.' text");
-
-			// Verify objective changed on disk
-			const pool = readActiveGoalPool({ cwd: f.cwd } as any);
-			const diskGoal = pool.get(f.goal.id);
-			assert.ok(diskGoal, "goal must remain in active pool");
-			assert.equal(diskGoal.objective, "E2E test: quick-synced",
-				"disk goal must have the updated objective");
-			assert.equal(diskGoal.status, "active",
-				"goal status must remain active");
-
-			// Verify pi.appendEntry was called to persist state
-			const stateEntry = apiCalls.find(
-				(c) => c.type === "appendEntry" &&
-					(c.data as any)?.customType === "pi-goal-state",
-			);
-			assert.ok(stateEntry, "must append pi-goal-state entry");
-			const entryGoal = (stateEntry.data as any)?.data?.goal;
-			assert.equal(entryGoal?.objective, "E2E test: quick-synced",
-				"state entry must contain the updated objective");
-
-			// Verify NO audit was triggered (no pi-goal-audit-event entry)
-			const auditEntry = apiCalls.find(
-				(c) => c.type === "appendEntry" &&
-					(c.data as any)?.customType === "pi-goal-audit-event",
-			);
-			assert.equal(auditEntry, undefined,
-				"quick-sync must NOT trigger an audit event");
-		} finally {
-			f.cleanup();
-		}
-	});
-
-	// ── 2: Combined sync + complete ────────────────────────────────────────
-	it("e2e: combined sync+complete applies updated objective before audit", async () => {
-		const f = testFixture();
-		try {
-			// Fire session_start to load state
-			const ss = lifecycleHandlers.get("session_start");
-			assert.ok(ss);
-			await ss({ reason: "start" }, f.mockCtx);
-
-			apiCalls = []; // reset
-
-			const updateGoal = getTool("update_goal");
-
-			// Combined call: update objective + complete
-			const result = await (updateGoal.execute as Function)(
-				"call-2",
-				{
-					updatedObjective: "E2E test: combined update",
-					status: "complete",
-					completionSummary: "E2E test completed successfully.",
-					confirmBypassAuditor: true,
-				},
-				new AbortController().signal,
-				undefined,
-				f.mockCtx,
-			);
-
-			// Verify result is defined and contains completion details
-			assert.ok(result, "result must be defined");
-			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("E2E test: combined update"),
-				`completion text must contain the updated objective. Got: ${text}`);
-			assert.ok(text.includes("Goal complete."),
-				"completion text must say 'Goal complete.'");
-			assert.ok(text.includes("Goal objective updated.") || text.includes("E2E test"),
-				"completion text must reference the updated objective");
-
-			// Verify file on disk: the goal should be complete but NOT archived
-			// (deferred archival - still in active dir)
-			const pool = readActiveGoalPool({ cwd: f.cwd } as any);
-			assert.equal(pool.has(f.goal.id), false,
-				"complete goal must be filtered from active pool");
-
-			// Check the file exists on disk (activePath still set)
-			const activeFile = path.join(f.cwd, f.goal.activePath ?? ".pi/goals/missing");
-			const diskContent = readFileSync(activeFile, "utf8");
-			assert.ok(diskContent.includes("E2E test: combined update"),
-				"file on disk must contain the updated objective");
-			assert.ok(diskContent.includes('"status": "complete"'),
-				"file on disk must show status=complete");
-		} finally {
-			f.cleanup();
-		}
-	});
-
-	// ── 3: Deferred archival ───────────────────────────────────────────────
+	// ── 1: Deferred archival ───────────────────────────────────────────────
 	it("e2e: complete without sync produces deferred archival state", async () => {
 		const f = testFixture();
 		try {
@@ -255,7 +140,7 @@ describe("Extension E2E", () => {
 
 			// Complete without sync
 			const result = await (updateGoal.execute as Function)(
-				"call-3",
+				"call-1",
 				{
 					status: "complete",
 					completionSummary: "E2E test deferred archival.",
@@ -288,33 +173,32 @@ describe("Extension E2E", () => {
 		}
 	});
 
-	// ── 4: Rejection gate tests ─────────────────────────────────────────────
+	// ── 2: Rejection gate tests ─────────────────────────────────────────────
 	it("e2e: update_goal rejects null/absent goal state", async () => {
 		const f = testFixture();
 		try {
 			// Do NOT fire session_start — state is empty
 			const updateGoal = getTool("update_goal");
 
+			// Without a goal, calling update_goal with status=complete should return error
 			const result = await (updateGoal.execute as Function)(
-				"call-4",
-				{ updatedObjective: "should fail" },
+				"call-2",
+				{ status: "complete" },
 				new AbortController().signal,
 				undefined,
 				f.mockCtx,
 			);
 
-			// Without a goal, the handler should return an error message
-			// (validateGoalUpdate returns message through result.content, not an exception)
 			assert.ok(result, "result must be defined");
 			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("cannot update objective") || text.includes("No goal"),
+			assert.ok(text.includes("No goal") || text.includes("no goal"),
 				`must reject when no goal is active. Got: ${text}`);
 		} finally {
 			f.cleanup();
 		}
 	});
 
-	// ── 5: testResults parameter ────────────────────────────────────────────
+	// ── 3: testResults parameter ────────────────────────────────────────────
 	it("e2e: update_goal accepts testResults parameter without error", async () => {
 		const f = testFixture();
 		try {
@@ -327,7 +211,7 @@ describe("Extension E2E", () => {
 
 			const updateGoal = getTool("update_goal");
 			const result = await (updateGoal.execute as Function)(
-				"call-5",
+				"call-3",
 				{
 					status: "complete",
 					completionSummary: "All work done.",

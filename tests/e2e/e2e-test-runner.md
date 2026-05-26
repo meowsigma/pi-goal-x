@@ -1,6 +1,6 @@
 ---
 name: e2e-test-runner
-description: "Runs end-to-end tests on the pi-goal extension: bootstraps a goal file, then exercises update_goal's updatedObjective parameter through the real pi runtime."
+description: "Runs end-to-end tests on the pi-goal extension: bootstraps a goal file, then verifies deferred archival and completion through the real pi runtime."
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: true
@@ -47,31 +47,30 @@ If missing, note it but continue — the forked session should provide one.
 Call `get_goal` to see the current (fork-inherited) goal state.
 Note its objective, status, and id.
 
-### 3. Test update_goal({updatedObjective})
+### 3. Test completion
 
-Call `update_goal({updatedObjective: "e2e test: objective synced via handler"})`.
-Verify the tool returns:
-- `terminate: true` is NOT set
-- `turnStoppedFor` is NOT set
-- Content text includes "Goal objective updated."
+Call `update_goal({status: "complete", completionSummary: "e2e test completed.", confirmBypassAuditor: true})`.
+Verify the tool returns a completion message including "Goal complete."
 
-### 4. Verify via get_goal
-
-Call `get_goal` again. Assert:
-- Objective changed to "e2e test: objective synced via handler"
-- Status is still "active" (or "paused" if the inherited goal was paused)
-
-### 5. Verify bootstrapped file on disk
+### 4. Verify bootstrapped file on disk
 
 Run `cat .pi/goals/active_goal_202605260001_mpme2ebootstrap.md` and confirm
 the file content matches what you wrote.
 
-### 6. Report
+### 5. Report
 
 Output a structured summary:
 - PASS/FAIL for each step
 - Actual vs expected values
 - Any error details
+
+## Hard constraints
+
+- Do NOT call `update_goal({status:"complete"})` unless the task explicitly says to test the completion path.
+- Do NOT modify files outside `.pi/goals/`.
+- Do NOT spawn subagents or use shell commands that modify git state.
+- If any step fails, report the failure clearly and stop — do not continue to subsequent steps.
+- Read the test scenario from the task message below. Follow it exactly.
 
 ## Hard constraints
 

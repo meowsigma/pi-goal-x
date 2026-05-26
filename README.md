@@ -10,10 +10,10 @@ The extension is designed around one rule: **the user owns intent; the agent exe
 
 All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are preserved. The following changes are specific to pi-goal-x:
 
-### Mid-flight objective updates
+### Goal objective is immutable
 
-- **`update_goal({updatedObjective})`** — the agent can now sync the goal objective mid-flight when user requirements change, *without* completing the goal. This ensures the completion auditor evaluates against the latest requirements. The combined path (`updatedObjective` + `status: "complete"`) applies the update first, then runs the normal completion+audit flow.
-- **`apply_goal_tweak`** remains available for `/goal-tweak` drafting revisions; the new parameter is the lightest possible touch on the existing `update_goal` tool.
+- The goal objective is immutable — the agent **must not** modify it autonomously. Objective changes are only possible through `apply_goal_tweak`, which is gated behind the user-initiated `/goal-tweak` drafting flow. This prevents the agent from silently changing the goal contract.
+- **`apply_goal_tweak`** is the sole mechanism for updating the objective, available exclusively during a `/goal-tweak` drafting interview. If the user's requirements change, they must run `/goal-tweak` to initiate the revision flow.
 
 ### Deferred archival
 

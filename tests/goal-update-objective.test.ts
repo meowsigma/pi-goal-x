@@ -71,77 +71,59 @@ test("validateGoalUpdate accepts paused goal", () => {
 	assert.equal(result.ok, true);
 });
 
-// ─── update_goal({updatedObjective}) quick-sync path ─────────────────────────
+// ─── updatedObjective schema rejection (was removed from update_goal) ───────
 
-test("update_goal with updatedObjective updates objective in memory and on disk", () => {
-	const ctx = tempCtx();
-	try {
-		const originalObj = "Original objective: build feature X";
-		const newObj = "Updated objective: build feature Y after requirements change";
-
-		const goal = makeGoal({ objective: originalObj });
-		const active = writeActiveGoalFile(ctx, goal);
-		assert.equal(active.status, "active");
-		assert.equal(active.objective, originalObj);
-
-		const activeFilePath = path.join(ctx.cwd, active.activePath ?? "missing");
-		assert.ok(readFileSync(activeFilePath, "utf8").includes(originalObj));
-
-		const pool1 = readActiveGoalPool(ctx);
-		assert.ok(pool1.has(goal.id));
-
-		const updated = writeActiveGoalFile(ctx, { ...active, objective: newObj });
-		assert.equal(updated.status, "active");
-		assert.equal(updated.objective, newObj);
-		assert.match(updated.activePath ?? "", /^\.pi\/goals\/active_goal_/);
-		assert.equal(updated.archivedPath, undefined);
-
-		const disk2 = readFileSync(activeFilePath, "utf8");
-		assert.ok(disk2.includes(newObj));
-		assert.ok(!disk2.includes(originalObj));
-		assert.ok(disk2.includes('"status": "active"'));
-
-		assert.ok(readActiveGoalPool(ctx).has(goal.id));
-		assert.equal(updated.activePath, active.activePath);
-	} finally {
-		cleanup(ctx);
-	}
+test("update_goal schema has additionalProperties: false to reject unknown params", () => {
+	const source = readFileSync("extensions/goal.ts", "utf8");
+	const updateGoalIdx = source.indexOf('name: "update_goal"');
+	assert.ok(updateGoalIdx >= 0, "must find update_goal tool registration");
+	const registerBlock = source.substring(updateGoalIdx, updateGoalIdx + 4000);
+	assert.ok(registerBlock.includes("additionalProperties: false"),
+		"update_goal schema must have additionalProperties: false");
+	assert.ok(!registerBlock.includes("updatedObjective"),
+		"update_goal schema must not contain updatedObjective");
+	assert.ok(!source.includes("updatedObjective"),
+		"updatedObjective must not appear anywhere in goal.ts");
 });
 
-// ─── combined updatedObjective + status=complete path ────────────────────────
+test("update_goal without status throws correct error message", () => {
+	const source = readFileSync("extensions/goal.ts", "utf8");
+	const updateGoalIdx = source.indexOf('name: "update_goal"');
+	const registerBlock = source.substring(updateGoalIdx, updateGoalIdx + 4000);
+	assert.ok(!registerBlock.includes("params.updatedObjective"),
+		"Phase 1 updatedObjective handling must be removed");
+	assert.ok(registerBlock.includes('"update_goal requires status=complete when marking a goal complete."'),
+		"handler must throw error mentioning status=complete");
+	assert.ok(!registerBlock.includes("updatedObjective"),
+		"handler must not reference updatedObjective in error messages");
+});
 
-test("combined updatedObjective + status=complete applies update before completion", () => {
+// ─── completion flow unaffected ────────────────────────────────────────────
+
+// ─── completion flow unaffected ────────────────────────────────────────────
+
+test("update_goal with status=complete still works (completion flow unchanged)", () => {
 	const ctx = tempCtx();
 	try {
-		const originalObj = "Original objective for combined test";
-		const newObj = "Updated before complete: final requirement";
-
-		const goal = makeGoal({ objective: originalObj });
+		const goal = makeGoal();
 		const active = writeActiveGoalFile(ctx, goal);
-		assert.equal(active.objective, originalObj);
+		assert.equal(active.status, "active");
 
-		const combined = writeActiveGoalFile(ctx, {
+		const completed = writeActiveGoalFile(ctx, {
 			...active,
-			objective: newObj,
 			status: "complete" as const,
 			stopReason: "agent" as const,
 			updatedAt: new Date().toISOString(),
 		});
-		assert.equal(combined.objective, newObj);
-		assert.equal(combined.status, "complete");
-		assert.match(combined.activePath ?? "", /^\.pi\/goals\/active_goal_/);
-		assert.equal(combined.archivedPath, undefined);
+		assert.equal(completed.status, "complete");
+		assert.equal(completed.objective, active.objective);
 
-		const diskContent = readFileSync(path.join(ctx.cwd, combined.activePath ?? "missing"), "utf8");
-		assert.ok(diskContent.includes(newObj));
+		const diskContent = readFileSync(path.join(ctx.cwd, completed.activePath ?? "missing"), "utf8");
 		assert.ok(diskContent.includes('"status": "complete"'));
 
-		const archived = archiveGoalFile(ctx, combined);
+		const archived = archiveGoalFile(ctx, completed);
 		assert.equal(archived.activePath, undefined);
 		assert.match(archived.archivedPath ?? "", /^\.pi\/goals\/archived\/goal_/);
-		const archivedContent = readFileSync(path.join(ctx.cwd, archived.archivedPath ?? "missing"), "utf8");
-		assert.ok(archivedContent.includes(newObj));
-		assert.ok(archivedContent.includes('"status": "complete"'));
 	} finally {
 		cleanup(ctx);
 	}
@@ -203,17 +185,18 @@ test("apply_goal_tweak path: writeActiveGoalFile with new objective (simulated h
 
 // ─── prompt evolution instruction ────────────────────────────────────────────
 
-test("goal evolution instruction is present in continuationPrompt and goalPrompt", async () => {
+test("goal evolution instruction mentions /goal-tweak instead of updatedObjective", async () => {
 	const { goalPrompt, continuationPrompt } = await import("../extensions/prompts/goal-prompts.ts");
 	const goal = makeGoal();
 
 	const contText = continuationPrompt(goal);
 	assert.ok(contText.includes("Goal evolution:"), "continuationPrompt must include Goal evolution instruction");
-	assert.ok(contText.includes("updatedObjective"), "continuationPrompt must reference updatedObjective");
-	assert.ok(contText.includes("stale"), "continuationPrompt must mention stale goals");
-	assert.ok(contText.includes("/goal-tweak"), "continuationPrompt must mention /goal-tweak as an alternative");
+	assert.ok(!contText.includes("updatedObjective"), "continuationPrompt must NOT reference updatedObjective");
+	assert.ok(contText.includes("immutable"), "continuationPrompt must mention the goal is immutable");
+	assert.ok(contText.includes("/goal-tweak"), "continuationPrompt must instruct user to run /goal-tweak");
 
 	const goalText = goalPrompt(goal);
 	assert.ok(goalText.includes("Goal evolution:"), "goalPrompt must include Goal evolution instruction");
-	assert.ok(goalText.includes("updatedObjective"), "goalPrompt must reference updatedObjective");
+	assert.ok(!goalText.includes("updatedObjective"), "goalPrompt must NOT reference updatedObjective");
+	assert.ok(goalText.includes("/goal-tweak"), "goalPrompt must instruct user to run /goal-tweak");
 });

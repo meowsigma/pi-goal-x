@@ -8,6 +8,21 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.10.2] — 2026-05-26
+
+### Removed
+
+- **`updatedObjective` from `update_goal`** — the goal objective can no longer be changed through `update_goal`. The parameter is removed from the schema, `additionalProperties: false` enforces strict rejection of unknown params, and the Phase 1 handler block that processed it is deleted. Objective changes now go exclusively through `apply_goal_tweak`, gated behind user-initiated `/goal-tweak`.
+
+### Changed
+
+- **`update_goal` error message** — simplified to: `"update_goal requires status=complete when marking a goal complete."` (no more branching on `updatedObjective` vs `status`).
+- **Prompt guidelines** — `update_goal` prompt, `goalPrompt()`, and `continuationPrompt()` now state the goal objective is **immutable** and instruct the agent to ask the user to run `/goal-tweak` to revise it.
+- **Test coverage** — old quick-sync/combined e2e tests replaced with schema-rejection and completion-only mock-pi tests. 2 new source-inspection unit tests verify `additionalProperties: false` and absence of `updatedObjective`.
+- **Docs** — `README.md` rewritten ("Goal objective is immutable" section). Agent and chain docs (`e2e-test-runner.md`, `e2e-test.chain.md`) cleaned up.
+
+---
+
 ## [0.10.1] — 2026-05-26
 
 ### Added

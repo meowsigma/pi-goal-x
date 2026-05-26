@@ -206,12 +206,12 @@ describe("Subagent E2E", () => {
 			"agent must output structured PASS/FAIL report");
 	});
 
-	it("chain documentation covers all scenarios", () => {
+	it("chain documentation covers deferred archival scenario", () => {
 		const chainPath = path.resolve(DIR, "e2e-test.chain.md");
 		const content = readFileSync(chainPath, "utf8");
-		assert.ok(content.includes("quick-sync"), "chain must cover quick-sync");
-		assert.ok(content.includes("combined sync"), "chain must cover combined sync+complete");
 		assert.ok(content.includes("deferred archival"), "chain must cover deferred archival");
+		assert.ok(!content.includes("quick-sync"), "chain must not cover quick-sync (removed)");
+		assert.ok(!content.includes("combined sync"), "chain must not cover combined sync (removed)");
 	});
 
 	// ── 2. Mock-pi handler tests (deterministic, no AI model dependency) ─────
@@ -223,7 +223,7 @@ describe("Subagent E2E", () => {
 		assert.ok(handlerMap.has("turn_end"), "turn_end hook");
 	});
 
-	it("quick-sync: update_goal with updatedObjective alone does not terminate", async () => {
+	it("update_goal rejects calls without status=complete", async () => {
 		const { tools, handlerMap } = createMockPiSetup();
 		const f = testFixture();
 		try {
@@ -231,23 +231,19 @@ describe("Subagent E2E", () => {
 			const ss = handlerMap.get("session_start")!;
 			await ss({ reason: "start" }, mockCtx);
 			const updateGoal = tools.find((t) => t.name === "update_goal")!;
-			const result = await (updateGoal.execute as Function)(
-				"call-1",
-				{ updatedObjective: "Subagent e2e: quick-synced" },
-				new AbortController().signal, undefined, mockCtx,
+			await assert.rejects(
+				() => (updateGoal.execute as Function)(
+					"call-1",
+					{},
+					new AbortController().signal, undefined, mockCtx,
+				),
+				/status=complete/,
+				"must reject with error mentioning status=complete"
 			);
-			assert.equal(result.content?.[0]?.text, "Goal objective updated.");
-			assert.equal(result.terminate, undefined, "quick-sync must NOT set terminate");
-			assert.equal(result.turnStoppedFor, undefined, "quick-sync must NOT set turnStoppedFor");
-			const pool = readActiveGoalPool({ cwd: f.cwd } as any);
-			const diskGoal = pool.get(f.goal.id);
-			assert.ok(diskGoal, "goal must remain in active pool");
-			assert.equal(diskGoal.objective, "Subagent e2e: quick-synced");
-			assert.equal(diskGoal.status, "active");
 		} finally { f.cleanup(); }
 	});
 
-	it("combined: updatedObjective + status=complete applies update before audit", async () => {
+	it("update_goal with status=complete still works (completion flow unchanged)", async () => {
 		const { tools, handlerMap } = createMockPiSetup();
 		const f = testFixture();
 		try {
@@ -257,13 +253,12 @@ describe("Subagent E2E", () => {
 			const updateGoal = tools.find((t) => t.name === "update_goal")!;
 			const result = await (updateGoal.execute as Function)(
 				"call-2",
-				{ updatedObjective: "Subagent e2e: combined update", status: "complete", completionSummary: "Subagent e2e completed.", confirmBypassAuditor: true },
+				{ status: "complete", completionSummary: "Subagent e2e completed.", confirmBypassAuditor: true },
 				new AbortController().signal, undefined, mockCtx,
 			);
 			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("Subagent e2e: combined update"), `completion must reference updated objective. Got: ${text.slice(0, 200)}`);
+			assert.ok(text.includes("Goal complete"), "completion text must say Goal complete");
 			const diskContent = readFileSync(path.join(f.cwd, f.written.activePath!), "utf8");
-			assert.ok(diskContent.includes("Subagent e2e: combined update"), "disk has updated objective");
 			assert.ok(diskContent.includes('"status": "complete"'), "disk has complete status");
 		} finally { f.cleanup(); }
 	});
@@ -299,55 +294,27 @@ describe("Subagent E2E", () => {
 		callback(events);
 	}
 
-	it("fork: quick-sync — tool_execution_start args and result fields",
+	it("fork: completion is the only valid update_goal call now",
 		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
 		const f = forkFixture(
-			"Call get_goal first, then call update_goal with updatedObjective 'E2E fork test: quick-synced'. Do NOT mark complete."
+			"Call get_goal first, then call update_goal with status complete and confirmBypassAuditor true."
 		);
 		try {
 			const result = f.run();
 			assertToolEvents(result.stdout, "update_goal", (events) => {
 				const ev = events[0];
-				assert.equal(ev.start.args.updatedObjective, "E2E fork test: quick-synced",
-					"tool_execution_start args must contain updatedObjective");
+				assert.equal(ev.start.args.status, "complete",
+					"args must contain status complete");
+				assert.equal(ev.start.args.updatedObjective, undefined,
+					"no updatedObjective should be passed (parameter removed)");
 				const res = ev.end.result;
-				assert.equal(res.content?.[0]?.text, "Goal objective updated.",
-					"response text must confirm update");
-				assert.equal(res.details?.goal?.objective, "E2E fork test: quick-synced",
-					"result goal objective must be updated");
-				assert.equal(res.details?.goal?.status, "active",
-					"result goal status must remain active");
-				assert.equal(res.terminate, undefined,
-					"quick-sync must NOT set terminate: true");
+				assert.equal(res.details?.goal?.status, "complete",
+					"result must show complete status");
 			});
 		} finally { f.cleanup(); }
 	});
 
-	it("fork: combined sync+complete — updated objective before completion",
-		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
-		const f = forkFixture(
-			"Call get_goal first, then call update_goal with " +
-			"updatedObjective 'E2E fork test: combined', " +
-			"status complete, and confirmBypassAuditor true."
-		);
-		try {
-			const result = f.run();
-			assertToolEvents(result.stdout, "update_goal", (events) => {
-				const ev = events[0];
-				assert.equal(ev.start.args.updatedObjective, "E2E fork test: combined",
-					"args must contain updatedObjective");
-				assert.equal(ev.start.args.status, "complete",
-					"args must contain status complete");
-				const res = ev.end.result;
-				assert.equal(res.details?.goal?.objective, "E2E fork test: combined",
-					"result must show updated objective (not original)");
-				assert.equal(res.details?.goal?.status, "complete",
-					"result must show complete status");
-				assert.ok(res.terminate === true,
-					"completion must set terminate: true");
-			});
-		} finally { f.cleanup(); }
-	});
+	// (removed — updatedObjective no longer exists in update_goal schema)
 
 	it("fork: deferred archival — complete without sync, result and filesystem",
 		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {

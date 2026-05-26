@@ -8,6 +8,28 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.9.0] — 2026-05-26
+
+### Added
+
+- **`update_goal({updatedObjective})`** — the agent can now sync the goal objective mid-flight when user requirements change, without completing the goal. The `status` parameter is now optional, allowing a pure objective-update call. This ensures the completion auditor evaluates against the latest requirements.
+- **`validateGoalUpdate()`** extracted to `goal-policy.ts` — validates that the target goal is active/paused (rejects null or already-complete goals with specific messages). Used by the handler and testable independently.
+- **Comprehensive e2e test suite**: 131 tests covering function-level integration (12 tests, 9-scenario matrix + 3 edge-case gates), mock-pi handler tests (4), file-validity/chain checks (6), and real `pi --fork --mode json` fork tests (3 scenarios).
+- **Deterministic fork tests**: the `--mode json` fork test uses `--append-system-prompt` + `--tools get_goal,update_goal` to force the AI model to always call the required tools. Validates `tool_execution_start`/`tool_execution_end` JSON events with field-level assertions — no free-text AI output parsing.
+
+### Changed
+
+- **Goal archival deferred until after agent turn completes**: `update_goal` marks the goal complete in-memory and writes an active file (not archived). The `turn_end` lifecycle hook detects completed goals and archives them — after the agent has received the audit/skip result. Previously archival happened inline within the tool handler, before the agent could see the result.
+- **`buildCompletionReport` supports `auditSkippedReason`**: skip notifications (disabled auditor, Esc abort) are now included in the tool output text.
+- **`accountProgress` guard**: skips `reconcileFocusedGoalFromDisk` for completed goals, preventing lifecycle conflicts.
+
+### Fixed
+
+- **Combined path correct ordering**: when `updatedObjective` + `status: "complete"` are passed together, the objective update is applied first, then the normal completion+audit flow runs against the updated objective.
+- **Completion gate timing**: `turnStoppedFor` and `terminate: true` are no longer set for pure objective-sync calls — only for actual completions.
+
+---
+
 ## [0.8.2] — 2026-05-26
 
 ### Fixed

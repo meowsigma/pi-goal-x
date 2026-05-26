@@ -1,6 +1,6 @@
 # pi-goal-x
 
-> **Fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal)** — this repository extends the upstream with quality-of-life features for the completion auditor, lifecycle reliability improvements, and drafting UX refinements. Upstream changes can be merged from the original repository.
+> **Fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal)** — this repository extends the upstream with quality-of-life features for the completion auditor, lifecycle reliability improvements, mid-flight objective updates, deferred archival, and drafting UX refinements. Upstream changes can be merged from the original repository.
 
 `pi-goal-x` is a long-running goal extension for [pi](https://github.com/earendil-works/pi-coding-agent). It gives the agent a durable objective, a visible lifecycle, and schema-gated tools for drafting, executing, pausing, resuming, and completing work.
 
@@ -9,6 +9,21 @@ The extension is designed around one rule: **the user owns intent; the agent exe
 ## What's different from upstream
 
 All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are preserved. The following changes are specific to pi-goal-x:
+
+### Mid-flight objective updates
+
+- **`update_goal({updatedObjective})`** — the agent can now sync the goal objective mid-flight when user requirements change, *without* completing the goal. This ensures the completion auditor evaluates against the latest requirements. The combined path (`updatedObjective` + `status: "complete"`) applies the update first, then runs the normal completion+audit flow.
+- **`apply_goal_tweak`** remains available for `/goal-tweak` drafting revisions; the new parameter is the lightest possible touch on the existing `update_goal` tool.
+
+### Deferred archival
+
+- **No more premature archiving**: previously, `update_goal` archived the goal file inline within the tool handler before the agent could see the audit result (or skip notification). Archival is now deferred until `turn_end` — after the agent has received the audit/skip result in the conversation. The goal remains visible in the active pool through the entire completion flow.
+- **Cleaner lifecycle**: completed goals are archived by the `turn_end` lifecycle hook, not by the tool handler. The `accountProgress` guard skips disk reconciliation for completed goals.
+
+### E2e test infrastructure
+
+- **Deterministic fork tests using `--mode json`**: the e2e suite spawns a real `pi --fork --mode json` session, parses structured `tool_execution_start`/`tool_execution_end` JSON events for field-level assertions — no free-text AI output parsing. Uses `--append-system-prompt` + `--tools` to force deterministic tool calls.
+- **Full coverage**: 131 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), and real `pi --fork --mode json` tests (3 scenarios: quick-sync, combined sync+complete, deferred archival).
 
 ### Completion auditor
 

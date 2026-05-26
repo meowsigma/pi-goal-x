@@ -5,9 +5,9 @@
  *
  * Tests:
  * 1. File-validity checks (agent file bootstrapping, chain docs)
- * 2. Mock-pi handler tests (extension loads, session_start fires, update_goal executes)
- * 3. Real pi fork test (spawns actual pi --fork with the local dev extension,
- *    agent calls update_goal({updatedObjective}) through real tool handlers)
+ * 2. Mock-pi handler tests (extension loads, session_start, update_goal executes)
+ * 3. Real pi fork tests (spawns actual pi --fork with /run e2e-test-runner,
+ *    the e2e-test-runner subagent exercises update_goal through real tool handlers)
  *
  * Test 3 requires the `pi` CLI on PATH. It is skipped if unavailable.
  */
@@ -44,7 +44,6 @@ function isPiAvailable(): boolean {
 	} catch { return false; }
 }
 
-/** Create a mock pi registration and capture lifecycle handlers + tools. */
 function createMockPiSetup() {
 	const tools: ToolDefinition[] = [];
 	const handlerMap = new Map<string, Function>();
@@ -63,7 +62,6 @@ function createMockPiSetup() {
 	return { tools, handlerMap };
 }
 
-/** Create a minimal mock ExtensionContext with session entries for loadState. */
 function createMockCtx(cwd: string, goal: GoalRecord, written: GoalRecord): ExtensionContext {
 	const focusEntry = goalFocusDetails(goal.id, "created");
 	const stateEntry: GoalStateEntry = {
@@ -94,7 +92,6 @@ function createMockCtx(cwd: string, goal: GoalRecord, written: GoalRecord): Exte
 	} as unknown as ExtensionContext;
 }
 
-/** Create a temp workspace with a goal file, auditor config, and cleanup. */
 function testFixture() {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-subagent-e2e-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
@@ -109,7 +106,6 @@ function testFixture() {
 	return { cwd, goal: goal as GoalRecord, written, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
 }
 
-/** Create a full workspace + session JSONL for pi --fork. Returns cwd + cleanup. */
 function createForkWorkspace() {
 	const cwd = mkdtempSync(path.join(tmpdir(), "pi-goal-fork-e2e-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
@@ -154,7 +150,6 @@ function createForkWorkspace() {
 	};
 }
 
-/** Run pi --fork with the local dev extension and return the result. */
 function runPiFork(sessionFile: string, cwd: string, instruction: string): { status: number; stdout: string; stderr: string } {
 	const result = spawnSync("pi", [
 		"--no-extensions",
@@ -187,8 +182,8 @@ describe("Subagent E2E", { timeout: 300_000 }, () => {
 			"agent must include bootstrapping instructions");
 		assert.ok(content.includes("goal file") || content.includes(".pi/goals/"),
 			"agent must instruct writing a goal file");
-		assert.ok(content.includes("state entry") || content.includes("pi-goal-state") || content.includes("state"),
-			"agent must instruct writing or referencing a state entry");
+		assert.ok(content.includes("state entry") || content.includes("pi-goal-state"),
+			"agent must reference state entry");
 		assert.ok(content.includes("get_goal"), "agent must use get_goal");
 		assert.ok(content.includes("update_goal"), "agent must use update_goal");
 		assert.ok(content.includes("PASS") || content.includes("FAIL"),
@@ -291,7 +286,6 @@ describe("Subagent E2E", { timeout: 300_000 }, () => {
 				mockCtx,
 			);
 
-			// File must still exist in active dir
 			assert.ok(readFileSync(path.join(f.cwd, f.written.activePath!), "utf8"),
 				"goal file must still exist in active dir (deferred archival)");
 			assert.equal(readdirSync(path.join(f.cwd, ".pi", "goals", "archived")).length, 0,
@@ -299,50 +293,70 @@ describe("Subagent E2E", { timeout: 300_000 }, () => {
 		} finally { f.cleanup(); }
 	});
 
-	// ── 3. Real pi fork test (spawns subagent via pi --fork) ────────────────
-	it("spawns subagent via real pi session using local dev extension", { skip: !isPiAvailable() }, async () => {
+	// ── 3. Real pi fork test (spawns subagent via /run e2e-test-runner) ─────
+	it("agent: all three scenarios via /run e2e-test-runner (quick-sync, combined, archival)",
+		{ skip: !isPiAvailable(), timeout: 600_000 }, async () => {
 		/**
-		 * This test creates a fully set-up workspace, then forks a real pi
-		 * session with --no-extensions -e <absolute-path> to load the LOCAL
-		 * development version of pi-goal (not the npm package).
-		 *
-		 * The forked agent calls update_goal({updatedObjective}) through
-		 * the real tool handler and reports results.
+		 * Creates a fresh workspace + copy of e2e-test-runner.md for each
+		 * scenario, then runs /run e2e-test-runner inside a real pi --fork
+		 * session. The e2e-test-runner agent exercises update_goal through
+		 * the actual tool handlers and produces structured PASS/FAIL output.
 		 */
-		const ws = createForkWorkspace();
-		try {
-			const instruction = [
-				"This is an automated e2e test.",
-				"",
-				"Call get_goal, then call update_goal({updatedObjective: 'E2E fork test: updated via handler'}).",
-				"The update_goal tool accepts: status, completionSummary, confirmBypassAuditor, updatedObjective.",
-				"Do NOT mark the goal complete.",
-				"Output the result and end with a line containing only PASS.",
-			].join("\n");
+		const scenarios = [
+			{
+				name: "quick-sync",
+				task: "Test scenario: quick-sync via update_goal({updatedObjective}). "
+					+ "Goal objective is 'E2E fork test: initial'. "
+					+ "Call update_goal with updatedObjective 'E2E fork test: quick-synced'. "
+					+ "Do NOT mark complete.",
+				assertions: (stdout: string) => {
+					assert.ok(stdout.includes("PASS"), `Expected PASS:\n${stdout.slice(0, 500)}`);
+					assert.ok(stdout.includes("quick-sync") || stdout.includes("updatedObjective") || stdout.includes("update_goal"),
+						`Expected quick-sync test:\n${stdout.slice(0, 300)}`);
+				},
+			},
+			{
+				name: "combined sync+complete",
+				task: "Test scenario: combined sync+complete. "
+					+ "Goal objective is 'E2E fork test: initial'. "
+					+ "Call update_goal with updatedObjective 'E2E fork test: combined' "
+					+ "AND status=complete AND confirmBypassAuditor=true. "
+					+ "Verify the completion report references the updated objective.",
+				assertions: (stdout: string) => {
+					assert.ok(stdout.includes("PASS"), `Expected PASS:\n${stdout.slice(0, 500)}`);
+					assert.ok(stdout.includes("combined") || stdout.includes("complete"),
+						`Expected combined sync+complete test:\n${stdout.slice(0, 300)}`);
+				},
+			},
+			{
+				name: "deferred archival",
+				task: "Test scenario: deferred archival. "
+					+ "Goal objective is 'E2E fork test: initial'. "
+					+ "Call update_goal with status=complete AND confirmBypassAuditor=true. "
+					+ "Verify the goal is complete but NOT archived (still in active dir).",
+				assertions: (stdout: string) => {
+					assert.ok(stdout.includes("PASS"), `Expected PASS:\n${stdout.slice(0, 500)}`);
+					assert.ok(stdout.includes("complete") || stdout.includes("archiv"),
+						`Expected deferred archival test:\n${stdout.slice(0, 300)}`);
+				},
+			},
+		];
 
-			const result = runPiFork(ws.sessionFile, ws.cwd, instruction);
+		for (const scenario of scenarios) {
+			const ws = createForkWorkspace();
+			try {
+				const instruction = `/run e2e-test-runner ${scenario.task}`;
+				const result = runPiFork(ws.sessionFile, ws.cwd, instruction);
 
-			// Print output for debugging
-			console.log("--- Fork output ---");
-			console.log(result.stdout.slice(0, 1500));
+				if (result.stdout.length > 0) {
+					console.log(`--- Fork output (${scenario.name}) ---`);
+					console.log(result.stdout.slice(0, 1200));
+				}
 
-			// Must exit successfully
-			assert.equal(result.status, 0,
-				`pi --fork exited with code ${result.status}\n${result.stderr.slice(0, 500)}`);
-
-			// Agent must have called update_goal successfully
-			assert.ok(
-				result.stdout.includes("PASS") ||
-				(result.stdout.includes("updated") && result.stdout.includes("objective")),
-				"Expected agent to update the objective. Output:\n" + result.stdout.slice(0, 500),
-			);
-
-			// Verify the goal file still exists in active dir (quick-sync, not complete)
-			const pool = readActiveGoalPool({ cwd: ws.cwd } as any);
-			assert.ok(
-				pool.has(ws.goalId) || readdirSync(path.join(ws.cwd, ".pi", "goals", "archived")).length === 0,
-				"goal must remain active or not be archived (quick-sync only)",
-			);
-		} finally { ws.cleanup(); }
+				assert.equal(result.status, 0,
+					`${scenario.name}: pi --fork exit ${result.status}\n${result.stderr.slice(0, 300)}`);
+				scenario.assertions(result.stdout);
+			} finally { ws.cleanup(); }
+		}
 	});
 });

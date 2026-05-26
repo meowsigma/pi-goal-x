@@ -8,6 +8,19 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.8.2] — 2026-05-26
+
+### Fixed
+
+- **Goal archival deferred until after agent turn completes**: previously, `update_goal` archived the goal file inline within the tool handler before the agent could see the audit result (or skip notification). Now the goal is marked complete in-memory and written as an active file (not archived) during `update_goal`, and archival happens at `turn_end` — after the agent has received the audit/skip result.
+
+### Added
+
+- **`buildCompletionReport` supports `auditSkippedReason`**: skip notifications (disabled auditor, Esc abort) are now included in the tool output text, ensuring the agent sees why the audit was skipped before the goal is archived.
+- **Tests**: verify `writeActiveGoalFile` no longer auto-archives for complete status (deferred archival), and `buildCompletionReport` correctly handles `auditSkippedReason` with precedence over `auditorReport`.
+
+---
+
 ## [0.8.1] — 2026-05-19
 
 ### Changed

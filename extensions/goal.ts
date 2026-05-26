@@ -106,6 +106,7 @@ import {
 	shouldInjectPostCompactReminder,
 	validateGoalAbort,
 	validateGoalCompletion,
+	validateGoalUpdate,
 	validatePauseGoal,
 	validateResumeGoal,
 } from "./goal-policy.ts";
@@ -1722,18 +1723,14 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (params.updatedObjective !== undefined) {
 				const newObjective = params.updatedObjective.trim();
 				if (!newObjective) throw new Error("update_goal requires a non-empty updatedObjective.");
-				if (!state.goal) {
+				const updateGate = validateGoalUpdate({ goal: state.goal });
+				if (!updateGate.ok) {
 					return {
-						content: [{ type: "text", text: "No goal is set; cannot update objective." }],
+						content: [{ type: "text", text: updateGate.message }],
 						details: goalDetails(state.goal),
 					};
 				}
-				if (state.goal.status === "complete") {
-					return {
-						content: [{ type: "text", text: "Goal is already complete; cannot update objective." }],
-						details: goalDetails(state.goal),
-					};
-				}
+				if (!state.goal) throw new Error("Goal disappeared during objective update.");
 				const next: GoalRecord = {
 					...state.goal,
 					objective: newObjective,

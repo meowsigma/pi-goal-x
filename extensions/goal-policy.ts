@@ -43,6 +43,14 @@ export function validateGoalCompletion(args: {
 	return { ok: true };
 }
 
+export function validateGoalUpdate(args: {
+	goal: GoalPolicyRecordLike | null;
+}): PolicyValidation {
+	if (!args.goal) return { ok: false, message: "No goal is set; cannot update objective." };
+	if (args.goal.status === "complete") return { ok: false, message: "Goal is already complete; cannot update objective." };
+	return { ok: true };
+}
+
 export function validateGoalAbort(args: {
 	goal: GoalPolicyRecordLike | null;
 	runningGoalId?: string | null;

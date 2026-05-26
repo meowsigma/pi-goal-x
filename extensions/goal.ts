@@ -441,6 +441,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				active.add(QUESTIONNAIRE_TOOL_NAME);
 			} else if (state.goal?.status === "active") {
 				for (const name of goalExecutionWorkTools) active.add(name);
+				active.add(QUESTION_TOOL_NAME);
+				active.add(QUESTIONNAIRE_TOOL_NAME);
 			}
 			pi.setActiveTools(Array.from(active));
 		} catch {}
@@ -1706,12 +1708,19 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			"Do not use update_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
 			"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
 			"If the user gives requirements, feedback, or corrections that differ from the goal objective, the goal is stale. Use update_goal with updatedObjective to sync the objective before continuing work or before marking the goal complete. This ensures the auditor evaluates against the latest requirements.",
+			"If you have just run the test suite successfully and the tests all pass, include a testResults object with the exit code (0) and relevant output. The auditor will see this evidence and can skip re-running the tests.",
 		],
 		parameters: Type.Object({
 			status: Type.Optional(StringEnum([COMPLETE_STATUS] as const, { description: "Set to complete only when the objective is achieved." })),
 			completionSummary: Type.Optional(Type.String({ description: "Concise completion claim and evidence summary passed to the independent auditor agent." })),
 			confirmBypassAuditor: Type.Optional(Type.Boolean({ description: "Set to true to confirm bypassing the independent auditor when it is disabled in settings." })),
 			updatedObjective: Type.Optional(Type.String({ description: "Revised goal objective. Use when the user's requirements have changed mid-flight. The goal remains active so the agent can continue working toward the new objective. Can be combined with status=complete to update the objective before the completion audit." })),
+			testResults: Type.Optional(Type.Object({
+				exitCode: Type.Number({ description: "Exit code of the test run (0 = success)" }),
+				suiteName: Type.Optional(Type.String({ description: "Test suite name, e.g. 'npm test'" })),
+				output: Type.Optional(Type.String({ description: "Last lines of test output showing results" })),
+				timestamp: Type.Optional(Type.String({ description: "ISO timestamp of when tests were run" })),
+			}, { description: "Structured test evidence passed to the auditor so it can skip redundant test re-runs. If you have just run the test suite successfully, include this so the auditor accepts the results without re-running." })),
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -1913,6 +1922,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				goal: auditTarget,
 				completionSummary: params.completionSummary,
 				detailedSummary: detailedSummary(auditTarget),
+				testResults: params.testResults,
 				signal: auditAbortController.signal,
 				onProgress: (progress) => {
 					auditProgress = {

@@ -133,3 +133,63 @@ test("renderAuditorWidgetLines omits skip hint when audit is done", () => {
 	assert.doesNotMatch(allText, /Esc to skip/);
 	assert.doesNotMatch(allText, /abort the audit/);
 });
+
+test("renderAuditorWidgetLines shows progress bar when percentage is set", () => {
+	const progress = auditorProgress({
+		phase: "running",
+		percentage: 40,
+		label: "Inspecting files...",
+	});
+	const lines = renderAuditorWidgetLines(progress, theme, 100);
+	const allText = lines.join("\n");
+	// Should show step label
+	assert.match(allText, /Inspecting files/);
+	// Should show percentage
+	assert.match(allText, /40%/);
+	// Should show a progress bar (brackets with filled/empty chars)
+	assert.match(allText, /\[.*█.*░.*\]/);
+});
+
+test("renderAuditorWidgetLines shows thinking phase with distinct icon", () => {
+	const progress = auditorProgress({
+		phase: "thinking",
+		label: "Analyzing goal...",
+		recentOutput: [],
+	});
+	const lines = renderAuditorWidgetLines(progress, theme, 100);
+	const allText = lines.join("\n");
+	// Should show thinking label
+	assert.match(allText, /thinking\.\.\./);
+	// Should not show Esc to skip hint during thinking
+	assert.doesNotMatch(allText, /Esc to skip/);
+});
+
+test("renderAuditorWidgetLines shows step label when present", () => {
+	const progress = auditorProgress({
+		phase: "running",
+		label: "Verifying success criteria...",
+		percentage: 50,
+	});
+	const lines = renderAuditorWidgetLines(progress, theme, 100);
+	const allText = lines.join("\n");
+	assert.match(allText, /Verifying success criteria/);
+	// Should show both label and percentage
+	assert.match(allText, /50%/);
+});
+
+test("renderAuditorWidgetLines handles progress bar at 0% and 100%", () => {
+	const zero = renderAuditorWidgetLines(auditorProgress({ phase: "running", percentage: 0 }), theme, 100).join("\n");
+	assert.match(zero, /0%/);
+
+	const hundred = renderAuditorWidgetLines(auditorProgress({ phase: "done", percentage: 100 }), theme, 100).join("\n");
+	assert.match(hundred, /100%/);
+});
+
+test("renderAuditorWidgetLines no progress bar when percentage is undefined", () => {
+	const progress = auditorProgress({ phase: "running", label: "Working..." });
+	const lines = renderAuditorWidgetLines(progress, theme, 100);
+	const allText = lines.join("\n");
+	// Should show label but no percentage
+	assert.match(allText, /Working/);
+	assert.doesNotMatch(allText, /\d+%/);
+});

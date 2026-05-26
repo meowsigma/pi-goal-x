@@ -1,10 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { Static } from "@earendil-works/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
 	createExtensionRuntime,
+	defineTool,
 	SessionManager,
 	SettingsManager,
 	type ExtensionContext,
@@ -29,9 +32,13 @@ export interface AuditorProgress {
 	/** Recent text output lines from the auditor's assistant messages */
 	recentOutput: string[];
 	/** Phase of the audit */
-	phase: "running" | "tool_executing" | "producing_report" | "done";
+	phase: "running" | "tool_executing" | "producing_report" | "thinking" | "done";
 	/** Elapsed ms since audit started */
 	elapsedMs: number;
+	/** Current step label shown to the user (e.g. "Inspecting files...") */
+	label?: string;
+	/** Completion percentage from 0 to 100 */
+	percentage?: number;
 }
 
 export type AuditorProgressCallback = (progress: AuditorProgress) => void;
@@ -120,10 +127,22 @@ export function parseAuditorDecision(output: string): { approved: boolean; disap
 	return { approved: approved && !disapproved, disapproved };
 }
 
+export interface AuditorTestResults {
+	/** Exit code of the test run (0 = success) */
+	exitCode: number;
+	/** Test suite name, e.g. 'npm test' */
+	suiteName?: string;
+	/** Last lines of test output showing results */
+	output?: string;
+	/** ISO timestamp of when tests were run */
+	timestamp?: string;
+}
+
 export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
 	completionSummary?: string | null;
 	detailedSummary: string;
+	testResults?: AuditorTestResults | null;
 }): string {
 	return [
 		"You are the independent completion auditor for pi-goal.",
@@ -150,14 +169,52 @@ export function buildGoalAuditorPrompt(args: {
 		"<goal_details>",
 		args.detailedSummary,
 		"</goal_details>",
+		...(args.testResults ? [
+			"",
+			"Executor test evidence:",
+			"<test_evidence>",
+			`  Suite: ${args.testResults.suiteName ?? "(not specified)"}`,
+			`  Exit code: ${args.testResults.exitCode}`,
+			`  Timestamp: ${args.testResults.timestamp ?? "(not specified)"}`,
+			`  Output:`,
+			...(args.testResults.output ? args.testResults.output.split("\n").map((l) => `    ${l}`) : ["    (none provided)"]),
+			"</test_evidence>",
+		] : []),
 		"",
 		"Audit checklist:",
-		"1. Extract the real success criteria from the objective, including quality/reader outcomes.",
-		"2. Inspect artifacts or command output that can prove or disprove those criteria.",
-		"3. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
-		"4. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
+		...(args.testResults ? [
+			"1. Extract the real success criteria from the objective, including quality/reader outcomes.",
+			"2. Inspect artifacts or command output that can prove or disprove those criteria.",
+			"3. Before running a test suite with bash, check the <test_evidence> block. If the executor has provided recent passing test results for that suite, accept them as evidence rather than re-running the tests.",
+			"4. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
+			"5. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
+		] : [
+			"1. Extract the real success criteria from the objective, including quality/reader outcomes.",
+			"2. Inspect artifacts or command output that can prove or disprove those criteria.",
+			"3. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
+			"4. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
+		]),
+		"",
+		"Progress reporting:",
+		"You have the report_auditor_progress tool available to report your progress to the user.",
+		"Please use it at natural phase boundaries:",
+		"  - When starting: report_auditor_progress(label='Starting audit...', percentage=0)",
+		"  - When beginning file inspection: report_auditor_progress(label='Inspecting files...', percentage=25)",
+		"  - When verifying success criteria: report_auditor_progress(label='Verifying success criteria...', percentage=50)",
+		"  - When evaluating evidence: report_auditor_progress(label='Evaluating evidence...', percentage=75)",
+		"  - When producing final report: report_auditor_progress(label='Producing report...', percentage=90)",
+		"This is purely for user visibility and does not affect the audit outcome.",
 	].join("\n");
 }
+
+/** Tool name for auditor progress reporting */
+export const REPORT_AUDITOR_PROGRESS_TOOL_NAME = "report_auditor_progress";
+
+/** Parameters for the report_auditor_progress tool */
+export const reportAuditorProgressParams = Type.Object({
+	label: Type.String({ description: "Current step label describing what the auditor is doing (e.g. 'Inspecting files...', 'Verifying success criteria...', 'Producing report...')" }),
+	percentage: Type.Number({ description: "Completion percentage from 0 to 100", minimum: 0, maximum: 100 }),
+});
 
 function makeAuditorResourceLoader(): ResourceLoader {
 	return {
@@ -170,9 +227,14 @@ function makeAuditorResourceLoader(): ResourceLoader {
 			"You are a read-only completion auditor running in an isolated pi agent session.",
 			"Inspect the repository and decide whether the claimed goal completion is genuinely satisfied.",
 			"Never modify files. Never approve unless the actual user objective is complete.",
+			"",
+			"You have the report_auditor_progress tool available. Use it to report your audit progress",
+			"to the user at natural phase boundaries (starting, inspecting files, verifying criteria,",
+			"producing report). This helps the user understand what the auditor is doing and how far",
+			"along it is.",
 		].join("\n"),
 		getAppendSystemPrompt: () => [],
-		extendResources: () => {},
+	extendResources: () => {},
 		reload: async () => {},
 	};
 }
@@ -209,6 +271,7 @@ export async function runGoalCompletionAuditor(args: {
 	goal: GoalRecord;
 	completionSummary?: string | null;
 	detailedSummary: string;
+	testResults?: AuditorTestResults | null;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
 	/**
@@ -228,16 +291,6 @@ export async function runGoalCompletionAuditor(args: {
 	}
 	try {
 		const createSession = args.createSession ?? createAgentSession;
-		const { session } = await createSession({
-			cwd: args.ctx.cwd,
-			model,
-			thinkingLevel,
-			modelRegistry: args.ctx.modelRegistry,
-			resourceLoader: makeAuditorResourceLoader(),
-			sessionManager: SessionManager.inMemory(args.ctx.cwd),
-			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-			tools: ["read", "grep", "find", "ls", "bash"],
-		});
 		const startedAt = Date.now();
 		const progress: AuditorProgress = {
 			recentOutput: [],
@@ -248,6 +301,49 @@ export async function runGoalCompletionAuditor(args: {
 			progress.elapsedMs = Date.now() - startedAt;
 			args.onProgress?.({ ...progress });
 		}
+
+		// Build the report_auditor_progress tool, capturing the progress state
+		const reportProgressTool = defineTool({
+			name: REPORT_AUDITOR_PROGRESS_TOOL_NAME,
+			label: "Report Auditor Progress",
+			description: "Report current progress of the audit to the user. Call this at natural phase boundaries (starting, inspecting files, verifying criteria, producing report) to keep the user informed.",
+			promptSnippet: "Report current audit progress (step label and completion percentage) to the user.",
+			promptGuidelines: [
+				"Use report_auditor_progress at natural phase boundaries during the audit:",
+				"  - When starting the audit: label='Starting audit...' percentage=0",
+				"  - When beginning file inspection: label='Inspecting files...' percentage=25",
+				"  - When verifying success criteria: label='Verifying success criteria...' percentage=50",
+				"  - When evaluating evidence: label='Evaluating evidence...' percentage=75",
+				"  - When producing final report: label='Producing report...' percentage=90",
+				"This is purely for user visibility — it does not affect the audit outcome.",
+				"Do not call this tool more than once every few seconds to avoid flooding.",
+			],
+			parameters: reportAuditorProgressParams,
+			executionMode: "sequential",
+			async execute(_toolCallId, params) {
+				const { label, percentage } = params as Static<typeof reportAuditorProgressParams>;
+				progress.label = label;
+				progress.percentage = percentage;
+				progress.phase = "running";
+				emitProgress();
+				return {
+					content: [{ type: "text", text: `Progress reported: ${label} (${percentage}%)` }],
+					details: {},
+				};
+			},
+		});
+
+		const { session } = await createSession({
+			cwd: args.ctx.cwd,
+			model,
+			thinkingLevel,
+			modelRegistry: args.ctx.modelRegistry,
+			resourceLoader: makeAuditorResourceLoader(),
+			sessionManager: SessionManager.inMemory(args.ctx.cwd),
+			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
+			tools: ["read", "grep", "find", "ls", "bash", REPORT_AUDITOR_PROGRESS_TOOL_NAME],
+			customTools: [reportProgressTool],
+		});
 		const unsubscribe = session.subscribe((event) => {
 			if (event.type === "tool_execution_start") {
 				progress.currentTool = event.toolName;
@@ -268,6 +364,20 @@ export async function runGoalCompletionAuditor(args: {
 				return;
 			}
 			if (event.type === "message_update") {
+				// Check for thinking events from the assistant stream
+				const streamEvent = (event as any).assistantMessageEvent;
+				if (streamEvent?.type === "thinking_start") {
+					progress.phase = "thinking";
+					if (!progress.label) progress.label = "Analyzing goal...";
+					emitProgress();
+					return;
+				}
+				if (streamEvent?.type === "thinking_end") {
+					progress.phase = "running";
+					emitProgress();
+					return;
+				}
+				// For text content, show producing_report phase
 				progress.phase = "producing_report";
 				const message = event.message as any;
 				if (message?.role === "assistant") {
@@ -300,6 +410,8 @@ export async function runGoalCompletionAuditor(args: {
 		args.signal?.addEventListener("abort", abortSession, { once: true });
 
 		// Emit initial progress
+		progress.label = "Starting audit...";
+		progress.percentage = 0;
 		emitProgress();
 		try {
 			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
@@ -307,6 +419,8 @@ export async function runGoalCompletionAuditor(args: {
 		} finally {
 			args.signal?.removeEventListener("abort", abortSession);
 			progress.phase = "done";
+			progress.label = "Audit complete.";
+			progress.percentage = 100;
 			emitProgress();
 			unsubscribe();
 		}

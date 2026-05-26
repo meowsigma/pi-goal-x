@@ -8,6 +8,36 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.10.1] — 2026-05-26
+
+### Added
+
+- **`testResults` attestation** — the executor can pass structured test evidence (`exitCode`, `suiteName`, `output`, `timestamp`) via `update_goal({testResults})`. The auditor receives it as a `<test_evidence>` block and is instructed to check it before re-running test suites, skipping redundant re-runs.
+- **Full test coverage for `testResults`** — 6 unit tests covering rendering of full/minimal/null evidence blocks, multi-line output indentation, non-passing exit codes, and the checklist instruction to check evidence before re-running. 1 integration test verifying the handler accepts `testResults` without error.
+
+### Changed
+
+- **`buildGoalAuditorPrompt` checklist renumbering** — when `testResults` is provided, the checklist has 5 items (with step 3 about checking test evidence). Without it, the checklist has 4 items (no evidence step), ensuring step numbers always align.
+
+---
+
+## [0.10.0] — 2026-05-26
+
+### Added
+
+- **Auditor progress visibility** — the auditor agent now has a `report_auditor_progress` tool to report its current step label (e.g. "Inspecting files...") and completion percentage at natural phase boundaries. The prompt instructs the model to use it at starting → inspecting → verifying → evaluating → reporting phases.
+- **Progress bar widget** — when the auditor reports progress, the TUI widget renders a progress bar (`[████░░░░] 40%`) alongside the step label, giving the user a clear visual sense of completion.
+- **Thinking phase awareness** — silent thinking phases (model reasoning without tool calls) are now detected via `thinking_start`/`thinking_end` stream events. The widget shows a distinct `⟡ thinking...` label with elapsed time and hides the Esc-to-skip hint during thinking.
+- **`AuditorProgress` / `AuditorWidgetProgress` types** — extended with optional `label` and `percentage` fields for the progress tool and widget.
+- **Widget tests for progress bar** — 5 new tests covering progress bar rendering at 0%/40%/100%, thinking phase display, step labels, undefined-percentage fallback, and narrow-width boundaries.
+
+### Changed
+
+- **`runGoalCompletionAuditor`** now passes the `report_auditor_progress` tool via `customTools` to the auditor agent session. Initial progress ("Starting audit..." / 0%) is emitted before the session starts. The `buildGoalAuditorPrompt` includes a "Progress reporting:" section with usage examples.
+- **`renderAuditorWidgetLines`** — enhanced to display step label, progress bar, and thinking-phase icon/label. All existing display elements (spinner, tool name, output lines, Esc-to-skip) are preserved.
+
+---
+
 ## [0.9.0] — 2026-05-26
 
 ### Added

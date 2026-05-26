@@ -36,6 +36,8 @@ ${untrustedObjectiveBlock(goal)}
 
 Available work tools for pursuing the active goal include write, read, bash, and edit. Use those tools directly for file and shell work; do not call get_goal repeatedly to discover tools.
 
+To ask the user a structured question (e.g. when the user's spec changes and you need to clarify before updating the goal), use goal_question. It opens a question dialog and returns the user's answer as tool output. Use plain conversation for simple clarifications.
+
 Keep this goal in force until it is actually achieved. Do not pause for confirmation just because a phase, chapter, file, or checklist item is finished. At each natural stopping point, compare every explicit requirement with concrete evidence from the workspace/session. If the objective is complete, call update_goal with status=complete and summarize the evidence; update_goal will launch an independent pi auditor agent and only archive if that auditor returns <approved/>. If it is not complete, choose the next concrete action and do it.
 
 The completion auditor is independent and semantic, not a paperwork checklist. It may inspect files and command output, and it will reject scaffold-only, alpha, template, proxy-metric, or weakly verified completions with <disapproved/>.
@@ -61,6 +63,8 @@ export function continuationPrompt(goal: GoalRecord): string {
 		untrustedObjectiveBlock(goal),
 		"",
 		"Available work tools for pursuing the active goal include write, read, bash, and edit. Use those tools directly for file and shell work; do not call get_goal repeatedly to discover tools.",
+		"",
+		"To ask the user a structured question (e.g. when the user's spec changes and you need to clarify before updating the goal), use goal_question. It opens a question dialog and returns the user's answer as tool output. Use plain conversation for simple clarifications.",
 		"",
 		"Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
 		"",

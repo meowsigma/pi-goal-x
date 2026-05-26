@@ -27,7 +27,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 
 ### Completion auditor
 
-- **Live progress widget** — when the auditor runs, the TUI shows a spinner, the current tool being executed, and recent output lines. No more wondering if anything is happening.
+- **Live progress widget** — when the auditor runs, the TUI shows a spinner, a progress bar (`[████░░░░] 40%`), step labels (`Inspecting files...`, `Verifying success criteria...`), the current tool being executed, and recent output lines. No more wondering if anything is happening.
 - **Escape to skip** — press Escape during an audit to abort it and complete the goal immediately. The skip is recorded in the ledger as `audit_skipped` with reason `user_aborted` and auditor model metadata.
 - **Disable the auditor entirely** — set `disabled: true` in `.pi/goal-auditor.json` (or toggle it via `/goal-settings` → `disabled`). The agent can still bypass with user confirmation by passing `confirmBypassAuditor: true` to `update_goal`.
 - **Skipped audits are recorded** — every skip (whether disabled or Escape-aborted) is logged to the ledger with the reason, provider, model, and thinking level for full traceability.
@@ -35,6 +35,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 - **Cleaner lifecycle** — `AbortSignal` is properly wired to `session.abort()`, animation timers are cleaned up, and the unsubscribe path is always executed. No more having to kill the session.
 - **Completion report includes full auditor output** — the auditor's full report is included in the goal completion conversation message upon approval, not just a verdict.
 - **Session factory injection** — `runGoalCompletionAuditor` accepts an optional `createSession` parameter for testability, enabling mock auditor sessions in tests.
+- **Structured test evidence** — the executor can pass `testResults` (exit code, suite name, output, timestamp) via `update_goal({testResults})`. The auditor receives a `<test_evidence>` block and is instructed to check it before re-running test suites, skipping redundant re-runs.
 
 ### Drafting & UX
 

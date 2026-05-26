@@ -313,4 +313,47 @@ describe("Extension E2E", () => {
 			f.cleanup();
 		}
 	});
+
+	// ── 5: testResults parameter ────────────────────────────────────────────
+	it("e2e: update_goal accepts testResults parameter without error", async () => {
+		const f = testFixture();
+		try {
+			// Fire session_start to load state and set focusedGoalId/state.goal
+			const ss = lifecycleHandlers.get("session_start");
+			assert.ok(ss, "session_start handler must be registered");
+			await ss({ reason: "start" }, f.mockCtx);
+
+			apiCalls = []; // reset call tracking
+
+			const updateGoal = getTool("update_goal");
+			const result = await (updateGoal.execute as Function)(
+				"call-5",
+				{
+					status: "complete",
+					completionSummary: "All work done.",
+					confirmBypassAuditor: true,
+					testResults: {
+						exitCode: 0,
+						suiteName: "npm test",
+						output: "1..123\n# tests 123\n# pass 123\n# fail 0",
+						timestamp: "2026-05-26T12:42:00.000Z",
+					},
+				},
+				new AbortController().signal,
+				undefined,
+				f.mockCtx,
+			);
+
+			// With disabled auditor and auditor bypass set, the completion succeeds
+			assert.ok(result, "result must be defined");
+			const text = result.content?.[0]?.text ?? "";
+			assert.ok(text.includes("Goal complete") || text.includes("audit"),
+				`completion text should mention completion or audit. Got: ${text.substring(0, 100)}`);
+
+			// Verify no errors from testResults being passed through
+			assert.equal(result.error, undefined, "should not return an error");
+		} finally {
+			f.cleanup();
+		}
+	});
 });

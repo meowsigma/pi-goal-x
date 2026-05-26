@@ -24,8 +24,12 @@ export interface AuditorWidgetProgress {
 	currentToolArgs?: string;
 	currentToolStartedAt?: number;
 	recentOutput: string[];
-	phase: "running" | "tool_executing" | "producing_report" | "done";
+	phase: "running" | "tool_executing" | "producing_report" | "thinking" | "done";
 	elapsedMs: number;
+	/** Current step label shown to the user */
+	label?: string;
+	/** Completion percentage from 0 to 100 */
+	percentage?: number;
 }
 
 export interface GoalWidgetOptions {
@@ -50,6 +54,13 @@ function heading(theme: Theme, width: number, left: string, right = ""): string 
 function branchLine(theme: Theme, width: number, isLast: boolean, content: string): string {
 	const prefix = isLast ? "└─" : "├─";
 	return fit(`${theme.fg("dim", prefix)} ${content}`, width);
+}
+
+function progressBar(pct: number, barWidth: number, theme: Theme): string {
+	const safeBar = Math.max(3, barWidth);
+	const filled = Math.min(safeBar, Math.max(0, Math.round((pct / 100) * safeBar)));
+	const empty = safeBar - filled;
+	return `[${theme.fg("accent", "█".repeat(filled))}${theme.fg("dim", "░".repeat(empty))}]`;
 }
 
 function displayIcon(goal: GoalWidgetRecord): { icon: string; color: GoalWidgetColor; label: string } {
@@ -81,8 +92,17 @@ function spinnerFrame(): string {
 export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme: Theme, width: number): string[] {
 	const safeWidth = Math.max(1, width);
 	const isActive = progress.phase !== "done";
-	const icon = isActive ? theme.fg("accent", spinnerFrame()) : theme.fg("success", "✓");
-	const label = isActive ? "auditing" : "audit complete";
+	const isThinking = progress.phase === "thinking";
+	const icon = isActive
+		? isThinking
+			? theme.fg("muted", "⟡")
+			: theme.fg("accent", spinnerFrame())
+		: theme.fg("success", "✓");
+	const label = isActive
+		? isThinking
+			? "thinking..."
+			: "auditing"
+		: "audit complete";
 	// formatDuration expects seconds, progress.elapsedMs is in milliseconds
 	const duration = formatDuration(Math.floor(progress.elapsedMs / 1000));
 	const lines: string[] = [
@@ -94,7 +114,30 @@ export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme:
 		),
 	];
 
-	if (isActive && progress.currentTool) {
+	// Show step label when available
+	if (progress.label) {
+		lines.push(branchLine(
+			theme,
+			safeWidth,
+			false,
+			`${theme.fg("text", truncateText(progress.label, Math.max(8, safeWidth - 6)))}`,
+		));
+	}
+
+	// Show progress bar when percentage is available
+	if (typeof progress.percentage === "number") {
+		const barWidth = Math.max(6, Math.min(safeWidth - 10, 30));
+		const bar = progressBar(progress.percentage, barWidth, theme);
+		const pct = `${theme.fg("muted", `${Math.round(progress.percentage)}%`)}`;
+		lines.push(branchLine(
+			theme,
+			safeWidth,
+			isActive && !progress.currentTool && progress.recentOutput.length === 0 && !isThinking,
+			`${bar} ${pct}`,
+		));
+	}
+
+	if (isActive && !isThinking && progress.currentTool) {
 		const argText = progress.currentToolArgs
 			? truncateText(progress.currentToolArgs, Math.max(10, safeWidth - 24))
 			: "";
@@ -129,7 +172,7 @@ export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme:
 	}
 
 	// Show skip hint when audit is actively running
-	if (isActive) {
+	if (isActive && !isThinking) {
 		lines.push(branchLine(
 			theme,
 			safeWidth,

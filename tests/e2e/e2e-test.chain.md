@@ -7,6 +7,10 @@ description: "Run end-to-end tests for the pi-goal extension: quick-sync, combin
 
 These tests verify the actual `update_goal` tool handler execution through the pi runtime using forked context (preserving the current session's goal state).
 
+**Automated alternative**: The tests in `tests/e2e/run.ts` use `pi --mode json --fork` with `--append-system-prompt` + `--tools` to achieve deterministic behavior (the AI model is forced to make the required tool calls). No free-text AI output is parsed — only structured JSONL events (`tool_execution_start`/`tool_execution_end`).
+
+**Manual chain**: Use this chain file for exploratory/interactive testing via `/run-chain e2e-test`.
+
 **Source**: `tests/e2e/e2e-test.chain.md` (copy to `.pi/chains/` for use).
 
 **Install**: `mkdir -p .pi/chains && cp tests/e2e/e2e-test.chain.md .pi/chains/e2e-test.chain.md`

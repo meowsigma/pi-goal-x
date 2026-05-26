@@ -1,20 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * pi-goal e2e test runner.
+ * pi-goal deterministic e2e test runner.
  *
  * Tests:
- * 1. File-validity checks (agent file bootstrapping, chain docs)               ✓
- * 2. Mock-pi handler tests (extension loads, session_start, update_goal)       ✓
+ * 1. File-validity checks (agent file bootstrapping, chain docs)
+ * 2. Mock-pi handler tests (extension loads, session_start, update_goal handler)
+ * 3. Real pi fork test using --mode json: reads tool_execution_start/end events
+ *    from JSONL output for deterministic assertions on tool name, parameters,
+ *    and result fields. Uses --append-system-prompt + --tools to ensure the AI
+ *    model always calls the required tools (no non-determinism).
  *
- * These tests use only exported functions and mock pi objects — no AI model
- * dependency, no flaky network calls, fully deterministic.
- *
- * The real-pi-fork test (pi --fork with --mode json) was intentionally removed
- * because it depends on an AI model making correct tool calls, which is
- * inherently non-deterministic and flaky. The mock-pi handler tests below
- * provide equivalent behavioral verification (checking handler result fields,
- * disk state, pool membership) with 100% determinism.
+ * Test 3 requires the `pi` CLI on PATH. It is skipped if unavailable.
+ * Tests 1-2 are always available and deterministic.
  */
 
 import { describe, it } from "node:test";
@@ -22,6 +20,7 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import piGoalExtension from "../../extensions/goal.ts";
 import {
@@ -37,8 +36,52 @@ import {
 import type { ToolDefinition, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const DIR = import.meta.dirname!;
+const EXT_PATH = path.resolve(DIR, "..", "..", "extensions", "goal.ts");
+
+// ── JSON event types ─────────────────────────────────────────────────────────
+
+interface ToolExecStart {
+	type: "tool_execution_start";
+	toolCallId: string;
+	toolName: string;
+	args: Record<string, unknown>;
+}
+
+interface ToolExecEnd {
+	type: "tool_execution_end";
+	toolCallId: string;
+	toolName: string;
+	result: {
+		content?: Array<{ type: string; text?: string }>;
+		details?: { version: number; goal: { objective?: string; status?: string; archivedPath?: string } };
+		terminate?: boolean;
+		turnStoppedFor?: string | null;
+	};
+}
+
+/** Parse JSONL output for matching tool_execution_start/end event pairs. */
+function findToolEvents(stdout: string): Array<{ start: ToolExecStart; end: ToolExecEnd }> {
+	const events: Array<{ start: ToolExecStart; end: ToolExecEnd }> = [];
+	const starts = new Map<string, ToolExecStart>();
+	for (const line of stdout.split("\n").filter((l) => l.trim())) {
+		try {
+			const obj = JSON.parse(line);
+			if (obj.type === "tool_execution_start") starts.set(obj.toolCallId, obj as ToolExecStart);
+			else if (obj.type === "tool_execution_end") {
+				const start = starts.get(obj.toolCallId);
+				if (start) events.push({ start, end: obj as ToolExecEnd });
+			}
+		} catch { /* skip non-JSON lines */ }
+	}
+	return events;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function isPiAvailable(): boolean {
+	try { return spawnSync("which", ["pi"], { encoding: "utf8", stdio: "pipe" }).status === 0; }
+	catch { return false; }
+}
 
 function createMockPiSetup() {
 	const tools: ToolDefinition[] = [];
@@ -60,31 +103,19 @@ function createMockPiSetup() {
 
 function createMockCtx(cwd: string, goal: GoalRecord, written: GoalRecord): ExtensionContext {
 	const focusEntry = goalFocusDetails(goal.id, "created");
-	const stateEntry: GoalStateEntry = {
-		version: 3,
-		goal: { ...goal, activePath: written.activePath },
-	};
+	const stateEntry: GoalStateEntry = { version: 3, goal: { ...goal, activePath: written.activePath } };
 	return {
-		cwd,
-		hasUI: false,
+		cwd, hasUI: false,
 		sessionManager: {
 			getBranch: () => [
 				{ type: "custom", customType: "pi-goal-focus", data: focusEntry },
 				{ type: "custom", customType: "pi-goal-state", data: stateEntry },
 			],
-			getCwd: () => cwd,
-			getSessionId: () => "test",
-			getRoot: () => cwd,
-			append: () => {},
-			appendModelChange: () => {},
-			appendThinkingLevelChange: () => {},
-			appendCompetingWriteCheck: () => {},
+			getCwd: () => cwd, getSessionId: () => "test", getRoot: () => cwd, append: () => {},
+			appendModelChange: () => {}, appendThinkingLevelChange: () => {}, appendCompetingWriteCheck: () => {},
 			buildSessionContext: () => ({ messages: [], sessionId: "test", model: null, thinkingLevel: "medium" }),
 		},
-		getSystemPrompt: () => "",
-		isIdle: () => true,
-		hasPendingMessages: () => false,
-		abort: () => {},
+		getSystemPrompt: () => "", isIdle: () => true, hasPendingMessages: () => false, abort: () => {},
 	} as unknown as ExtensionContext;
 }
 
@@ -92,14 +123,58 @@ function testFixture() {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-subagent-e2e-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
-
-	const goal = createGoal({
-		objective: "Subagent e2e: initial",
-		autoContinue: true,
-		sisyphus: false,
-	});
+	const goal = createGoal({ objective: "Subagent e2e: initial", autoContinue: true, sisyphus: false });
 	const written = writeActiveGoalFile({ cwd } as any, goal as GoalRecord);
 	return { cwd, goal: goal as GoalRecord, written, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
+}
+
+/** Create a workspace, session JSONL, and force-tool prompt for a deterministic fork test. */
+function forkFixture(instruction: string): { cleanup: () => void; run: () => { stdout: string; stderr: string } } {
+	const cwd = mkdtempSync(path.join(tmpdir(), "pi-goal-fork-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	const goalId = `mpme2e${Date.now().toString(36)}`;
+	const now = new Date().toISOString();
+	const sessionId = `test-${now.slice(-8)}`;
+	const activePath = `.pi/goals/active_goal_${goalId}.md`;
+	const goalData = {
+		id: goalId, objective: "E2E fork test: initial", status: "active" as const,
+		autoContinue: true, sisyphus: false, usage: { tokensUsed: 0, activeSeconds: 0 },
+		createdAt: now, updatedAt: now, activePath,
+	};
+	writeFileSync(path.join(cwd, activePath), JSON.stringify(goalData) + "\n\n# Goal Prompt\n\nE2E fork test: initial\n");
+	writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
+	const sessionFile = path.join(cwd, "session.jsonl");
+	writeFileSync(sessionFile, [
+		JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: now, cwd }),
+		JSON.stringify({ type: "model_change", id: "m1", parentId: null, timestamp: now, provider: "opencode-go", modelId: "deepseek-v4-flash" }),
+		JSON.stringify({ type: "thinking_level_change", id: "t1", parentId: "m1", timestamp: now, thinkingLevel: "off" }),
+		JSON.stringify({ type: "custom", customType: "pi-goal-focus", timestamp: now, data: { version: 1, focusedGoalId: goalId, reason: "created" } }),
+		JSON.stringify({ type: "custom", customType: "pi-goal-state", timestamp: now, data: { version: 3, goal: goalData } }),
+	].join("\n") + "\n");
+
+	// System prompt that forces the model to always use tool calls
+	const sysPromptFile = path.join(cwd, "force-tool.md");
+	writeFileSync(sysPromptFile, "You must use the update_goal tool to complete the request. Only respond using tool calls. Never output only text without making a tool call.");
+
+	const run = () => {
+		const result = spawnSync("pi", [
+			"--mode", "json",
+			"--no-extensions", "-e", EXT_PATH,
+			"--tools", "get_goal,update_goal",
+			"--append-system-prompt", sysPromptFile,
+			"--fork", sessionFile,
+			"-p", instruction,
+		], {
+			cwd, encoding: "utf8", timeout: 120_000, stdio: "pipe",
+			env: { ...process.env, PI_OFFLINE: "1", NODE_OPTIONS: "" },
+		});
+		return { stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+	};
+
+	return {
+		run,
+		cleanup: () => rmSync(cwd, { recursive: true, force: true }),
+	};
 }
 
 // ── Test Suite ───────────────────────────────────────────────────────────────
@@ -146,20 +221,15 @@ describe("Subagent E2E", () => {
 			const mockCtx = createMockCtx(f.cwd, f.goal, f.written);
 			const ss = handlerMap.get("session_start")!;
 			await ss({ reason: "start" }, mockCtx);
-
 			const updateGoal = tools.find((t) => t.name === "update_goal")!;
 			const result = await (updateGoal.execute as Function)(
 				"call-1",
 				{ updatedObjective: "Subagent e2e: quick-synced" },
-				new AbortController().signal,
-				undefined,
-				mockCtx,
+				new AbortController().signal, undefined, mockCtx,
 			);
-
 			assert.equal(result.content?.[0]?.text, "Goal objective updated.");
 			assert.equal(result.terminate, undefined, "quick-sync must NOT set terminate");
 			assert.equal(result.turnStoppedFor, undefined, "quick-sync must NOT set turnStoppedFor");
-
 			const pool = readActiveGoalPool({ cwd: f.cwd } as any);
 			const diskGoal = pool.get(f.goal.id);
 			assert.ok(diskGoal, "goal must remain in active pool");
@@ -175,27 +245,15 @@ describe("Subagent E2E", () => {
 			const mockCtx = createMockCtx(f.cwd, f.goal, f.written);
 			const ss = handlerMap.get("session_start")!;
 			await ss({ reason: "start" }, mockCtx);
-
 			const updateGoal = tools.find((t) => t.name === "update_goal")!;
 			const result = await (updateGoal.execute as Function)(
 				"call-2",
-				{
-					updatedObjective: "Subagent e2e: combined update",
-					status: "complete",
-					completionSummary: "Subagent e2e completed.",
-					confirmBypassAuditor: true,
-				},
-				new AbortController().signal,
-				undefined,
-				mockCtx,
+				{ updatedObjective: "Subagent e2e: combined update", status: "complete", completionSummary: "Subagent e2e completed.", confirmBypassAuditor: true },
+				new AbortController().signal, undefined, mockCtx,
 			);
-
 			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("Subagent e2e: combined update"),
-				`completion must reference updated objective. Got: ${text.slice(0, 200)}`);
-
-			const activeFile = path.join(f.cwd, f.written.activePath!);
-			const diskContent = readFileSync(activeFile, "utf8");
+			assert.ok(text.includes("Subagent e2e: combined update"), `completion must reference updated objective. Got: ${text.slice(0, 200)}`);
+			const diskContent = readFileSync(path.join(f.cwd, f.written.activePath!), "utf8");
 			assert.ok(diskContent.includes("Subagent e2e: combined update"), "disk has updated objective");
 			assert.ok(diskContent.includes('"status": "complete"'), "disk has complete status");
 		} finally { f.cleanup(); }
@@ -208,20 +266,97 @@ describe("Subagent E2E", () => {
 			const mockCtx = createMockCtx(f.cwd, f.goal, f.written);
 			const ss = handlerMap.get("session_start")!;
 			await ss({ reason: "start" }, mockCtx);
-
 			const updateGoal = tools.find((t) => t.name === "update_goal")!;
 			await (updateGoal.execute as Function)(
 				"call-3",
 				{ status: "complete", completionSummary: "Subagent e2e archival.", confirmBypassAuditor: true },
-				new AbortController().signal,
-				undefined,
-				mockCtx,
+				new AbortController().signal, undefined, mockCtx,
 			);
-
 			assert.ok(readFileSync(path.join(f.cwd, f.written.activePath!), "utf8"),
 				"goal file must still exist in active dir (deferred archival)");
 			assert.equal(readdirSync(path.join(f.cwd, ".pi", "goals", "archived")).length, 0,
 				"archived dir must be empty");
+		} finally { f.cleanup(); }
+	});
+
+	// ── 3. Real pi fork test (--mode json, fully deterministic) ─────────────
+	// Uses --append-system-prompt + --tools to force the AI model to always
+	// call the required tools. Parses tool_execution_start/end events from
+	// JSONL output for structured field assertions — no free-text AI parsing.
+
+	function assertToolEvents(stdout: string, toolName: string, callback: (events: Array<{ start: ToolExecStart; end: ToolExecEnd }>) => void) {
+		const events = findToolEvents(stdout).filter((e) => e.start.toolName === toolName);
+		assert.ok(events.length > 0, `fork output must contain at least one ${toolName} call`);
+		callback(events);
+	}
+
+	it("fork: quick-sync — tool_execution_start args and result fields",
+		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
+		const f = forkFixture(
+			"Call get_goal first, then call update_goal with updatedObjective 'E2E fork test: quick-synced'. Do NOT mark complete."
+		);
+		try {
+			const result = f.run();
+			assertToolEvents(result.stdout, "update_goal", (events) => {
+				const ev = events[0];
+				assert.equal(ev.start.args.updatedObjective, "E2E fork test: quick-synced",
+					"tool_execution_start args must contain updatedObjective");
+				const res = ev.end.result;
+				assert.equal(res.content?.[0]?.text, "Goal objective updated.",
+					"response text must confirm update");
+				assert.equal(res.details?.goal?.objective, "E2E fork test: quick-synced",
+					"result goal objective must be updated");
+				assert.equal(res.details?.goal?.status, "active",
+					"result goal status must remain active");
+				assert.equal(res.terminate, undefined,
+					"quick-sync must NOT set terminate: true");
+			});
+		} finally { f.cleanup(); }
+	});
+
+	it("fork: combined sync+complete — updated objective before completion",
+		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
+		const f = forkFixture(
+			"Call get_goal first, then call update_goal with " +
+			"updatedObjective 'E2E fork test: combined', " +
+			"status complete, and confirmBypassAuditor true."
+		);
+		try {
+			const result = f.run();
+			assertToolEvents(result.stdout, "update_goal", (events) => {
+				const ev = events[0];
+				assert.equal(ev.start.args.updatedObjective, "E2E fork test: combined",
+					"args must contain updatedObjective");
+				assert.equal(ev.start.args.status, "complete",
+					"args must contain status complete");
+				const res = ev.end.result;
+				assert.equal(res.details?.goal?.objective, "E2E fork test: combined",
+					"result must show updated objective (not original)");
+				assert.equal(res.details?.goal?.status, "complete",
+					"result must show complete status");
+				assert.ok(res.terminate === true,
+					"completion must set terminate: true");
+			});
+		} finally { f.cleanup(); }
+	});
+
+	it("fork: deferred archival — complete without sync, result and filesystem",
+		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
+		const f = forkFixture(
+			"Call get_goal first, then call update_goal with status complete and confirmBypassAuditor true."
+		);
+		try {
+			const result = f.run();
+			assertToolEvents(result.stdout, "update_goal", (events) => {
+				const ev = events[0];
+				assert.equal(ev.start.args.status, "complete",
+					"args must contain status complete");
+				assert.equal(ev.start.args.updatedObjective, undefined,
+					"no updatedObjective should be passed for plain completion");
+				const res = ev.end.result;
+				assert.equal(res.details?.goal?.status, "complete",
+					"result must show complete status");
+			});
 		} finally { f.cleanup(); }
 	});
 });

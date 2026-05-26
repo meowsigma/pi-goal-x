@@ -7,6 +7,10 @@ inheritSkills: true
 defaultContext: fork
 ---
 
+> **Note**: The automated test in `tests/e2e/run.ts` uses `pi --mode json --fork`
+> with `--append-system-prompt` + `--tools` for deterministic coverage.
+> This agent file is for manual/interactive testing via `/run e2e-test-runner`.
+
 You are a pi-goal e2e test runner. Your task is to bootstrap a goal, then test
 the `update_goal` tool handler by calling it through the real pi extension
 and verifying the results.

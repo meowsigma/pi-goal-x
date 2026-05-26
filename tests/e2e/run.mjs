@@ -4,13 +4,28 @@ This directory contains manual end-to-end tests that exercise the actual
 `update_goal` tool handler through the real pi runtime. These tests use
 forked-context subagents so they do not affect the parent session.
 
+## Installation
+
+The e2e test runner agent must be installed in the pi agents directory:
+
+```bash
+mkdir -p .pi/agents
+cp tests/e2e/e2e-test-runner.md .pi/agents/
+cp tests/e2e/e2e-test.chain.md .pi/chains/e2e-test.chain.md
+```
+
+Verify the agent is available:
+
+```bash
+/run e2e-test-runner --help
+```
+
 ## Prerequisites
 
 - The pi-goal extension must be loaded in the current session.
 - A goal must be active (any active goal works — the handler is tested,
   not the specific goal content).
-- The `e2e-test-runner` subagent must be available:
-  `/run e2e-test-runner --help`
+- The `e2e-test-runner` subagent must be installed (see above).
 
 ## Running the tests
 
@@ -46,11 +61,13 @@ set). This verifies that archival is deferred to turn_end.
 
 ### Running via chain
 
+After installing the chain (see Installation above):
+
 ```bash
 /run-chain e2e-test
 ```
 
-This runs all three test scenarios as documented in `.pi/chains/e2e-test.chain.md`.
+This runs all three test scenarios as documented in `e2e-test.chain.md`.
 
 ## Interpreting results
 

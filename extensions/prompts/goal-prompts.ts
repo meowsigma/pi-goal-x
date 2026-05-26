@@ -44,7 +44,9 @@ If you hit a real blocker that you cannot resolve with one more reasonable next 
 
 If the user explicitly asks to abandon/cancel this goal, or the objective is obsolete, impossible, or unsafe to continue and should not be marked complete, call abort_goal({reason}) with a non-empty reason and stop.
 
-Do NOT silently invent workarounds, fake completion, or quietly redefine the objective. Do NOT call update_goal=complete to escape a blocker.${sisyphusDisciplineBlock(goal) ? `\n${sisyphusDisciplineBlock(goal)}` : ""}`;
+Do NOT silently invent workarounds, fake completion, or quietly redefine the objective. Do NOT call update_goal=complete to escape a blocker.
+
+Goal evolution: if the user gives requirements, feedback, or corrections that differ from the goal objective, the goal is stale. Propose the updated objective concisely and wait for the user to confirm before continuing. Use update_goal with updatedObjective for narrow focus-area changes, or suggest /goal-tweak for broader revisions (boundaries, constraints, multiple sections). Do NOT mark the goal complete with a stale objective.${sisyphusDisciplineBlock(goal) ? `\n${sisyphusDisciplineBlock(goal)}` : ""}`;
 }
 
 export function continuationPrompt(goal: GoalRecord): string {
@@ -76,6 +78,8 @@ export function continuationPrompt(goal: GoalRecord): string {
 		"",
 		"Do not call update_goal unless the goal is complete enough to survive independent semantic auditing. Do not mark a goal complete merely because work is stopping.",
 		"Do not ask the user for confirmation unless there is a real blocker.",
+		"",
+		"Goal evolution: if the user gives requirements, feedback, or corrections that differ from the goal objective, the goal is stale. Propose the updated objective concisely and wait for the user to confirm before continuing. Use update_goal with updatedObjective for narrow focus-area changes, or suggest /goal-tweak for broader revisions (boundaries, constraints, multiple sections). Do NOT mark the goal complete with a stale objective.",
 		"",
 		"If you hit a real blocker (missing credentials, contradictory spec, file/permission you cannot access, dangerous operation pending user approval, or an unclear Sisyphus-style ordered plan), call pause_goal({reason, suggestedAction?}) and stop. If the user explicitly asks to abandon/cancel, or the objective is obsolete, impossible, or unsafe to continue, call abort_goal({reason}) and stop. Do not silently invent workarounds. Do not fake completion. pause_goal and abort_goal are structured lifecycle exits; update_goal=complete is not an escape hatch for blockers.",
 		...(goal.sisyphus ? ["", sisyphusDisciplineBlock(goal)] : []),

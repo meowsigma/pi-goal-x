@@ -1704,16 +1704,74 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			"Do not call update_goal merely because work is stopping, substantial progress was made, or tests passed without covering every requirement.",
 			"Do not use update_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
 			"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
+			"If the user gives requirements, feedback, or corrections that differ from the goal objective, the goal is stale. Use update_goal with updatedObjective to sync the objective before continuing work or before marking the goal complete. This ensures the auditor evaluates against the latest requirements.",
 		],
 		parameters: Type.Object({
-			status: StringEnum([COMPLETE_STATUS] as const, { description: "Set to complete only when the objective is achieved." }),
+			status: Type.Optional(StringEnum([COMPLETE_STATUS] as const, { description: "Set to complete only when the objective is achieved." })),
 			completionSummary: Type.Optional(Type.String({ description: "Concise completion claim and evidence summary passed to the independent auditor agent." })),
 			confirmBypassAuditor: Type.Optional(Type.Boolean({ description: "Set to true to confirm bypassing the independent auditor when it is disabled in settings." })),
+			updatedObjective: Type.Optional(Type.String({ description: "Revised goal objective. Use when the user's requirements have changed mid-flight. The goal remains active so the agent can continue working toward the new objective. Can be combined with status=complete to update the objective before the completion audit." })),
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			reconcileFocusedGoalFromDisk(ctx);
-			if (params.status !== COMPLETE_STATUS) throw new Error("update_goal only supports status=complete.");
+
+			// -- Phase 1: Objective update (quick sync) --
+			// Apply updatedObjective before any completion logic so the completion
+			// flow (if status=complete is also set) reads the latest objective.
+			if (params.updatedObjective !== undefined) {
+				const newObjective = params.updatedObjective.trim();
+				if (!newObjective) throw new Error("update_goal requires a non-empty updatedObjective.");
+				if (!state.goal) {
+					return {
+						content: [{ type: "text", text: "No goal is set; cannot update objective." }],
+						details: goalDetails(state.goal),
+					};
+				}
+				if (state.goal.status === "complete") {
+					return {
+						content: [{ type: "text", text: "Goal is already complete; cannot update objective." }],
+						details: goalDetails(state.goal),
+					};
+				}
+				const next: GoalRecord = {
+					...state.goal,
+					objective: newObjective,
+					updatedAt: nowIso(),
+				};
+				state.goal = writeActiveGoalFile(ctx, next);
+				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+				try {
+					appendGoalEvent(ctx, {
+						type: "goal_tweaked",
+						goalId: state.goal.id,
+						changeSummary: "Objective updated via update_goal",
+						at: state.goal.updatedAt,
+					});
+				} catch {
+					// Ledger append failure should not block update
+				}
+				updateUI(ctx);
+
+				// Quick sync only (no status=complete) — return without terminating
+				if (params.status !== COMPLETE_STATUS) {
+					return {
+						content: [{ type: "text", text: `Goal objective updated.` }],
+						details: goalDetails(state.goal),
+					};
+				}
+				// Fall through: status=complete also set, proceed with completion below
+			}
+
+			// -- Phase 2: Status validation --
+			if (params.status !== COMPLETE_STATUS) {
+				if (params.updatedObjective === undefined) {
+					throw new Error("update_goal requires either status=complete or updatedObjective.");
+				}
+				throw new Error("update_goal requires status=complete when marking a goal complete.");
+			}
+
+			// -- Phase 3: Completion --
 			const completionGate = validateGoalCompletion({ goal: state.goal, runningGoalId });
 			if (!completionGate.ok) {
 				return {
@@ -2009,7 +2067,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			};
 		},
 		renderCall(args, theme) {
-			return new Text(theme.fg("toolTitle", "update_goal ") + theme.fg("success", args.status), 0, 0);
+			const label = args?.status ?? args?.updatedObjective ? "sync" : "";
+			return new Text(theme.fg("toolTitle", "update_goal ") + theme.fg("success", label), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			return renderGoalResult(result, theme);

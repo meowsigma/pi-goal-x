@@ -205,7 +205,6 @@ export function parseGoalFile(filePath: string): GoalRecord | null {
 }
 
 export function writeActiveGoalFile(ctx: GoalFileContext, current: GoalRecord): GoalRecord {
-	if (current.status === "complete") return archiveGoalFile(ctx, current);
 	const activePath = activePathForGoal(ctx, current);
 	const next = sanitizeGoalPaths(ctx, { ...current, activePath, updatedAt: nowIso() });
 	atomicWriteGoalFile(ctx, GOALS_DIR, activePath, serializeGoalFile(next));

@@ -1,20 +1,34 @@
 # pi-goal-x
 
-> **Fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal).** Upstream changes can be merged from the original repository.
+> **Fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal)** — this repository extends the upstream with quality-of-life features for the completion auditor, lifecycle reliability improvements, and drafting UX refinements. Upstream changes can be merged from the original repository.
 
 `pi-goal-x` is a long-running goal extension for [pi](https://github.com/earendil-works/pi-coding-agent). It gives the agent a durable objective, a visible lifecycle, and schema-gated tools for drafting, executing, pausing, resuming, and completing work.
 
 The extension is designed around one rule: **the user owns intent; the agent executes only after the goal is explicit and confirmed**.
 
-## What's new in pi-goal-x
+## What's different from upstream
 
-pi-goal-x adds a handful of quality-of-life features on top of the original:
+All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are preserved. The following changes are specific to pi-goal-x:
 
-- **See what the auditor is doing.** When a goal completes and the auditor kicks in, you get a live view — a spinner, the tool it's running, and recent output lines. No more wondering if anything is happening.
-- **Skip the audit with Escape.** If you're in a hurry or just don't need an audit right now, press Escape. The goal completes immediately without waiting.
-- **Turn off the auditor entirely.** If you never want audits, set it once in `/goal-settings` and you're done. The agent can bypass it by asking you to confirm.
-- **Know why an audit was skipped.** Whether you pressed Escape or had it disabled, the ledger records the reason.
-- **Faster, safer audit lifecycle.** The audit starts and stops cleanly — no more stuck goals, ghost states, or having to kill the session.
+### Completion auditor
+
+- **Live progress widget** — when the auditor runs, the TUI shows a spinner, the current tool being executed, and recent output lines. No more wondering if anything is happening.
+- **Escape to skip** — press Escape during an audit to abort it and complete the goal immediately. The skip is recorded in the ledger as `audit_skipped` with reason `user_aborted` and auditor model metadata.
+- **Disable the auditor entirely** — set `disabled: true` in `.pi/goal-auditor.json` (or toggle it via `/goal-settings` → `disabled`). The agent can still bypass with user confirmation by passing `confirmBypassAuditor: true` to `update_goal`.
+- **Skipped audits are recorded** — every skip (whether disabled or Escape-aborted) is logged to the ledger with the reason, provider, model, and thinking level for full traceability.
+- **Robust abort detection** — the auditor detects aborts both from exceptions *and* from `session.prompt()` returning after an abort signal, preventing stuck goals or ghost states.
+- **Cleaner lifecycle** — `AbortSignal` is properly wired to `session.abort()`, animation timers are cleaned up, and the unsubscribe path is always executed. No more having to kill the session.
+- **Completion report includes full auditor output** — the auditor's full report is included in the goal completion conversation message upon approval, not just a verdict.
+- **Session factory injection** — `runGoalCompletionAuditor` accepts an optional `createSession` parameter for testability, enabling mock auditor sessions in tests.
+
+### Drafting & UX
+
+- **Normalized proposal-refinement language** — consistent terminology ("keep refining through normal proposal cycles") across all drafting prompts and tools.
+- **`PI_GOAL_AUTO_CONFIRM=0` opt-out** — explicitly set the env var to `0` to disable auto-confirm even in headless contexts (useful for benchmarking).
+
+### Testing
+
+- **Comprehensive abort/skip coverage** — unit tests for `audit_skipped` ledger events, disabled auditor config, Esc-to-skip widget behaviour, post-prompt abort detection, and the `confirmBypassAuditor` parameter.
 
 ## What it provides
 

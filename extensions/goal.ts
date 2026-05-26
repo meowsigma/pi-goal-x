@@ -667,7 +667,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			clearActiveAccounting();
 			return;
 		}
-		if (state.goal?.activePath && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true })) return;
+		// Skip disk reconciliation for complete goals — they are pending archival at turn_end.
+		if (state.goal?.activePath && state.goal?.status !== "complete" && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true })) return;
 		if (!state.goal || state.goal.status !== "active" || accounting.activeGoalId !== state.goal.id) {
 			beginAccounting();
 			return;
@@ -1751,13 +1752,16 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						details: goalDetails(state.goal),
 					};
 				}
-				// Auditor disabled and confirmed — skip audit, complete immediately
-				await pi.sendMessage<GoalAuditEventDetails>({
+				// Auditor disabled and confirmed — skip audit.
+				// Defer archival: set goal complete in-memory + write active file WITHOUT
+				// archiving. Archival happens at turn_end so the agent has a chance to
+				// recognise the skipped audit before the goal is archived.
+				pi.sendMessage<GoalAuditEventDetails>({
 					customType: GOAL_AUDIT_ENTRY,
 					content: `Goal completed — auditor disabled in settings.`,
 					display: true,
 					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
-				}, { triggerTurn: true });
+				});
 				try {
 					appendGoalEvent(ctx, {
 						type: "audit_skipped",
@@ -1771,41 +1775,32 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				} catch {
 					// Ledger append failure should not block completion
 				}
-				// Mark goal complete directly (skip audit entirely)
+				// Set goal complete in memory (defer archival to turn_end)
 				accountProgress(ctx);
-				state.goal = auditTarget;
-				stopActiveGoal("complete", "agent", ctx);
-				const completedGoal = state.goal;
-				turnStoppedFor = completedGoal?.id ?? null;
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
-				if (completedGoal) {
-					resetGetGoalNudgeState(completedGoal.id);
-					goalsById.delete(completedGoal.id);
-					focusedGoalId = null;
-					appendFocusEntry(null, "completed");
-					syncGoalTools();
-					updateUI(ctx);
-					try {
-						appendGoalEvent(ctx, {
-							type: "goal_completed",
-							goalId: completedGoal.id,
-							archivePath: completedGoal.archivedPath,
-							at: nowIso(),
-						});
-					} catch {
-						// Ledger append failure should not crash completion
-					}
-				}
+				state.goal = {
+					...auditTarget,
+					status: "complete",
+					stopReason: "agent",
+					updatedAt: nowIso(),
+				};
+				state.goal = writeActiveGoalFile(ctx, state.goal);
+				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+				turnStoppedFor = state.goal?.id ?? null;
+				resetGetGoalNudgeState(state.goal?.id);
+				syncGoalTools();
+				updateUI(ctx);
 				return {
 					content: [{
 						type: "text",
 						text: buildCompletionReport({
-							detailedSummary: detailedSummary(completedGoal),
+							detailedSummary: detailedSummary(state.goal),
 							completionSummary: params.completionSummary,
+							auditSkippedReason: "auditor disabled in settings",
 						}),
 					}],
-					details: goalDetails(completedGoal),
+					details: goalDetails(state.goal),
 					terminate: true,
 				};
 			}
@@ -1884,47 +1879,39 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// skip notification is exposed exactly once to the agent as part of the
 			// update_goal tool execution, matching the disabled-flow pattern exactly.
 			if (auditor.error === "Auditor aborted.") {
-				await pi.sendMessage<GoalAuditEventDetails>({
+				// Esc-skip: same deferred archival pattern as disabled bypass.
+				pi.sendMessage<GoalAuditEventDetails>({
 					customType: GOAL_AUDIT_ENTRY,
 					content: `Goal completed — auditor bypassed (user pressed Escape during audit).`,
 					display: true,
 					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
-				}, { triggerTurn: true });
-				// Mark goal complete directly (skip audit entirely)
+				});
+				// Set goal complete in memory (defer archival to turn_end)
 				accountProgress(ctx);
-				state.goal = auditTarget;
-				stopActiveGoal("complete", "agent", ctx);
-				const completedGoal = state.goal;
-				turnStoppedFor = completedGoal?.id ?? null;
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
-				if (completedGoal) {
-					resetGetGoalNudgeState(completedGoal.id);
-					goalsById.delete(completedGoal.id);
-					focusedGoalId = null;
-					appendFocusEntry(null, "completed");
-					syncGoalTools();
-					updateUI(ctx);
-					try {
-						appendGoalEvent(ctx, {
-							type: "goal_completed",
-							goalId: completedGoal.id,
-							archivePath: completedGoal.archivedPath,
-							at: nowIso(),
-						});
-					} catch {
-						// Ledger append failure should not crash completion
-					}
-				}
+				state.goal = {
+					...auditTarget,
+					status: "complete",
+					stopReason: "agent",
+					updatedAt: nowIso(),
+				};
+				state.goal = writeActiveGoalFile(ctx, state.goal);
+				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+				turnStoppedFor = state.goal?.id ?? null;
+				resetGetGoalNudgeState(state.goal?.id);
+				syncGoalTools();
+				updateUI(ctx);
 				return {
 					content: [{
 						type: "text",
 						text: buildCompletionReport({
-							detailedSummary: detailedSummary(completedGoal),
+							detailedSummary: detailedSummary(state.goal),
 							completionSummary: params.completionSummary,
+							auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
 						}),
 					}],
-					details: goalDetails(completedGoal),
+					details: goalDetails(state.goal),
 					terminate: true,
 				};
 			}
@@ -1989,45 +1976,35 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				display: true,
 				details: { phase: "approved", goalId: auditTarget.id, auditor: auditor.model },
 			});
-			// Account for any remaining elapsed time before stopping.
+			// Account for any remaining elapsed time.
+			// Defer archival: set goal complete in-memory + write active file WITHOUT
+			// archiving. Archival happens at turn_end so the agent can see the auditor
+			// approval before the goal is archived.
 			accountProgress(ctx);
-			state.goal = auditTarget;
-			stopActiveGoal("complete", "agent", ctx);
-			const completedGoal = state.goal;
-			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
-			turnStoppedFor = completedGoal?.id ?? null;
-			// Clear auditor progress to restore normal widget state
 			auditProgress = null;
 			goalWidgetComponent?.invalidate();
-			if (completedGoal) {
-				resetGetGoalNudgeState(completedGoal.id);
-				goalsById.delete(completedGoal.id);
-				focusedGoalId = null;
-				appendFocusEntry(null, "completed");
-				syncGoalTools();
-				updateUI(ctx);
-				// Append ledger: goal completed
-				try {
-					appendGoalEvent(ctx, {
-						type: "goal_completed",
-						goalId: completedGoal.id,
-						archivePath: completedGoal.archivedPath,
-						at: nowIso(),
-					});
-				} catch {
-					// Ledger append failure should not crash completion
-				}
-			}
+			state.goal = {
+				...auditTarget,
+				status: "complete",
+				stopReason: "agent",
+				updatedAt: nowIso(),
+			};
+			state.goal = writeActiveGoalFile(ctx, state.goal);
+			pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+			turnStoppedFor = state.goal?.id ?? null;
+			resetGetGoalNudgeState(state.goal?.id);
+			syncGoalTools();
+			updateUI(ctx);
 			return {
 				content: [{
 					type: "text",
 					text: buildCompletionReport({
-						detailedSummary: detailedSummary(completedGoal),
+						detailedSummary: detailedSummary(state.goal),
 						completionSummary: params.completionSummary,
 						auditorReport: auditor.output,
 					}),
 				}],
-				details: goalDetails(completedGoal),
+				details: goalDetails(state.goal),
 				terminate: true,
 			};
 		},
@@ -2403,6 +2380,31 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		refreshGoalDisplayFromDisk(ctx);
+
+		// Archive a goal that was marked complete by update_goal but whose archival
+		// was deferred so the agent could see/recognize the audit result first.
+		// This runs after the agent's turn ends — the agent has now seen the result.
+		if (state.goal?.status === "complete" && !state.goal?.archivedPath) {
+			const completedGoal = state.goal;
+			const archived = archiveGoalFile(ctx, completedGoal);
+			resetGetGoalNudgeState(completedGoal.id);
+			goalsById.delete(completedGoal.id);
+			focusedGoalId = null;
+			appendFocusEntry(null, "completed");
+			syncGoalTools();
+			updateUI(ctx);
+			try {
+				appendGoalEvent(ctx, {
+					type: "goal_completed",
+					goalId: completedGoal.id,
+					archivePath: archived.archivedPath,
+					at: nowIso(),
+				});
+			} catch {
+				// Ledger append failure should not crash completion
+			}
+		}
+
 		// If the assistant ended a turn without queuing more tool calls, push a continuation right away.
 		// #4: only queue if some real work was done this turn — otherwise the model is
 		// just chatting and we should not keep firing turns on noise.

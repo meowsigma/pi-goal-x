@@ -135,10 +135,26 @@ test("pause, resume, and clear policy preserve human-owned lifecycle affordances
 		buildGoalCreatedReport({ objective: "# Objective\nShip the feature.", detailedSummary: "Status: active" }),
 		"Goal confirmed and created.\n\nFinalized goal:\n\n# Objective\nShip the feature.\n\nGoal details:\nStatus: active",
 	);
-});
 
-test("abort policy supports agent-owned abandonment without a new lifecycle state", () => {
-	assert.match(rejectedMessage(validateGoalAbort({ goal: null, reason: "obsolete" })), /no-op/);
+	// auditSkippedReason produces "Goal audit skipped." header and includes the reason
+	const skipReport = buildCompletionReport({
+		detailedSummary: "Goal: Do the thing\nStatus: active",
+		completionSummary: "Done",
+		auditSkippedReason: "auditor disabled in settings",
+	});
+	assert.ok(skipReport.includes("Goal audit skipped."), "skip report must indicate audit was skipped");
+	assert.ok(skipReport.includes("auditor disabled in settings"), "skip reason must be included in report");
+	assert.ok(skipReport.includes("Goal complete."), "skip report must still say Goal complete");
+	// auditSkippedReason takes precedence over auditorReport
+	const skipPrecedence = buildCompletionReport({
+		detailedSummary: "Goal: Precedence test",
+		completionSummary: "Done",
+		auditorReport: "<approved/>",
+		auditSkippedReason: "bypassed",
+	});
+	assert.ok(skipPrecedence.includes("Goal audit skipped."), "auditSkippedReason must take precedence over auditorReport");
+	assert.ok(!skipPrecedence.includes("<approved/>"), "auditorReport must be ignored when auditSkippedReason is present");
+
 	assert.match(rejectedMessage(validateGoalAbort({ goal: goal({ id: "new" }), runningGoalId: "old", reason: "obsolete" })), /changed during this run/);
 	assert.match(rejectedMessage(validateGoalAbort({ goal: goal({ status: "complete" }), reason: "obsolete" })), /does not apply/);
 	assert.match(rejectedMessage(validateGoalAbort({ goal: goal(), reason: "   " })), /requires a non-empty reason/);

@@ -105,6 +105,37 @@ test("readActiveGoalFiles scans deterministic safe active goal files only", () =
 	}
 });
 
+test("writeActiveGoalFile no longer auto-archives for complete status (deferred archival)", () => {
+	const ctx = tempCtx();
+	try {
+		const goal = createGoal({
+			objective: "Complete goal defer archival",
+			autoContinue: true,
+			sisyphus: false,
+		}, Date.UTC(2026, 5, 1, 12, 0, 0));
+		const active = writeActiveGoalFile(ctx, goal);
+		assert.match(active.activePath ?? "", /^\.pi\/goals\/active_goal_/);
+		assert.equal(active.archivedPath, undefined);
+
+		// Now mark it complete BUT write via writeActiveGoalFile — should NOT archive
+		const completeGoal = { ...active, status: "complete" as const };
+		const result = writeActiveGoalFile(ctx, completeGoal);
+		// Should still be an active file (not archived)
+		assert.match(result.activePath ?? "", /^\.pi\/goals\/active_goal_/, "complete goal should still have activePath when written via writeActiveGoalFile");
+		assert.equal(result.archivedPath, undefined, "complete goal should NOT be auto-archived by writeActiveGoalFile");
+		// The active file should exist on disk with status complete in metadata
+		const raw = readFileSync(path.join(ctx.cwd, result.activePath ?? "missing"), "utf8");
+		assert.ok(raw.includes('"status": "complete"'), "file on disk must have status complete");
+
+		// archiveGoalFile should still work when called explicitly
+		const archived = archiveGoalFile(ctx, result);
+		assert.equal(archived.activePath, undefined);
+		assert.match(archived.archivedPath ?? "", /^\.pi\/goals\/archived\/goal_/);
+	} finally {
+		cleanup(ctx);
+	}
+});
+
 function pathExists(filePath: string): boolean {
 	try {
 		readFileSync(filePath);

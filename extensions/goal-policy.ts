@@ -116,11 +116,14 @@ export function abortGoalCommandMessage(args: { archived: boolean; wasDrafting: 
 	return args.archived ? "Goal aborted and archived." : args.wasDrafting ? "Drafting cancelled." : "No goal is set.";
 }
 
-export function buildCompletionReport(args: { detailedSummary: string; completionSummary?: string | null; auditorReport?: string | null }): string {
+export function buildCompletionReport(args: { detailedSummary: string; completionSummary?: string | null; auditorReport?: string | null; auditSkippedReason?: string | null }): string {
+	const auditSkipped = args.auditSkippedReason?.trim();
 	const auditorReport = args.auditorReport?.trim();
-	const lines = auditorReport
-		? ["Goal audit approved.", "", "Auditor approval:", auditorReport, "", "Goal complete."]
-		: ["Goal complete."];
+	const lines = auditSkipped
+		? ["Goal audit skipped.", "", "Reason: " + auditSkipped, "", "Goal complete."]
+		: auditorReport
+			? ["Goal audit approved.", "", "Auditor approval:", auditorReport, "", "Goal complete."]
+			: ["Goal complete."];
 	const summary = args.completionSummary?.trim();
 	if (summary) {
 		lines.push("", "Completion summary:", summary);

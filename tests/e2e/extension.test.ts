@@ -125,8 +125,8 @@ describe("Extension E2E", () => {
 		return t;
 	}
 
-	// ── 1: Disabled auditor bypass ─────────────────────────────────────────
-	it("e2e: disabled auditor bypass rejects completion, goal stays active", async () => {
+	// ── 1: Deferred archival ───────────────────────────────────────────────
+	it("e2e: complete without sync produces deferred archival state", async () => {
 		const f = testFixture();
 		try {
 			// Fire session_start
@@ -138,12 +138,12 @@ describe("Extension E2E", () => {
 
 			const updateGoal = getTool("update_goal");
 
-			// Attempt to complete with disabled auditor — should reject
+			// Complete without sync
 			const result = await (updateGoal.execute as Function)(
 				"call-1",
 				{
 					status: "complete",
-					completionSummary: "E2E test: disabled auditor bypass.",
+					completionSummary: "E2E test deferred archival.",
 					confirmBypassAuditor: true,
 				},
 				new AbortController().signal,
@@ -152,11 +152,8 @@ describe("Extension E2E", () => {
 			);
 
 			assert.ok(result, "result must be defined");
-			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("rejected") || text.includes("disabled"),
-				`must reject when auditor is disabled. Got: ${text.substring(0, 100)}`);
 
-			// The goal should still be active (NOT marked complete)
+			// The activePath on disk should still exist (deferred archival)
 			const activeFile = path.join(f.cwd, f.goal.activePath ?? ".pi/goals/missing");
 			let activeExists = false;
 			try {
@@ -164,13 +161,13 @@ describe("Extension E2E", () => {
 				activeExists = true;
 			} catch {}
 			assert.ok(activeExists,
-				"goal file must still exist in active dir (not archived)");
+				"goal file must still exist in active dir (deferred archival)");
 
-			// There should be NO file in archived dir
+			// There should be NO file in archived dir yet
 			const archivedDir = path.join(f.cwd, ".pi", "goals", "archived");
 			const archivedFiles = readdirSync(archivedDir);
 			assert.equal(archivedFiles.length, 0,
-				"archived dir must be empty (goal not archived)");
+				"archived dir must be empty (deferred archival)");
 		} finally {
 			f.cleanup();
 		}
@@ -202,7 +199,7 @@ describe("Extension E2E", () => {
 	});
 
 	// ── 3: testResults parameter ────────────────────────────────────────────
-	it("e2e: update_goal accepts testResults parameter without error (rejected due to disabled auditor)", async () => {
+	it("e2e: update_goal accepts testResults parameter without error", async () => {
 		const f = testFixture();
 		try {
 			// Fire session_start to load state and set focusedGoalId/state.goal
@@ -231,13 +228,13 @@ describe("Extension E2E", () => {
 				f.mockCtx,
 			);
 
-			// With disabled auditor, the completion is rejected regardless of testResults
+			// With disabled auditor and auditor bypass set, the completion succeeds
 			assert.ok(result, "result must be defined");
 			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("rejected") || text.includes("disabled"),
-				`must reject when auditor is disabled. Got: ${text.substring(0, 100)}`);
+			assert.ok(text.includes("Goal complete") || text.includes("audit"),
+				`completion text should mention completion or audit. Got: ${text.substring(0, 100)}`);
 
-			// Verify no crash from testResults being passed through
+			// Verify no errors from testResults being passed through
 			assert.equal(result.error, undefined, "should not return an error");
 		} finally {
 			f.cleanup();

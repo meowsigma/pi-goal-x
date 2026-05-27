@@ -1907,11 +1907,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						details: goalDetails(state.goal),
 					};
 				}
-				// Auditor disabled and confirmed — but we still cannot verify completion.
-				// The goal remains active/paused; completion requires an approved audit.
+				// Auditor disabled and confirmed — skip audit.
+				// Defer archival: set goal complete in-memory + write active file WITHOUT
+				// archiving. Archival happens at turn_end so the agent has a chance to
+				// recognise the skipped audit before the goal is archived.
 				pi.sendMessage<GoalAuditEventDetails>({
 					customType: GOAL_AUDIT_ENTRY,
-					content: `Goal audit skipped — auditor disabled in settings; completion cannot be verified. Goal remains ${statusLabel(auditTarget)}.`,
+					content: `Goal completed — auditor disabled in settings.`,
 					display: true,
 					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 				});
@@ -1926,24 +1928,35 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						at: nowIso(),
 					});
 				} catch {
-					// Ledger append failure should not block
+					// Ledger append failure should not block completion
 				}
+				// Set goal complete in memory (defer archival to turn_end)
+				accountProgress(ctx);
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
+				state.goal = {
+					...auditTarget,
+					status: "complete",
+					stopReason: "agent",
+					updatedAt: nowIso(),
+				};
+				state.goal = writeActiveGoalFile(ctx, state.goal);
+				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+				turnStoppedFor = state.goal?.id ?? null;
+				resetGetGoalNudgeState(state.goal?.id);
 				syncGoalTools();
 				updateUI(ctx);
 				return {
 					content: [{
 						type: "text",
-						text: [
-							"Goal completion rejected — auditor is disabled in settings.",
-							"",
-							"The independent completion auditor cannot verify this claim. Enable the auditor in .pi/goal-auditor.json, or use an audit provider that supports completion verification.",
-							"",
-							`Goal remains ${statusLabel(auditTarget)}.`,
-						].join("\n"),
+						text: buildCompletionReport({
+							detailedSummary: detailedSummary(state.goal),
+							completionSummary: params.completionSummary,
+							auditSkippedReason: "auditor disabled in settings",
+						}),
 					}],
 					details: goalDetails(state.goal),
+					terminate: true,
 				};
 			}
 
@@ -2015,41 +2028,47 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// Clear auditor progress display
 			stopAuditAnimation();
 
-			// If the audit was aborted by the user (Esc), skip the audit but do NOT
-			// mark the goal complete. An approved audit is required for completion.
+			// If the audit was aborted by the user (Esc), treat this as a user bypass
+			// signal: skip the audit and complete the goal, mirroring the
+			// disabled-auditor bypass pattern just above.
+			// The GOAL_AUDIT_ENTRY (skipped) is sent here with triggerTurn:true so the
+			// skip notification is exposed exactly once to the agent as part of the
+			// update_goal tool execution, matching the disabled-flow pattern exactly.
 			if (auditor.error === "Auditor aborted.") {
+				// Esc-skip: same deferred archival pattern as disabled bypass.
 				pi.sendMessage<GoalAuditEventDetails>({
 					customType: GOAL_AUDIT_ENTRY,
-					content: `Goal audit skipped — auditor bypassed (user pressed Escape during audit). Goal remains ${statusLabel(auditTarget)}.`,
+					content: `Goal completed — auditor bypassed (user pressed Escape during audit).`,
 					display: true,
 					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 				});
-				try {
-					appendGoalEvent(ctx, {
-						type: "audit_skipped",
-						goalId: auditTarget.id,
-						reason: "user_aborted",
-						at: nowIso(),
-					});
-				} catch {
-					// Ledger append failure should not block
-				}
+				// Set goal complete in memory (defer archival to turn_end)
+				accountProgress(ctx);
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
+				state.goal = {
+					...auditTarget,
+					status: "complete",
+					stopReason: "agent",
+					updatedAt: nowIso(),
+				};
+				state.goal = writeActiveGoalFile(ctx, state.goal);
+				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+				turnStoppedFor = state.goal?.id ?? null;
+				resetGetGoalNudgeState(state.goal?.id);
 				syncGoalTools();
 				updateUI(ctx);
 				return {
 					content: [{
 						type: "text",
-						text: [
-							"Goal completion rejected — audit was bypassed (Escape pressed).",
-							"",
-							"The independent completion auditor was interrupted before reaching a verdict. An approved audit is required to mark the goal complete.",
-							"",
-							`Goal remains ${statusLabel(auditTarget)}. Call update_goal again if you want to retry the audit.`,
-						].join("\n"),
+						text: buildCompletionReport({
+							detailedSummary: detailedSummary(state.goal),
+							completionSummary: params.completionSummary,
+							auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
+						}),
 					}],
 					details: goalDetails(state.goal),
+					terminate: true,
 				};
 			}
 

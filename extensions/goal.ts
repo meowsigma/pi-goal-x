@@ -2028,47 +2028,42 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// Clear auditor progress display
 			stopAuditAnimation();
 
-			// If the audit was aborted by the user (Esc), treat this as a user bypass
-			// signal: skip the audit and complete the goal, mirroring the
-			// disabled-auditor bypass pattern just above.
-			// The GOAL_AUDIT_ENTRY (skipped) is sent here with triggerTurn:true so the
-			// skip notification is exposed exactly once to the agent as part of the
-			// update_goal tool execution, matching the disabled-flow pattern exactly.
+			// If the audit was aborted by the user (Esc), skip the audit and leave the
+			// goal active/paused so the agent can ask the user what to do next.
 			if (auditor.error === "Auditor aborted.") {
-				// Esc-skip: same deferred archival pattern as disabled bypass.
 				pi.sendMessage<GoalAuditEventDetails>({
 					customType: GOAL_AUDIT_ENTRY,
-					content: `Goal completed — auditor bypassed (user pressed Escape during audit).`,
+					content: `Goal audit skipped — auditor bypassed (user pressed Escape during audit). Goal remains ${statusLabel(auditTarget)}.`,
 					display: true,
 					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 				});
-				// Set goal complete in memory (defer archival to turn_end)
-				accountProgress(ctx);
+				try {
+					appendGoalEvent(ctx, {
+						type: "audit_skipped",
+						goalId: auditTarget.id,
+						reason: "user_aborted",
+						at: nowIso(),
+					});
+				} catch {
+					// Ledger append failure should not block
+				}
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
-				state.goal = {
-					...auditTarget,
-					status: "complete",
-					stopReason: "agent",
-					updatedAt: nowIso(),
-				};
-				state.goal = writeActiveGoalFile(ctx, state.goal);
-				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
-				turnStoppedFor = state.goal?.id ?? null;
-				resetGetGoalNudgeState(state.goal?.id);
 				syncGoalTools();
 				updateUI(ctx);
 				return {
 					content: [{
 						type: "text",
-						text: buildCompletionReport({
-							detailedSummary: detailedSummary(state.goal),
-							completionSummary: params.completionSummary,
-							auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
-						}),
+						text: [
+							"Goal audit skipped (Escape pressed). The goal remains active.",
+							"",
+							"Use goal_question to ask the user whether to:",
+							"  - Mark the goal complete anyway (call update_goal again)",
+							"  - Give feedback on the work so far",
+							"  - Continue working toward the goal",
+						].join("\n"),
 					}],
 					details: goalDetails(state.goal),
-					terminate: true,
 				};
 			}
 

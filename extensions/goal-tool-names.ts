@@ -1,5 +1,5 @@
 export const SISYPHUS_STEP_TOOL_NAME = "step_complete";
-export const TWEAK_APPLY_TOOL_NAME = "apply_goal_tweak";
+export const PROPOSE_TWEAK_TOOL_NAME = "propose_goal_tweak";
 export const PROPOSE_DRAFT_TOOL_NAME = "propose_goal_draft";
 export const CREATE_GOAL_TOOL_NAME = "create_goal";
 export const QUESTION_TOOL_NAME = "goal_question";
@@ -14,7 +14,7 @@ export const GOAL_WORK_TOOL_NAMES = [
 	"update_goal",
 	"pause_goal",
 	ABORT_GOAL_TOOL_NAME,
-	TWEAK_APPLY_TOOL_NAME,
+	PROPOSE_TWEAK_TOOL_NAME,
 	CREATE_GOAL_TOOL_NAME,
 	PROPOSE_DRAFT_TOOL_NAME,
 	QUESTION_TOOL_NAME,
@@ -33,7 +33,6 @@ export const GOAL_PROGRESS_TOOL_NAMES = [
 	"update_goal",
 	"pause_goal",
 	ABORT_GOAL_TOOL_NAME,
-	TWEAK_APPLY_TOOL_NAME,
 	"write",
 	"edit",
 	"bash",

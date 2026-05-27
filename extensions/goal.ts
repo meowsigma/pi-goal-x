@@ -10,6 +10,7 @@ import {
 } from "./goal-core.ts";
 import {
 	buildDraftConfirmationText,
+	buildTweakConfirmationText,
 	goalDraftingPrompt,
 	validateGoalDraftProposal,
 	type GoalDraftingFocus,
@@ -38,7 +39,7 @@ import {
 	SISYPHUS_STEP_TOOL_NAME,
 	GOAL_PROGRESS_TOOL_NAMES,
 	lifecycleToolNamesForGoalStatus,
-	TWEAK_APPLY_TOOL_NAME,
+	PROPOSE_TWEAK_TOOL_NAME,
 } from "./goal-tool-names.ts";
 import {
 	asRecord,
@@ -127,14 +128,14 @@ const GOAL_PROGRESS_TOOL_SET = new Set<string>(GOAL_PROGRESS_TOOL_NAMES);
 
 /**
  * Tools that are NEVER blocked by the post-stop in-turn block. After pause_goal,
- * abort_goal, update_goal=complete, or apply_goal_tweak fires, the agent should
+ * abort_goal, or update_goal=complete fires, the agent should
  * yield the turn; we block all subsequent tool calls except these read-only inspections.
  */
 const POST_STOP_ALLOWED_TOOL_SET = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 
 /**
  * When non-null, /goal-tweak drafting is in progress for this goal id and the
- * agent is allowed to call apply_goal_tweak. Cleared after the tweak is applied
+ * agent is allowed to call propose_goal_tweak. Cleared after the tweak is applied
  * or when a user-driven turn arrives without a tweak follow-through. This is
  * the schema-level affordance gate that prevents the agent from "tweaking" via
  * arbitrary write/edit calls.
@@ -375,7 +376,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// Per-turn flags reset in turn_start (#4, C9 fix).
 	// goalWorkToolCalledThisTurn: tracks whether a real goal-work tool was called.
 	//   If false at turn_end, we don't queue another autoContinue (empty chat turn).
-	// turnStoppedFor: set by pause_goal / update_goal(complete) / apply_goal_tweak
+	// turnStoppedFor: set by pause_goal / update_goal(complete) / propose_goal_tweak
 	//   after their successful execute. Once set, pi.on("tool_call") blocks all
 	//   subsequent in-turn tool calls except POST_STOP_ALLOWED_TOOLS. This is the
 	//   schema fix for "agent keeps writing files after pause_goal".
@@ -392,18 +393,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		lastAccountedAt: null as number | null,
 	};
 
-	const draftingHiddenWorkTools = [
-		"bash",
-		"read",
-		"write",
-		"edit",
-		"grep",
-		"find",
-		"ls",
-		SISYPHUS_STEP_TOOL_NAME,
-		TWEAK_APPLY_TOOL_NAME,
-		CREATE_GOAL_TOOL_NAME,
-	] as const;
 	const goalExecutionWorkTools = ["read", "bash", "edit", "write"] as const;
 
 	function syncGoalTools(): void {
@@ -420,15 +409,16 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// mechanism. Keep step_complete registered for legacy transcripts, but do
 			// not expose it as an active work tool.
 			active.delete(SISYPHUS_STEP_TOOL_NAME);
-			// apply_goal_tweak is only available during a /goal-tweak drafting flow.
+			// propose_goal_tweak is only available during a /goal-tweak drafting flow.
 			// Note: tweak drafting can run against active OR paused goals.
 			if (state.goal && tweakDraftingFor === state.goal.id) {
-				active.add(TWEAK_APPLY_TOOL_NAME);
+				active.add(PROPOSE_TWEAK_TOOL_NAME);
 				active.add(QUESTION_TOOL_NAME);
 				active.add(QUESTIONNAIRE_TOOL_NAME);
 			} else {
-				active.delete(TWEAK_APPLY_TOOL_NAME);
+				active.delete(PROPOSE_TWEAK_TOOL_NAME);
 			}
+	
 			// Keep the commit tool available and let its validator enforce that a
 			// drafting flow is active. This avoids fragile hidden-tool drift after
 			// question turns, compaction, or active-tool resync.
@@ -1053,11 +1043,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		if (!focused) return;
 		const sisyphusOn = focused.sisyphus;
 		const label = sisyphusOn ? "Sisyphus tweak drafting" : "Goal tweak drafting";
-		// Activate the tweak edit-gate so apply_goal_tweak is callable.
+		// Activate the tweak edit-gate so propose_goal_tweak is callable.
 		tweakDraftingFor = focused.id;
 		syncGoalTools();
 		ctx.ui.notify(
-			`${label} started${trimmed ? `: ${truncateText(trimmed, 60)}` : ""}. The agent will interview you and then call apply_goal_tweak.`,
+			`${label} started${trimmed ? `: ${truncateText(trimmed, 60)}` : ""}. The agent will interview you and then propose the revision for you to Confirm.`,
 			"info",
 		);
 		const draftId = `tweak-${focused.id}-${Date.now().toString(36)}`;
@@ -1695,6 +1685,150 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}));
 
 	pi.registerTool(defineTool({
+		name: PROPOSE_TWEAK_TOOL_NAME,
+		label: "Propose Goal Tweak",
+		description: "During a /goal-tweak drafting flow, present the revised goal to the user for confirmation. The user sees a Confirm / Continue Chatting dialog — only on Confirm is the goal updated.",
+		promptSnippet: "Propose the revised goal to the user with a Confirm / Continue Chatting dialog.",
+		promptGuidelines: [
+			"Only call propose_goal_tweak inside a /goal-tweak drafting flow (the prompt makes that explicit). It is rejected at any other time.",
+			"newObjective must be the FULL revised objective text, formatted the same way as the original (=== Goal === or === Sisyphus Goal === block). Do NOT pass a diff or partial patch; pass the whole new objective.",
+			"For Sisyphus goals: preserve the Sisyphus style and ordered-plan wording unless the user explicitly asks to remove it.",
+			"changeSummary is a one-sentence description of WHAT changed (for the confirmation dialog, activity log, and tweak log).",
+			"The user will see a full plain-text report plus a [Confirm] / [Continue Chatting] choice. Confirm applies the tweak; Continue Chatting returns control to you to ask follow-up questions.",
+			"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT re-propose the same content immediately; iterate based on their feedback first.",
+			"Do NOT use write/edit/bash to modify the active goal file directly. propose_goal_tweak is the only sanctioned channel.",
+		],
+		parameters: Type.Object({
+			newObjective: Type.String({ description: "The complete revised objective text. For Sisyphus goals, preserve the Sisyphus style unless the user explicitly changes it." }),
+			changeSummary: Type.String({ description: "One-sentence description of what was changed (used in confirmation dialog and tweak log)." }),
+		}),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			reconcileFocusedGoalFromDisk(ctx);
+			if (!state.goal) {
+				return {
+					content: [{ type: "text", text: "No goal is set; propose_goal_tweak is a no-op." }],
+					details: goalDetails(state.goal),
+				};
+			}
+			if (tweakDraftingFor !== state.goal.id) {
+				return {
+					content: [{
+						type: "text",
+						text: "propose_goal_tweak REJECTED: no /goal-tweak drafting flow is active for this goal. " +
+							"This tool can only be called during a /goal-tweak drafting interview that the user initiated. " +
+							"If you want to change the goal, ask the user to run /goal-tweak.",
+					}],
+					details: goalDetails(state.goal),
+				};
+			}
+			if (state.goal.status !== "active" && state.goal.status !== "paused") {
+				return {
+					content: [{ type: "text", text: `Goal is ${statusLabel(state.goal)}; cannot apply a tweak.` }],
+					details: goalDetails(state.goal),
+				};
+			}
+			const newObjective = params.newObjective.trim();
+			if (!newObjective) throw new Error("propose_goal_tweak requires a non-empty newObjective.");
+			const changeSummary = params.changeSummary.trim();
+			if (!changeSummary) throw new Error("propose_goal_tweak requires a non-empty changeSummary.");
+
+			// Build the confirmation dialog text.
+			const draftSummary = buildTweakConfirmationText({
+				currentObjective: state.goal.objective,
+				newObjective,
+				changeSummary,
+				sisyphus: !!state.goal.sisyphus,
+			});
+
+			const headless = shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM });
+
+			let decision: "confirm" | "continue";
+			if (headless) {
+				decision = "confirm";
+			} else {
+				try {
+					decision = await showProposalDialog(ctx, draftSummary, state.goal.sisyphus ? "sisyphus" : "goal");
+				} catch (err) {
+					const message = proposalDialogFailureMessage(err);
+					ctx.ui.notify(message, "error");
+					return {
+						content: [{ type: "text", text: message }],
+						details: goalDetails(state.goal),
+					};
+				}
+			}
+
+			if (decision === "confirm") {
+				// Apply the tweak: write the new objective to disk authoritatively.
+				const next: GoalRecord = {
+					...state.goal,
+					objective: newObjective,
+					updatedAt: nowIso(),
+					// Clear any prior agent pause reason — the user has redefined the work.
+					pauseReason: undefined,
+					pauseSuggestedAction: undefined,
+				};
+				// IMPORTANT: bypass setGoal() / persist() here. persist() calls
+				// syncGoalPromptFromDisk() which would RE-READ the stale objective
+				// from the still-old goal file on disk and clobber our new objective
+				// before writing. propose_goal_tweak is the authoritative source for
+				// objective changes — the disk is downstream, not upstream. Do the
+				// minimal state update manually:
+				//   1) write the new record to disk authoritatively
+				//   2) update in-memory `goal` to the canonical post-write record
+				//   3) append the state entry and re-sync tools
+				//   4) clear the tweak drafting gate so propose_goal_tweak can't be re-used
+				state.goal = writeActiveGoalFile(ctx, next);
+				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+				tweakDraftingFor = null;
+				// Reset autoContinue counter — plan changed, agent gets a fresh chain.
+				resetGetGoalNudgeState(state.goal.id);
+				// Mark turn-stopped so subsequent in-turn tool calls are blocked.
+				turnStoppedFor = state.goal.id;
+				syncGoalTools();
+				updateUI(ctx);
+				ctx.ui.notify(`Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
+				// Append ledger event for tweak
+				try {
+					appendGoalEvent(ctx, {
+						type: "goal_tweaked",
+						goalId: state.goal.id,
+						changeSummary,
+						at: state.goal.updatedAt,
+					});
+				} catch {
+					// Ledger append failure should not crash tweak
+				}
+				return {
+					content: [{
+						type: "text",
+						text: `Goal tweak applied. ${changeSummary}\nStop now; the next continuation will arrive automatically if the goal is active.`,
+					}],
+					details: goalDetails(state.goal),
+					terminate: true,
+				};
+			}
+
+			// "continue" — user wants to keep chatting. Drafting state stays armed.
+			return {
+				content: [{
+					type: "text",
+					text: "Goal tweak refinement requested (Continue Chatting). The tweak was not applied — drafting remains active. Ask the user what they want changed about the revision, then revise and call propose_goal_tweak again. Do not re-propose the same content — wait for the user's input first.",
+				}],
+				details: goalDetails(state.goal),
+			};
+		},
+		renderCall(args, theme) {
+			const summary = typeof args?.changeSummary === "string" ? truncateText(args.changeSummary, 80) : "";
+			return new Text(theme.fg("toolTitle", "propose_goal_tweak ") + theme.fg("muted", summary), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			return renderGoalResult(result, theme);
+		},
+	}));
+
+	pi.registerTool(defineTool({
 		name: "update_goal",
 		label: "Update Goal",
 		description: "Mark the current active or paused pi goal complete when the objective is actually achieved.",
@@ -2200,110 +2334,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 	}));
 
-	pi.registerTool(defineTool({
-		name: TWEAK_APPLY_TOOL_NAME,
-		label: "Apply Goal Tweak",
-		description: "Atomically apply a /goal-tweak revision to the active goal. The ONLY way to modify an active goal's objective. Only available during a /goal-tweak drafting flow.",
-		promptSnippet: "Apply the revised goal objective produced by a /goal-tweak drafting interview.",
-		promptGuidelines: [
-			"Only call apply_goal_tweak inside a /goal-tweak drafting flow (the prompt makes that explicit). It is rejected at any other time.",
-			"newObjective must be the FULL revised objective text, formatted the same way as the original (=== Goal === or === Sisyphus Goal === block). Do NOT pass a diff or partial patch; pass the whole new objective.",
-			"For Sisyphus goals: preserve the Sisyphus style and ordered-plan wording unless the user explicitly asks to remove it.",
-			"changeSummary is a one-sentence description of WHAT changed (for the activity log and pause messages).",
-			"Do NOT use write/edit/bash to modify the active goal file directly. apply_goal_tweak is the only sanctioned channel.",
-			"After apply_goal_tweak returns, stop. Do not begin new task work in the same turn. The system will queue the next continuation.",
-		],
-		parameters: Type.Object({
-			newObjective: Type.String({ description: "The complete revised objective text. For Sisyphus goals, preserve the Sisyphus style unless the user explicitly changes it." }),
-			changeSummary: Type.String({ description: "One-sentence description of what was changed (used in UI notification and tweak log)." }),
-		}),
-		executionMode: "sequential",
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			reconcileFocusedGoalFromDisk(ctx);
-			if (!state.goal) {
-				return {
-					content: [{ type: "text", text: "No goal is set; apply_goal_tweak is a no-op." }],
-					details: goalDetails(state.goal),
-				};
-			}
-			if (tweakDraftingFor !== state.goal.id) {
-				return {
-					content: [{
-						type: "text",
-						text: "apply_goal_tweak REJECTED: no /goal-tweak drafting flow is active for this goal. " +
-							"This tool can only be called during a /goal-tweak drafting interview that the user initiated. " +
-							"If you want to change the goal, ask the user to run /goal-tweak.",
-					}],
-					details: goalDetails(state.goal),
-				};
-			}
-			if (state.goal.status !== "active" && state.goal.status !== "paused") {
-				return {
-					content: [{ type: "text", text: `Goal is ${statusLabel(state.goal)}; cannot apply a tweak.` }],
-					details: goalDetails(state.goal),
-				};
-			}
-			const newObjective = params.newObjective.trim();
-			if (!newObjective) throw new Error("apply_goal_tweak requires a non-empty newObjective.");
-			const changeSummary = params.changeSummary.trim();
-			if (!changeSummary) throw new Error("apply_goal_tweak requires a non-empty changeSummary.");
-			const next: GoalRecord = {
-				...state.goal,
-				objective: newObjective,
-				updatedAt: nowIso(),
-				// Clear any prior agent pause reason — the user has redefined the work.
-				pauseReason: undefined,
-				pauseSuggestedAction: undefined,
-			};
-			// IMPORTANT: bypass setGoal() / persist() here. persist() calls
-			// syncGoalPromptFromDisk() which would RE-READ the stale objective
-			// from the still-old goal file on disk and clobber our new objective
-			// before writing. apply_goal_tweak is the authoritative source for
-			// objective changes — the disk is downstream, not upstream. Do the
-			// minimal state update manually:
-			//   1) write the new record to disk authoritatively
-			//   2) update in-memory `goal` to the canonical post-write record
-			//   3) append the state entry and re-sync tools
-			//   4) clear the tweak drafting gate so apply_goal_tweak can't be re-used
-			state.goal = writeActiveGoalFile(ctx, next);
-			pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
-			tweakDraftingFor = null;
-			// Reset autoContinue counter — plan changed, agent gets a fresh chain.
-			resetGetGoalNudgeState(state.goal.id);
-			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
-			turnStoppedFor = state.goal.id;
-			syncGoalTools();
-			updateUI(ctx);
-			ctx.ui.notify(`Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
-			// Append ledger event for tweak
-			try {
-				appendGoalEvent(ctx, {
-					type: "goal_tweaked",
-					goalId: state.goal.id,
-					changeSummary,
-					at: state.goal.updatedAt,
-				});
-			} catch {
-				// Ledger append failure should not crash tweak
-			}
-			return {
-				content: [{
-					type: "text",
-					text: `Goal tweak applied. ${changeSummary}\nStop now; the next continuation will arrive automatically if the goal is active.`,
-				}],
-				details: goalDetails(state.goal),
-				terminate: true,
-			};
-		},
-		renderCall(args, theme) {
-			const summary = typeof args?.changeSummary === "string" ? truncateText(args.changeSummary, 80) : "";
-			return new Text(theme.fg("toolTitle", "apply_goal_tweak ") + theme.fg("muted", summary), 0, 0);
-		},
-		renderResult(result, _options, theme) {
-			return renderGoalResult(result, theme);
-		},
-	}));
-
 	syncGoalTools();
 
 	pi.on("context", async (event): Promise<{ messages: typeof event.messages } | undefined> => {
@@ -2353,7 +2383,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
 	pi.on("tool_call", async (event, ctx) => {
 		// Post-stop in-turn block (C9 0ad8 fix): after pause_goal / abort_goal /
-		// update_goal=complete / apply_goal_tweak fires in this turn, block all subsequent tool calls except
+		// update_goal=complete / propose_goal_tweak fires in this turn, block all subsequent tool calls except
 		// read-only inspection. Forces the agent to yield the turn instead of "fixing"
 		// the situation by creating extra files etc.
 		if (turnStoppedFor !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {

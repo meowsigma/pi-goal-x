@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
 	buildDraftConfirmationText,
+	buildTweakConfirmationText,
 	evaluateDraftingToolGate,
 	goalDraftingPrompt,
 	promptSafeObjective,
@@ -161,9 +162,57 @@ test("evaluateDraftingToolGate is a no-op after confirmation soft gate relaxatio
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "read", draftingFocus: "goal" }), { block: false });
 
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "goal_question", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "apply_goal_tweak", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
+	assert.deepEqual(evaluateDraftingToolGate({ toolName: "propose_goal_tweak", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "write", tweakDraftingGoalId: "g1", activeGoalId: "g2" }), { block: false });
 	assert.deepEqual(evaluateDraftingToolGate({ toolName: "write", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
+});
+
+test("buildTweakConfirmationText renders normal mode with current objective, change summary, and proposed new objective", () => {
+	const text = buildTweakConfirmationText({
+		currentObjective: "=== Goal ===\nObjective: Build feature X",
+		newObjective: "=== Goal ===\nObjective: Build feature Y\nConstraints: no globals",
+		changeSummary: "Added constraints section, updated objective from X to Y",
+		sisyphus: false,
+	});
+
+	assert.match(text, /^Goal tweak ready for confirmation\./);
+	assert.match(text, /Mode: Normal goal/);
+	assert.match(text, /Change:/);
+	assert.match(text, /Added constraints section, updated objective from X to Y/);
+	assert.match(text, /Current objective:/);
+	assert.match(text, /Build feature X/);
+	assert.match(text, /Proposed new objective:/);
+	assert.match(text, /Build feature Y/);
+	assert.match(text, /Constraints: no globals/);
+	assert.doesNotMatch(text, /\*\*|---|^> /m);
+});
+
+test("buildTweakConfirmationText renders sisyphus mode with correct label", () => {
+	const text = buildTweakConfirmationText({
+		currentObjective: "=== Sisyphus Goal ===\nObjective: Do steps A, B",
+		newObjective: "=== Sisyphus Goal ===\nObjective: Do steps A, B, C",
+		changeSummary: "Added step C",
+		sisyphus: true,
+	});
+
+	assert.match(text, /Mode: Sisyphus \(prompt\/criteria style\)/);
+	assert.match(text, /Goal tweak ready for confirmation\./);
+	assert.match(text, /Added step C/);
+	assert.match(text, /Do steps A, B/);
+	assert.match(text, /Do steps A, B, C/);
+});
+
+test("buildTweakConfirmationText rejects empty current objective by showing empty string", () => {
+	const text = buildTweakConfirmationText({
+		currentObjective: "",
+		newObjective: "=== Goal ===\nObjective: New",
+		changeSummary: "Initial setup",
+		sisyphus: false,
+	});
+
+	assert.match(text, /Current objective:\n\n(\n|$)/);
+	assert.match(text, /Proposed new objective:/);
+	assert.match(text, /New/);
 });
 
 test("promptSafeObjective escapes only untrusted objective tags", () => {

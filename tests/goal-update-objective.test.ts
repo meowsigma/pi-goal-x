@@ -141,13 +141,13 @@ test("buildCompletionReport handles updated objective display", () => {
 	assert.ok(report.includes("<approved/>"));
 });
 
-// ─── apply_goal_tweak handler simulation ─────────────────────────────────────
-// The apply_goal_tweak handler writes the new objective via writeActiveGoalFile,
-// appends a state entry, clears tweakDraftingFor, sets turnStoppedFor, and
-// returns terminate:true. We simulate the storage-level write and verify
-// the goal is updated on disk.
+// ─── propose_goal_tweak handler simulation ───────────────────────────────────
+// The propose_goal_tweak confirm path writes the new objective via
+// writeActiveGoalFile, appends a state entry, clears tweakDraftingFor, sets
+// turnStoppedFor, and returns terminate:true. We simulate the storage-level
+// write and verify the goal is updated on disk.
 
-test("apply_goal_tweak path: writeActiveGoalFile with new objective (simulated handler execution)", () => {
+test("propose_goal_tweak path: writeActiveGoalFile with new objective (simulated handler execution)", () => {
 	const ctx = tempCtx();
 	try {
 		const originalObj = "Original objective";
@@ -158,8 +158,8 @@ test("apply_goal_tweak path: writeActiveGoalFile with new objective (simulated h
 		const active = writeActiveGoalFile(ctx, goal);
 		assert.equal(active.objective, originalObj);
 
-		// Simulate apply_goal_tweak: write with new objective (same pattern
-		// the handler uses: spread state goal, set new objective + updatedAt)
+		// Simulate propose_goal_tweak confirm path: write with new objective (same
+		// pattern the handler uses: spread state goal, set new objective + updatedAt)
 		const tweaked = writeActiveGoalFile(ctx, {
 			...active,
 			objective: newObj,

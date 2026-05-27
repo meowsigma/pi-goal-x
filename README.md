@@ -12,8 +12,8 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 
 ### Goal objective is immutable
 
-- The goal objective is immutable — the agent **must not** modify it autonomously. Objective changes are only possible through `apply_goal_tweak`, which is gated behind the user-initiated `/goal-tweak` drafting flow. This prevents the agent from silently changing the goal contract.
-- **`apply_goal_tweak`** is the sole mechanism for updating the objective, available exclusively during a `/goal-tweak` drafting interview. If the user's requirements change, they must run `/goal-tweak` to initiate the revision flow.
+- The goal objective is immutable — the agent **must not** modify it autonomously. Objective changes are only possible through `propose_goal_tweak`, which presents the user with a Confirm / Continue Chatting dialog matching the `propose_goal_draft` confirmation pattern. This prevents the agent from silently changing the goal contract.
+- **`propose_goal_tweak`** is the sole mechanism for updating the objective, available exclusively during a `/goal-tweak` drafting flow. If the user's requirements change, they must run `/goal-tweak` to initiate the revision flow.
 
 ### Deferred archival
 
@@ -23,7 +23,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 ### E2e test infrastructure
 
 - **Deterministic fork tests using `--mode json`**: the e2e suite spawns a real `pi --fork --mode json` session, parses structured `tool_execution_start`/`tool_execution_end` JSON events for field-level assertions — no free-text AI output parsing. Uses `--append-system-prompt` + `--tools` to force deterministic tool calls.
-- **Full coverage**: 131 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), and real `pi --fork --mode json` tests (3 scenarios: quick-sync, combined sync+complete, deferred archival).
+- **Full coverage**: 143 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), real `pi --fork --mode json` tests (3 scenarios: quick-sync, combined sync+complete, deferred archival), and propose_goal_tweak unit/integration/e2e tests (15).
 
 ### Completion auditor
 
@@ -156,11 +156,12 @@ The extension exposes tools only when they make sense for the current lifecycle 
 | `goal_question` | drafting / tweak drafting | Ask one focused user question |
 | `goal_questionnaire` | drafting / tweak drafting | Ask multiple structured questions |
 | `get_goal` | always | Read the focused goal state; mentions other open goals when present |
-| `propose_goal_draft` | registered; accepted only during goal drafting | Submit a concrete draft for user confirmation |
-| `apply_goal_tweak` | tweak drafting only | Submit a revision to an existing goal |
+| `propose_goal_draft` | drafting only (goal creation) | Submit a concrete draft for user confirmation |
+| `propose_goal_tweak` | tweak drafting only | Submit a revision to an existing goal (shows Confirm / Continue Chatting dialog) |
 | `update_goal` | focused active or paused goal | Mark the focused goal complete when all requirements are satisfied. When the auditor is disabled, supply `confirmBypassAuditor: true` after user confirmation to bypass the audit |
 | `pause_goal` | focused active goal | Pause the focused goal because of a real blocker |
 | `abort_goal` | focused active or paused goal | Abort/archive an obsolete, impossible, unsafe, or user-cancelled focused goal |
+| `propose_goal_tweak` | tweak drafting only | Submit a revision to the focused goal (shows Confirm / Continue Chatting dialog) |
 | `step_complete` | hidden / legacy | Compatibility no-op; Sisyphus no longer requires a step counter |
 | `create_goal` | hidden | Direct calls are rejected; normal creation goes through `propose_goal_draft` |
 
@@ -227,7 +228,7 @@ The shipped gates are intentionally small and mechanical.
 | Completion auditor gate | Archiving completion unless an independent pi auditor agent returns `<approved/>` |
 | Abort gate | Aborting missing, stale, completed, or reasonless goals |
 | Direct-create rejection | Hidden `create_goal` calls creating goals without the confirmation flow |
-| Post-stop block | Continuing to call tools after `pause_goal`, `abort_goal`, `update_goal`, or `apply_goal_tweak` stops the turn |
+| Post-stop block | Continuing to call tools after `pause_goal`, `abort_goal`, `update_goal`, or `propose_goal_tweak` stops the turn |
 | Empty-turn guard | Pure chat loops that would keep auto-continuing without meaningful goal work |
 | Abort pause | Active goals staying active after user abort / Ctrl-C |
 | Disk reconciliation | External pause/archive/delete/status changes being ignored or overwritten by stale memory |

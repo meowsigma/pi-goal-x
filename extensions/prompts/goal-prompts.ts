@@ -139,17 +139,19 @@ export function goalTweakDraftingPrompt(current: GoalRecord, hint: string): stri
 		...focusItems,
 		"",
 		"When the revision is clear:",
-		"1. Call apply_goal_tweak with:",
+		"1. Call propose_goal_tweak with:",
 		"   - newObjective: the FULL revised objective text, formatted the same way as the original" + (sisyphusOn
 			? " === Sisyphus Goal === block (Objective / Success criteria / Boundaries / Constraints / If blocked / Sisyphus reminder)."
 			: " === Goal === block (Objective / Success criteria / Boundaries / Constraints / If blocked)."),
 		"   - changeSummary: one sentence describing what changed.",
-		"2. apply_goal_tweak is the ONLY sanctioned way to change an active goal's objective. It atomically updates the goal record and the on-disk file. Do not attempt to bypass it.",
-		"3. After apply_goal_tweak returns, stop. If the goal is active, the next continuation will arrive automatically. If the goal is paused, the user will resume it explicitly. Either way, do not begin task work in this same turn.",
+		"2. propose_goal_tweak opens the user's Confirm / Continue Chatting dialog.",
+		"   - Confirm applies the tweak. Stop; the next continuation will arrive automatically if the goal is active.",
+		"   - Continue Chatting means the drafting stays active — ask the user what they want changed, then revise and call propose_goal_tweak again.",
+		"3. propose_goal_tweak is the ONLY sanctioned way to change an active goal's objective. It atomically updates the goal record and the on-disk file. Do not attempt to bypass it.",
 		"",
 		"Edge cases:",
-		"- If you decide no change is actually needed, say so clearly in one sentence and stop without calling apply_goal_tweak.",
-		"- If the hint conflicts with the existing goal in a major way, propose two or three concrete alternative revisions and let the user pick before calling apply_goal_tweak.",
+		"- If you decide no change is actually needed, say so clearly in one sentence and stop without calling propose_goal_tweak.",
+		"- If the hint conflicts with the existing goal in a major way, propose two or three concrete alternative revisions and let the user pick before calling propose_goal_tweak.",
 	].join("\n");
 }
 

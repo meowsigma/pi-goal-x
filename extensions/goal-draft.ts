@@ -50,6 +50,33 @@ export function buildDraftConfirmationText(args: {
 	return lines.join("\n");
 }
 
+export function buildTweakConfirmationText(args: {
+	currentObjective: string;
+	newObjective: string;
+	changeSummary: string;
+	sisyphus: boolean;
+}): string {
+	const lines: string[] = [];
+	const modeLabel = args.sisyphus ? "Sisyphus (prompt/criteria style)" : "Normal goal";
+	lines.push("Goal tweak ready for confirmation.");
+	lines.push("");
+	lines.push("Draft details:");
+	lines.push(`Mode: ${modeLabel}`);
+	lines.push("");
+	lines.push("Change:");
+	lines.push("");
+	lines.push(args.changeSummary);
+	lines.push("");
+	lines.push("Current objective:");
+	lines.push("");
+	lines.push(args.currentObjective);
+	lines.push("");
+	lines.push("Proposed new objective:");
+	lines.push("");
+	lines.push(args.newObjective);
+	return lines.join("\n");
+}
+
 export function evaluateDraftingToolGate(args: {
 	toolName: string;
 	draftingFocus?: GoalDraftingFocus | null;

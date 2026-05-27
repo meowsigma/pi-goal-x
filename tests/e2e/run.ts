@@ -350,4 +350,63 @@ describe("Subagent E2E", () => {
 				`Active: ${activeFile}\nArchived: ${readdirSync(archivedDir).length} files`);
 		} finally { f.cleanup(); }
 	});
+
+	it("fork: propose_goal_tweak rejects without /goal-tweak drafting flow",
+		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
+		const cwd = mkdtempSync(path.join(tmpdir(), "pi-goal-tweak-fork-"));
+		try {
+			mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+			const goalId = `mptweak${Date.now().toString(36)}`;
+			const now = new Date().toISOString();
+			const sessionId = `test-${now.slice(-8)}`;
+			const activePath = `.pi/goals/active_goal_${goalId}.md`;
+			const goalData = {
+				id: goalId, objective: "E2E fork tweak test: initial", status: "active" as const,
+				autoContinue: true, sisyphus: false, usage: { tokensUsed: 0, activeSeconds: 0 },
+				createdAt: now, updatedAt: now, activePath,
+			};
+			writeFileSync(path.join(cwd, activePath), JSON.stringify(goalData) + "\n\n# Goal Prompt\n\nE2E fork tweak test\n");
+			writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
+			const sessionFile = path.join(cwd, "session.jsonl");
+			writeFileSync(sessionFile, [
+				JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: now, cwd }),
+				JSON.stringify({ type: "model_change", id: "m1", parentId: null, timestamp: now, provider: "opencode-go", modelId: "deepseek-v4-flash" }),
+				JSON.stringify({ type: "thinking_level_change", id: "t1", parentId: "m1", timestamp: now, thinkingLevel: "off" }),
+				JSON.stringify({ type: "custom", customType: "pi-goal-focus", timestamp: now, data: { version: 1, focusedGoalId: goalId, reason: "created" } }),
+				JSON.stringify({ type: "custom", customType: "pi-goal-state", timestamp: now, data: { version: 3, goal: goalData } }),
+			].join("\n") + "\n");
+
+			const sysPromptFile = path.join(cwd, "force-tweak.md");
+			writeFileSync(sysPromptFile, "You must call propose_goal_tweak with newObjective and changeSummary. Only respond using tool calls. Never output only text without making a tool call.");
+
+			const result = spawnSync("pi", [
+				"--mode", "json",
+				"--no-extensions", "-e", EXT_PATH,
+				"--tools", "get_goal,propose_goal_tweak",
+				"--append-system-prompt", sysPromptFile,
+				"--fork", sessionFile,
+				"-p", "Call propose_goal_tweak with newObjective='Updated' and changeSummary='test'.",
+			], {
+				cwd, encoding: "utf8", timeout: 120_000, stdio: "pipe",
+				env: { ...process.env, PI_OFFLINE: "1", NODE_OPTIONS: "" },
+			});
+			const stdout = result.stdout ?? "";
+			const stderr = result.stderr ?? "";
+
+			const events = findToolEvents(stdout).filter((e) => e.start.toolName === "propose_goal_tweak");
+			assert.ok(events.length > 0,
+				`fork output must contain at least one propose_goal_tweak call.\n` +
+				`stdout: ${stdout.substring(0, 1000)}\nstderr: ${stderr.substring(0, 500)}`);
+
+			const ev = events[0];
+			const res = ev.end.result;
+			const contentText = res.content?.map((c: { text?: string }) => c.text ?? "").join(" ") ?? "";
+			assert.ok(
+				contentText.includes("REJECTED") || contentText.includes("no /goal-tweak drafting flow"),
+				`propose_goal_tweak must be rejected without /goal-tweak flow. Got: ${contentText}`
+			);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
 });

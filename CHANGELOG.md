@@ -8,6 +8,30 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.11.0] — 2026-05-27
+
+### Removed
+
+- **`apply_goal_tweak` fully removed** — replaced with `propose_goal_tweak`, a confirmation-dialog tool that mirrors `propose_goal_draft` exactly. The old `apply_goal_tweak` (which applied tweaks inline without user confirmation) is deleted entirely from source: constant, registration, imports, handler, and all references. The `/goal-tweak` flow now shows a Confirm / Continue Chatting dialog before applying the revision.
+
+### Added
+
+- **`propose_goal_tweak` tool** — registered alongside `propose_goal_draft`, available exclusively during `/goal-tweak` drafting. Uses `showProposalDialog()` and `buildTweakConfirmationText()` to present the current objective, change summary, and proposed new objective. On Confirm: writes the new objective, clears drafting state, terminates the turn. On Continue Chatting: keeps drafting active for further refinement.
+- **Comprehensive test coverage** — 13 new tests across three layers:
+  - Unit: `buildTweakConfirmationText` renders normal/sisyphus modes and edge cases (3 tests).
+  - Integration: tool registration, schema validation, rejection gates (no goal set, no `/goal-tweak` flow), prompt guidelines, renderCall/renderResult (11 tests).
+  - E2E: real `pi --fork --mode json` test verifying `propose_goal_tweak` is rejected without an active `/goal-tweak` drafting flow (1 test).
+  - Total test count: 143 tests (up from 131), all passing, TypeScript zero errors.
+
+### Changed
+
+- **`/goal-tweak` notification** now says "started a `/goal-tweak` flow on `{objective}` — I'll draft the change and propose the revision for you to Confirm." reflecting the new confirmation pattern.
+- **`syncGoalTools()` and `fullGoalToolVisibility()`** — `propose_goal_tweak` shown during tweak drafting, hidden otherwise. Removed dead `draftingHiddenWorkTools` constant referencing `TWEAK_APPLY_TOOL_NAME`.
+- **`goalTweakDraftingPrompt`** guides the agent to use `propose_goal_tweak` with confirmation dialog.
+- **Test assertions updated** in `goal-tool-names.test.ts`, `goal-draft.test.ts`, `goal-update-objective.test.ts`, `goal-prompts.test.ts` — all references to `apply_goal_tweak` / `TWEAK_APPLY_TOOL_NAME` replaced with `propose_goal_tweak` / `PROPOSE_TWEAK_TOOL_NAME`.
+
+---
+
 ## [0.10.2] — 2026-05-26
 
 ### Removed
@@ -305,6 +329,11 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.11.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.11.0
+[0.10.2]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.10.2
+[0.10.1]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.10.1
+[0.10.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.10.0
+[0.9.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.9.0
 [0.8.1]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.8.1
 [0.8.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.8.0
 [0.7.2]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.7.2

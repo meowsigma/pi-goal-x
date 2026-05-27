@@ -6,8 +6,8 @@ export const QUESTION_TOOL_NAME = "goal_question";
 export const QUESTIONNAIRE_TOOL_NAME = "goal_questionnaire";
 export const ABORT_GOAL_TOOL_NAME = "abort_goal";
 
-export const ACTIVE_GOAL_TOOL_NAMES = ["get_goal", "update_goal", "pause_goal", ABORT_GOAL_TOOL_NAME] as const;
-export const PAUSED_GOAL_TOOL_NAMES = ["get_goal", "update_goal", ABORT_GOAL_TOOL_NAME] as const;
+export const ACTIVE_GOAL_TOOL_NAMES = ["get_goal", "update_goal", "pause_goal", ABORT_GOAL_TOOL_NAME, PROPOSE_TWEAK_TOOL_NAME] as const;
+export const PAUSED_GOAL_TOOL_NAMES = ["get_goal", "update_goal", ABORT_GOAL_TOOL_NAME, PROPOSE_TWEAK_TOOL_NAME] as const;
 export const NO_FOCUSED_GOAL_TOOL_NAMES = ["get_goal"] as const;
 
 export const GOAL_WORK_TOOL_NAMES = [

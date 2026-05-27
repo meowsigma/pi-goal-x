@@ -409,13 +409,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// mechanism. Keep step_complete registered for legacy transcripts, but do
 			// not expose it as an active work tool.
 			active.delete(SISYPHUS_STEP_TOOL_NAME);
-			// propose_goal_tweak is only available during a /goal-tweak drafting flow.
-			// Note: tweak drafting can run against active OR paused goals.
+			// propose_goal_tweak is always available for active/paused goals via lifecycle tools.
+			// During a /goal-tweak drafting flow, additionally expose question tools.
 			if (state.goal && tweakDraftingFor === state.goal.id) {
 				active.add(PROPOSE_TWEAK_TOOL_NAME);
 				active.add(QUESTION_TOOL_NAME);
 				active.add(QUESTIONNAIRE_TOOL_NAME);
-			} else {
+			}
+			// Outside of active/paused states, remove propose_goal_tweak
+			if (!state.goal || state.goal.status === "complete") {
 				active.delete(PROPOSE_TWEAK_TOOL_NAME);
 			}
 	
@@ -1687,13 +1689,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	pi.registerTool(defineTool({
 		name: PROPOSE_TWEAK_TOOL_NAME,
 		label: "Propose Goal Tweak",
-		description: "During a /goal-tweak drafting flow, present the revised goal to the user for confirmation. The user sees a Confirm / Continue Chatting dialog — only on Confirm is the goal updated.",
+		description: "Propose a goal tweak or auto-start the /goal-tweak drafting flow. When a goal is active or paused and no /goal-tweak flow is active, calling this auto-starts the drafting interview; inside an active flow it presents the revised goal for confirmation.",
 		promptSnippet: "Propose the revised goal to the user with a Confirm / Continue Chatting dialog.",
 		promptGuidelines: [
-			"Only call propose_goal_tweak inside a /goal-tweak drafting flow (the prompt makes that explicit). It is rejected at any other time.",
+			"Always callable when a goal is active or paused. Calling outside a /goal-tweak flow automatically starts one — the tool enters a drafting interview so you can clarify the change before proposing.",
 			"newObjective must be the FULL revised objective text, formatted the same way as the original (=== Goal === or === Sisyphus Goal === block). Do NOT pass a diff or partial patch; pass the whole new objective.",
 			"For Sisyphus goals: preserve the Sisyphus style and ordered-plan wording unless the user explicitly asks to remove it.",
-			"changeSummary is a one-sentence description of WHAT changed (for the confirmation dialog, activity log, and tweak log).",
+			"changeSummary is a one-sentence description of WHAT changed (for the confirmation dialog, activity log, and tweak log). When auto-starting a tweak flow, this is used as the hint for the drafting interview.",
 			"The user will see a full plain-text report plus a [Confirm] / [Continue Chatting] choice. Confirm applies the tweak; Continue Chatting returns control to you to ask follow-up questions.",
 			"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT re-propose the same content immediately; iterate based on their feedback first.",
 			"Do NOT use write/edit/bash to modify the active goal file directly. propose_goal_tweak is the only sanctioned channel.",
@@ -1711,17 +1713,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					details: goalDetails(state.goal),
 				};
 			}
-			if (tweakDraftingFor !== state.goal.id) {
-				return {
-					content: [{
-						type: "text",
-						text: "propose_goal_tweak REJECTED: no /goal-tweak drafting flow is active for this goal. " +
-							"This tool can only be called during a /goal-tweak drafting interview that the user initiated. " +
-							"If you want to change the goal, ask the user to run /goal-tweak.",
-					}],
-					details: goalDetails(state.goal),
-				};
-			}
 			if (state.goal.status !== "active" && state.goal.status !== "paused") {
 				return {
 					content: [{ type: "text", text: `Goal is ${statusLabel(state.goal)}; cannot apply a tweak.` }],
@@ -1732,6 +1723,19 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (!newObjective) throw new Error("propose_goal_tweak requires a non-empty newObjective.");
 			const changeSummary = params.changeSummary.trim();
 			if (!changeSummary) throw new Error("propose_goal_tweak requires a non-empty changeSummary.");
+
+			// Auto-start the tweak drafting flow if not already active.
+			if (tweakDraftingFor !== state.goal.id) {
+				await startGoalTweakDrafting(changeSummary, ctx);
+				return {
+					content: [{
+						type: "text",
+						text: "Tweak drafting flow auto-started. The drafting interview prompt will arrive in a new turn. " +
+							"Ask the user clarifying questions as needed, refine the proposal, then call propose_goal_tweak again with the complete revision.",
+					}],
+					details: goalDetails(state.goal),
+				};
+			}
 
 			// Build the confirmation dialog text.
 			const draftSummary = buildTweakConfirmationText({

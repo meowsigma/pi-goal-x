@@ -58,6 +58,11 @@ function createMockCtx(cwd: string, sessionEntries: unknown[]): ExtensionContext
 	return {
 		cwd,
 		hasUI: false,
+		ui: {
+			notify: () => {},
+			setStatus: () => {},
+			setWidget: () => {},
+		},
 		sessionManager: {
 			getBranch: () => sessionEntries,
 			getCwd: () => cwd,
@@ -139,11 +144,20 @@ describe("propose_goal_tweak", () => {
 			"changeSummary must be required");
 	});
 
-	it("is not in the lifecycle tool set for normal phase", async () => {
+	it("is in the lifecycle tool set for active and paused goals", async () => {
 		const { lifecycleToolNamesForGoalStatus } = await import("../extensions/goal-tool-names.ts");
-		const normalTools = lifecycleToolNamesForGoalStatus("active", "normal");
-		assert.equal(normalTools.includes("propose_goal_tweak"), false,
-			"propose_goal_tweak must not appear in normal lifecycle tools");
+		const activeTools = lifecycleToolNamesForGoalStatus("active", "normal");
+		assert.equal(activeTools.includes("propose_goal_tweak"), true,
+			"propose_goal_tweak must appear in active lifecycle tools");
+		const pausedTools = lifecycleToolNamesForGoalStatus("paused", "normal");
+		assert.equal(pausedTools.includes("propose_goal_tweak"), true,
+			"propose_goal_tweak must appear in paused lifecycle tools");
+		const completeTools = lifecycleToolNamesForGoalStatus("complete", "normal");
+		assert.equal(completeTools.includes("propose_goal_tweak"), false,
+			"propose_goal_tweak must NOT appear in complete lifecycle tools");
+		const noGoalTools = lifecycleToolNamesForGoalStatus(null, "normal");
+		assert.equal(noGoalTools.includes("propose_goal_tweak"), false,
+			"propose_goal_tweak must NOT appear when no goal is set");
 	});
 
 	// ── Validation gates ────────────────────────────────────────────────────
@@ -168,7 +182,7 @@ describe("propose_goal_tweak", () => {
 		}
 	});
 
-	it("rejects with correct message when tweakDraftingFor does not match (no active /goal-tweak flow)", async () => {
+	it("auto-starts tweak drafting flow when tweakDraftingFor does not match", async () => {
 		const f = testFixture();
 		try {
 			// Fire session_start to load state.goal
@@ -187,8 +201,8 @@ describe("propose_goal_tweak", () => {
 			assert.ok(result, "result must be defined");
 			const text = result.content?.[0]?.text ?? "";
 			assert.ok(
-				text.includes("REJECTED") || text.includes("/goal-tweak drafting flow"),
-				`must reject when no tweak drafting is active. Got: ${text}`,
+				text.includes("auto-started") || text.includes("Tweak drafting flow"),
+				`must auto-start tweak drafting flow. Got: ${text}`,
 			);
 		} finally {
 			f.cleanup();

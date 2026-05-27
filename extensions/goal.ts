@@ -2037,16 +2037,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					display: true,
 					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 				});
-				try {
-					appendGoalEvent(ctx, {
-						type: "audit_skipped",
-						goalId: auditTarget.id,
-						reason: "user_aborted",
-						at: nowIso(),
-					});
-				} catch {
-					// Ledger append failure should not block
-				}
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
 				syncGoalTools();

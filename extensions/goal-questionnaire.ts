@@ -318,7 +318,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 					const selected = i === optionIndex;
 					const prefix = selected ? theme.fg("accent", "> ") : "  ";
 					const recTag = !opt.isCustom && q?.recommended === i ? theme.fg("success", " ★") : "";
-					add(prefix + theme.fg(selected ? "accent" : "text", `${i + 1}. ${opt.label}`) + recTag);
+					addWrapped(prefix + theme.fg(selected ? "accent" : "text", `${i + 1}. ${opt.label}`) + recTag);
 				}
 			}
 

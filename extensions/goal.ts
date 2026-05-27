@@ -2033,7 +2033,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (auditor.error === "Auditor aborted.") {
 				pi.sendMessage<GoalAuditEventDetails>({
 					customType: GOAL_AUDIT_ENTRY,
-					content: `Goal audit skipped — auditor bypassed (user pressed Escape during audit). Goal remains ${statusLabel(auditTarget)}.`,
+					content: [
+						`Goal audit skipped — auditor bypassed (user pressed Escape during audit).`, 
+						`Goal remains ${statusLabel(auditTarget)}.`, 
+						"", 
+						"Use goal_question to ask the user whether to:", 
+						"  - Mark the goal complete anyway (call update_goal again)", 
+						"  - Give feedback on the work so far", 
+						"  - Continue working toward the goal",
+					].join("\n"),
 					display: true,
 					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 				});

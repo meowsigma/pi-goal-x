@@ -42,6 +42,8 @@ Keep this goal in force until it is actually achieved. Do not pause for confirma
 
 The completion auditor is independent and semantic, not a paperwork checklist. It may inspect files and command output, and it will reject scaffold-only, alpha, template, proxy-metric, or weakly verified completions with <disapproved/>.
 
+If the user presses Escape while the audit is running, the audit is skipped and the goal remains active. Use goal_question to ask the user whether to mark the goal complete anyway, give feedback, or continue working toward the goal.
+
 If you hit a real blocker that you cannot resolve with one more reasonable next step (missing credentials, contradictory spec, file/permission you cannot access, dangerous operation pending user approval, or an unclear Sisyphus-style ordered plan), the CORRECT action is to call pause_goal({reason, suggestedAction?}) with a structured, non-empty reason. pause_goal IS the channel for handing control back to the user — do not substitute a conversational "blocked, please help" summary in your final message and skip the tool call. Without pause_goal, the goal stays "active" and the UI cannot show the blocker. After pause_goal returns, you may add one short user-facing summary, but the tool call comes first.
 
 If the user explicitly asks to abandon/cancel this goal, or the objective is obsolete, impossible, or unsafe to continue and should not be marked complete, call abort_goal({reason}) with a non-empty reason and stop.

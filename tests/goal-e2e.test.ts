@@ -49,8 +49,8 @@ function readArchivedFile(ctx: TestContext, goal: GoalRecord): string {
 }
 
 // ── 1. Sequential quick-syncs ────────────────────────────────────────────────
-// Simulates: agent detects drift, calls update_goal({updatedObjective}),
-// then detects more drift, calls update_goal({updatedObjective}) again.
+// Simulates: agent detects drift, calls update_goal (deprecated),
+// then detects more drift, calls update_goal again.
 // Only the latest objective should be on disk.
 
 test("sequential quick-syncs: two updates, only latest objective on disk", () => {
@@ -104,13 +104,13 @@ test("quick-sync then later complete: archived file has updated objective", () =
 		const goal = makeGoal({ objective: originalObj });
 		const active = writeActiveGoalFile(ctx, goal);
 
-		// Step 1: Quick sync (simulating update_goal({updatedObjective}))
+		// Step 1: Quick sync (simulating update_goal (deprecated))
 		const synced = writeActiveGoalFile(ctx, { ...active, objective: updatedObj });
 		assert.equal(synced.objective, updatedObj);
 		assert.equal(synced.status, "active");
 		assert.equal(synced.archivedPath, undefined);
 
-		// Step 2: Later, mark complete (simulating update_goal({status:"complete"}))
+		// Step 2: Later, mark complete (simulating complete_goal({status:"complete"}))
 		const completed = writeActiveGoalFile(ctx, {
 			...synced,
 			status: "complete" as const,
@@ -230,7 +230,7 @@ test("multiple syncs then complete: final objective in archived file", () => {
 });
 
 // ── 7. Sync while paused ─────────────────────────────────────────────────────
-// Simulates: goal is paused, agent syncs objective via update_goal.
+// Simulates: goal is paused, agent syncs objective via propose_goal_tweak.
 // Status stays paused, objective changes on disk.
 
 test("sync while paused: status stays paused, objective changed on disk", () => {

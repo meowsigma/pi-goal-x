@@ -28,7 +28,7 @@
   -> runtime 重新计算 prompt 与 tool surface
   -> 执行 agent 按 focused goal 工作
   -> tool call / turn event 更新 accounting 与 ledger
-  -> 执行 agent 调用 update_goal 请求完成
+  -> 执行 agent 调用 complete_goal 请求完成
   -> 独立 auditor agent 检查完成声明
   -> 只有 auditor approval 才归档为 complete
 ```
@@ -43,7 +43,7 @@
   -> 用户确认
   -> 写入 active goal 文件并设置 focus
   -> agent 跨一个或多个 turn 执行工作
-  -> agent 调用 update_goal(status="complete")
+  -> agent 调用 complete_goal(status="complete")
   -> 对话中出现 Goal audit started
   -> auditor session 检查真实产物
   -> 对话中出现 Goal audit approved
@@ -200,7 +200,7 @@ interface GoalConfirmationIntent {
 | `goal_question` / `goal_questionnaire` | goal confirmation / tweak drafting 中的结构化用户对话。 |
 | `propose_goal_draft` | 提交 goal 草案给用户确认；没有 confirmation intent 时会被 validator 拒绝。 |
 | `apply_goal_tweak` | 提交并应用 goal 修改。 |
-| `update_goal` | 请求完成目标，并触发独立审计。 |
+| `complete_goal` | 请求完成目标，并触发独立审计。 |
 | `pause_goal` | agent 因真实 blocker 暂停目标。 |
 | `abort_goal` | agent 因目标废弃、不可行、不安全等原因中止目标。 |
 | `step_complete` | 隐藏的 legacy no-op；Sisyphus 不再使用 step counter。 |
@@ -267,7 +267,7 @@ completion 不信任执行 agent 单方声明，而是一个双 agent 协议。
 }
 ```
 
-`update_goal` 会先校验 focused goal 是否可以完成，然后写入 `completion_requested` ledger event。
+`complete_goal` 会先校验 focused goal 是否可以完成，然后写入 `completion_requested` ledger event。
 
 ### 9.2 对话中出现 audit started
 
@@ -281,7 +281,7 @@ Auditor model: ...
 Completion claim: ...
 ```
 
-这让 audit 成为 transcript 里一个明确的 agentic 阶段，而不是隐藏在 `update_goal` tool result 里。
+这让 audit 成为 transcript 里一个明确的 agentic 阶段，而不是隐藏在 `complete_goal` tool result 里。
 
 ### 9.3 独立 auditor session
 
@@ -343,7 +343,7 @@ Audit Report 或 rejection reason
 
 agent 可以在真实 blocker 下调用 `pause_goal`。用户也可以用 `/goal-pause` 或 abort active run 来暂停目标。
 
-`pause_goal`、`abort_goal`、`update_goal`、`apply_goal_tweak` 成功后，会设置 `turnStoppedFor`。之后同一个 turn 里，`tool_call` hook 会阻止额外的非允许工具调用。这个 hard gate 仍然保留：生命周期已经 stop 后，agent 应该总结并交还控制，而不是继续修改文件。
+`pause_goal`、`abort_goal`、`complete_goal`、`apply_goal_tweak` 成功后，会设置 `turnStoppedFor`。之后同一个 turn 里，`tool_call` hook 会阻止额外的非允许工具调用。这个 hard gate 仍然保留：生命周期已经 stop 后，agent 应该总结并交还控制，而不是继续修改文件。
 
 pause 与 abort 的区别：
 
@@ -391,7 +391,7 @@ Execution runtime
   v
 Executor agent
   |-- 正常 read/write/bash/edit 工作
-  |-- pause_goal / abort_goal / update_goal
+  |-- pause_goal / abort_goal / complete_goal
   v
 Completion request
   |-- 对话中出现 Goal audit started

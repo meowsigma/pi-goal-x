@@ -128,7 +128,7 @@ const GOAL_PROGRESS_TOOL_SET = new Set<string>(GOAL_PROGRESS_TOOL_NAMES);
 
 /**
  * Tools that are NEVER blocked by the post-stop in-turn block. After pause_goal,
- * abort_goal, or update_goal=complete fires, the agent should
+ * abort_goal, or complete_goal fires, the agent should
  * yield the turn; we block all subsequent tool calls except these read-only inspections.
  */
 const POST_STOP_ALLOWED_TOOL_SET = new Set<string>(POST_STOP_ALLOWED_TOOLS);
@@ -376,7 +376,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// Per-turn flags reset in turn_start (#4, C9 fix).
 	// goalWorkToolCalledThisTurn: tracks whether a real goal-work tool was called.
 	//   If false at turn_end, we don't queue another autoContinue (empty chat turn).
-	// turnStoppedFor: set by pause_goal / update_goal(complete) / propose_goal_tweak
+	// turnStoppedFor: set by pause_goal / complete_goal / propose_goal_tweak
 	//   after their successful execute. Once set, pi.on("tool_call") blocks all
 	//   subsequent in-turn tool calls except POST_STOP_ALLOWED_TOOLS. This is the
 	//   schema fix for "agent keeps writing files after pause_goal".
@@ -1523,7 +1523,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				}
 			}
 			const lifecycleHint = view && (view.status === "active" || view.status === "paused")
-				? "\nLifecycle tools: if evidence proves the objective is satisfied, call update_goal({status: \"complete\"}); if blocked, call pause_goal({reason, suggestedAction?}); if abandoned/obsolete/unsafe, call abort_goal({reason}). For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools."
+				? "\nLifecycle tools: if evidence proves the objective is satisfied, call complete_goal({status: \"complete\"}); if blocked, call pause_goal({reason, suggestedAction?}); if abandoned/obsolete/unsafe, call abort_goal({reason}). For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools."
 				: "";
 			const text = view
 				? `${detailedSummary(view)}${lifecycleHint}${nudge}${otherCount > 0 ? `\nOther open goals: ${otherCount} (human can run /goal-list or /goal-focus)` : ""}`
@@ -1833,16 +1833,16 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}));
 
 	pi.registerTool(defineTool({
-		name: "update_goal",
-		label: "Update Goal",
-		description: "Mark the current active or paused pi goal complete when the objective is actually achieved.",
-		promptSnippet: "Mark the active or paused pi goal complete when the objective is achieved.",
+		name: "complete_goal",
+		label: "Complete Goal",
+		description: "Mark the current active or paused pi goal complete. Only call this when the goal objective is actually achieved — no required work remains.",
+		promptSnippet: "Mark the active or paused pi goal complete — only when every requirement is satisfied.",
 		promptGuidelines: [
-			"Use update_goal with status=complete only when the pi goal objective has actually been achieved and no required work remains.",
-			"Before calling update_goal, summarize the evidence you believe proves completion; the tool will launch an independent pi auditor agent to inspect the workspace and judge the claim.",
-			"The auditor is authoritative: completion is archived only if the auditor report ends with <approved/>. If it ends with <disapproved/> or no approval marker, update_goal is rejected and the goal remains open.",
-			"Do not call update_goal merely because work is stopping, substantial progress was made, or tests passed without covering every requirement.",
-			"Do not use update_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
+			"Call complete_goal with status=complete only when the pi goal objective has actually been achieved and no required work remains.",
+			"Before calling complete_goal, summarize the evidence you believe proves completion; the tool will launch an independent pi auditor agent to inspect the workspace and judge the claim.",
+			"The auditor is authoritative: completion is archived only if the auditor report ends with <approved/>. If it ends with <disapproved/> or no approval marker, complete_goal is rejected and the goal remains open.",
+			"Do NOT call complete_goal if any work remains, even if substantial progress was made. Do not use it merely because work is stopping, tests passed, or you are blocked.",
+			"Do not use complete_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
 			"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
 			"The goal objective is immutable. The agent MUST NOT modify the goal objective on its own initiative. If the user gives requirements, feedback, or corrections that differ from the goal objective, ask the user to run /goal-tweak to revise the goal. Use goal_question to confirm when the change is ambiguous.",
 			"If you have just run the test suite successfully and the tests all pass, include a testResults object with the exit code (0) and relevant output. The auditor will see this evidence and can skip re-running the tests.",
@@ -1865,7 +1865,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 			// -- Phase 2: Status validation --
 			if (params.status !== COMPLETE_STATUS) {
-				throw new Error("update_goal requires status=complete when marking a goal complete.");
+				throw new Error("complete_goal requires status=complete when marking a goal complete.");
 			}
 
 			// -- Phase 3: Completion --
@@ -1902,7 +1902,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 							"The completion auditor is disabled in settings.",
 							"",
 							`Use \`goal_question\` to ask the user: "The independent completion auditor is disabled. Bypass independent verification and mark the goal complete?"`,  
-							"If the user confirms, call update_goal again with confirmBypassAuditor: true.",
+							"If the user confirms, call complete_goal again with confirmBypassAuditor: true.",
 						].join("\n") }],
 						details: goalDetails(state.goal),
 					};
@@ -2038,7 +2038,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						`Goal remains ${statusLabel(auditTarget)}.`, 
 						"", 
 						"Use goal_question to ask the user whether to:", 
-						"  - Mark the goal complete anyway (call update_goal again)", 
+						"  - Mark the goal complete anyway (call complete_goal again)", 
 						"  - Give feedback on the work so far", 
 						"  - Continue working toward the goal",
 					].join("\n"),
@@ -2056,7 +2056,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 							"Goal audit skipped (Escape pressed). The goal remains active.",
 							"",
 							"Use goal_question to ask the user whether to:",
-							"  - Mark the goal complete anyway (call update_goal again)",
+							"  - Mark the goal complete anyway (call complete_goal again)",
 							"  - Give feedback on the work so far",
 							"  - Continue working toward the goal",
 						].join("\n"),
@@ -2159,7 +2159,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 		renderCall(args, theme) {
 			const label = args?.status ?? "";
-			return new Text(theme.fg("toolTitle", "update_goal ") + theme.fg("success", label), 0, 0);
+			return new Text(theme.fg("toolTitle", "complete_goal ") + theme.fg("success", label), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			return renderGoalResult(result, theme);
@@ -2173,7 +2173,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		promptSnippet: "Pause the active pi goal and report a concrete blocker so the user can intervene.",
 		promptGuidelines: [
 			"Use pause_goal when you have hit a real blocker that you cannot resolve with one more reasonable next step: missing credentials, ambiguous or contradictory spec, a file or permission you cannot access, a sisyphus step whose precondition is not in the plan, or any irreversible / dangerous operation that requires explicit user approval.",
-			"Do NOT use pause_goal to escape a merely hard problem; first try one concrete next step. Do not use pause_goal as a softer substitute for update_goal=complete \u2014 if the objective is achieved, complete it; if it is not, do not complete it.",
+			"Do NOT use pause_goal to escape a merely hard problem; first try one concrete next step. Do not use pause_goal as a softer substitute for complete_goal \u2014 if the objective is achieved, complete it; if it is not, do not complete it.",
 			"Never silently invent a workaround, fake completion, or quietly redefine the objective. Pause and report instead.",
 			"Always pass a concrete one-sentence reason. When you know how the user can unblock you, pass suggestedAction (e.g. 'Set FOO_API_KEY env var and /goal-resume', or 'Use /goal-tweak to insert a precondition step before step 3').",
 			"After pause_goal returns, stop. Do not call other tools in the same turn.",
@@ -2237,7 +2237,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		promptSnippet: "Abort the current pi goal only when the user asks to abandon it or the objective is obsolete/impossible.",
 		promptGuidelines: [
 			"Use abort_goal only when the user explicitly asks to abandon/cancel the current goal, or when the goal is impossible, obsolete, or unsafe to continue and should not be marked complete.",
-			"Do not use abort_goal as a substitute for update_goal(status=complete). If the objective is achieved, complete it instead.",
+			"Do not use abort_goal as a substitute for complete_goal. If the objective is achieved, complete it instead.",
 			"Do not use abort_goal for ordinary blockers that the user can resolve; use pause_goal({reason, suggestedAction?}) for that case.",
 			"Always pass a concrete one-sentence reason. After abort_goal returns, stop and do not call other tools in the same turn.",
 		],
@@ -2309,7 +2309,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		promptSnippet: "Legacy no-op: Sisyphus no longer requires step_complete.",
 		promptGuidelines: [
 			"Do not call this in normal operation. Sisyphus mode shares the normal goal lifecycle and completion gate.",
-			"Complete the goal with update_goal(status=complete) only when the full objective is actually satisfied.",
+			"Complete the goal with complete_goal(status=complete) only when the full objective is actually satisfied.",
 		],
 		parameters: Type.Object({
 			stepIndex: Type.Integer({ minimum: 1, description: "Legacy step index. Ignored." }),
@@ -2319,7 +2319,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
 			return {
-				content: [{ type: "text", text: "step_complete is no longer required. Sisyphus is now a prompt/criteria style that uses the normal goal lifecycle. Continue working from the objective, or call update_goal(status=complete) only when the full objective is satisfied." }],
+				content: [{ type: "text", text: "step_complete is no longer required. Sisyphus is now a prompt/criteria style that uses the normal goal lifecycle. Continue working from the objective, or call complete_goal(status=complete) only when the full objective is satisfied." }],
 				details: goalDetails(state.goal),
 			};
 		},
@@ -2380,7 +2380,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
 	pi.on("tool_call", async (event, ctx) => {
 		// Post-stop in-turn block (C9 0ad8 fix): after pause_goal / abort_goal /
-		// update_goal=complete / propose_goal_tweak fires in this turn, block all subsequent tool calls except
+		// complete_goal / propose_goal_tweak fires in this turn, block all subsequent tool calls except
 		// read-only inspection. Forces the agent to yield the turn instead of "fixing"
 		// the situation by creating extra files etc.
 		if (turnStoppedFor !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
@@ -2427,7 +2427,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 		refreshGoalDisplayFromDisk(ctx);
 
-		// Archive a goal that was marked complete by update_goal but whose archival
+		// Archive a goal that was marked complete by complete_goal but whose archival
 		// was deferred so the agent could see/recognize the audit result first.
 		// This runs after the agent's turn ends — the agent has now seen the result.
 		if (state.goal?.status === "complete" && !state.goal?.archivedPath) {
@@ -2591,7 +2591,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				// Ledger read failure should not break the prompt
 			}
 			return {
-				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call update_goal(status=complete) or abort_goal without resuming. Do not call pause_goal again.`,
+				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call complete_goal(status=complete) or abort_goal without resuming. Do not call pause_goal again.`,
 			};
 		}
 		const activeGoal = state.goal;

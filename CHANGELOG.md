@@ -8,6 +8,12 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.12.0] — 2026-05-27
+
+### Changed
+
+- **`update_goal` renamed to `complete_goal`** — the completion tool is now named `complete_goal` to make its sole purpose unambiguous (marking the goal complete). The old name `update_goal` sounded generic and tempted agents to call it when work was unfinished. Prompt guidelines on the renamed tool were tightened: added "Do NOT call complete_goal if any work remains, even if substantial progress was made." All internal references, tests, prompts, and documentation updated.
+
 ## [0.11.0] — 2026-05-27
 
 ### Removed

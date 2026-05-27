@@ -39,7 +39,7 @@ export function validateGoalCompletion(args: {
 	const { goal, runningGoalId } = args;
 	if (!goal) return { ok: false, message: "No goal is set." };
 	if (runningGoalId && goal.id !== runningGoalId) return { ok: false, message: "The active goal changed during this run; not marking it complete." };
-	if (!isCompletableStatus(goal.status)) return { ok: false, message: `Goal is ${statusLabel(goal)}; update_goal does not apply.` };
+	if (!isCompletableStatus(goal.status)) return { ok: false, message: `Goal is ${statusLabel(goal)}; complete_goal does not apply.` };
 	return { ok: true };
 }
 

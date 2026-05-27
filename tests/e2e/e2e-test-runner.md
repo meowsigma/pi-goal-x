@@ -66,7 +66,7 @@ Output a structured summary:
 
 ## Hard constraints
 
-- Do NOT call `update_goal({status:"complete"})` unless the task explicitly says to test the completion path.
+- Do NOT call `complete_goal({status:"complete"})` unless the task explicitly says to test the completion path.
 - Do NOT modify files outside `.pi/goals/`.
 - Do NOT spawn subagents or use shell commands that modify git state.
 - If any step fails, report the failure clearly and stop — do not continue to subsequent steps.
@@ -74,7 +74,7 @@ Output a structured summary:
 
 ## Hard constraints
 
-- Do NOT call `update_goal({status:"complete"})` unless the task explicitly says to test the completion path.
+- Do NOT call `complete_goal({status:"complete"})` unless the task explicitly says to test the completion path.
 - Do NOT modify files outside `.pi/goals/`.
 - Do NOT spawn subagents or use shell commands that modify git state.
 - If any step fails, report the failure clearly and stop — do not continue to subsequent steps.

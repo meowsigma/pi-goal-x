@@ -71,28 +71,28 @@ test("validateGoalUpdate accepts paused goal", () => {
 	assert.equal(result.ok, true);
 });
 
-// ─── updatedObjective schema rejection (was removed from update_goal) ───────
+// ─── updatedObjective schema rejection (was removed from complete_goal) ───────
 
-test("update_goal schema has additionalProperties: false to reject unknown params", () => {
+test("complete_goal schema has additionalProperties: false to reject unknown params", () => {
 	const source = readFileSync("extensions/goal.ts", "utf8");
-	const updateGoalIdx = source.indexOf('name: "update_goal"');
-	assert.ok(updateGoalIdx >= 0, "must find update_goal tool registration");
+	const updateGoalIdx = source.indexOf('name: "complete_goal"');
+	assert.ok(updateGoalIdx >= 0, "must find complete_goal tool registration");
 	const registerBlock = source.substring(updateGoalIdx, updateGoalIdx + 4000);
 	assert.ok(registerBlock.includes("additionalProperties: false"),
-		"update_goal schema must have additionalProperties: false");
+		"complete_goal schema must have additionalProperties: false");
 	assert.ok(!registerBlock.includes("updatedObjective"),
-		"update_goal schema must not contain updatedObjective");
+		"complete_goal schema must not contain updatedObjective");
 	assert.ok(!source.includes("updatedObjective"),
 		"updatedObjective must not appear anywhere in goal.ts");
 });
 
-test("update_goal without status throws correct error message", () => {
+test("complete_goal without status throws correct error message", () => {
 	const source = readFileSync("extensions/goal.ts", "utf8");
-	const updateGoalIdx = source.indexOf('name: "update_goal"');
+	const updateGoalIdx = source.indexOf('name: "complete_goal"');
 	const registerBlock = source.substring(updateGoalIdx, updateGoalIdx + 4000);
 	assert.ok(!registerBlock.includes("params.updatedObjective"),
 		"Phase 1 updatedObjective handling must be removed");
-	assert.ok(registerBlock.includes('"update_goal requires status=complete when marking a goal complete."'),
+	assert.ok(registerBlock.includes('"complete_goal requires status=complete when marking a goal complete."'),
 		"handler must throw error mentioning status=complete");
 	assert.ok(!registerBlock.includes("updatedObjective"),
 		"handler must not reference updatedObjective in error messages");
@@ -102,7 +102,7 @@ test("update_goal without status throws correct error message", () => {
 
 // ─── completion flow unaffected ────────────────────────────────────────────
 
-test("update_goal with status=complete still works (completion flow unchanged)", () => {
+test("complete_goal with status=complete still works (completion flow unchanged)", () => {
 	const ctx = tempCtx();
 	try {
 		const goal = makeGoal();

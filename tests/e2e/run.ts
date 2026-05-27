@@ -5,7 +5,7 @@
  *
  * Tests:
  * 1. File-validity checks (agent file bootstrapping, chain docs)
- * 2. Mock-pi handler tests (extension loads, session_start, update_goal handler)
+ * 2. Mock-pi handler tests (extension loads, session_start, complete_goal handler)
  * 3. Real pi fork test using --mode json: reads tool_execution_start/end events
  *    from JSONL output for deterministic assertions on tool name, parameters,
  *    and result fields. Uses --append-system-prompt + --tools to ensure the AI
@@ -160,13 +160,13 @@ function forkFixture(instruction: string): {
 
 	// System prompt that forces the model to always use tool calls
 	const sysPromptFile = path.join(cwd, "force-tool.md");
-	writeFileSync(sysPromptFile, "You must use the update_goal tool to complete the request. Only respond using tool calls. Never output only text without making a tool call.");
+	writeFileSync(sysPromptFile, "You must use the complete_goal tool to complete the request. Only respond using tool calls. Never output only text without making a tool call.");
 
 	const run = () => {
 		const result = spawnSync("pi", [
 			"--mode", "json",
 			"--no-extensions", "-e", EXT_PATH,
-			"--tools", "get_goal,update_goal",
+			"--tools", "get_goal,complete_goal",
 			"--append-system-prompt", sysPromptFile,
 			"--fork", sessionFile,
 			"-p", instruction,
@@ -201,7 +201,7 @@ describe("Subagent E2E", () => {
 		assert.ok(content.includes("state entry") || content.includes("pi-goal-state"),
 			"agent must reference state entry");
 		assert.ok(content.includes("get_goal"), "agent must use get_goal");
-		assert.ok(content.includes("update_goal"), "agent must use update_goal");
+		assert.ok(content.includes("complete_goal"), "agent must use complete_goal");
 		assert.ok(content.includes("PASS") || content.includes("FAIL"),
 			"agent must output structured PASS/FAIL report");
 	});
@@ -215,22 +215,22 @@ describe("Subagent E2E", () => {
 	});
 
 	// ── 2. Mock-pi handler tests (deterministic, no AI model dependency) ─────
-	it("update_goal tool registered with lifecycle hooks", () => {
+	it("complete_goal tool registered with lifecycle hooks", () => {
 		const { tools, handlerMap } = createMockPiSetup();
-		assert.ok(tools.find((t) => t.name === "update_goal"), "update_goal tool must be registered");
+		assert.ok(tools.find((t) => t.name === "complete_goal"), "complete_goal tool must be registered");
 		assert.ok(handlerMap.has("session_start"), "session_start hook");
 		assert.ok(handlerMap.has("before_agent_start"), "before_agent_start hook");
 		assert.ok(handlerMap.has("turn_end"), "turn_end hook");
 	});
 
-	it("update_goal rejects calls without status=complete", async () => {
+	it("complete_goal rejects calls without status=complete", async () => {
 		const { tools, handlerMap } = createMockPiSetup();
 		const f = testFixture();
 		try {
 			const mockCtx = createMockCtx(f.cwd, f.goal, f.written);
 			const ss = handlerMap.get("session_start")!;
 			await ss({ reason: "start" }, mockCtx);
-			const updateGoal = tools.find((t) => t.name === "update_goal")!;
+			const updateGoal = tools.find((t) => t.name === "complete_goal")!;
 			await assert.rejects(
 				() => (updateGoal.execute as Function)(
 					"call-1",
@@ -243,14 +243,14 @@ describe("Subagent E2E", () => {
 		} finally { f.cleanup(); }
 	});
 
-	it("update_goal with status=complete still works (completion flow unchanged)", async () => {
+	it("complete_goal with status=complete still works (completion flow unchanged)", async () => {
 		const { tools, handlerMap } = createMockPiSetup();
 		const f = testFixture();
 		try {
 			const mockCtx = createMockCtx(f.cwd, f.goal, f.written);
 			const ss = handlerMap.get("session_start")!;
 			await ss({ reason: "start" }, mockCtx);
-			const updateGoal = tools.find((t) => t.name === "update_goal")!;
+			const updateGoal = tools.find((t) => t.name === "complete_goal")!;
 			const result = await (updateGoal.execute as Function)(
 				"call-2",
 				{ status: "complete", completionSummary: "Subagent e2e completed.", confirmBypassAuditor: true },
@@ -270,7 +270,7 @@ describe("Subagent E2E", () => {
 			const mockCtx = createMockCtx(f.cwd, f.goal, f.written);
 			const ss = handlerMap.get("session_start")!;
 			await ss({ reason: "start" }, mockCtx);
-			const updateGoal = tools.find((t) => t.name === "update_goal")!;
+			const updateGoal = tools.find((t) => t.name === "complete_goal")!;
 			await (updateGoal.execute as Function)(
 				"call-3",
 				{ status: "complete", completionSummary: "Subagent e2e archival.", confirmBypassAuditor: true },
@@ -294,14 +294,14 @@ describe("Subagent E2E", () => {
 		callback(events);
 	}
 
-	it("fork: completion is the only valid update_goal call now",
+	it("fork: completion is the only valid complete_goal call now",
 		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
 		const f = forkFixture(
-			"Call get_goal first, then call update_goal with status complete and confirmBypassAuditor true."
+			"Call get_goal first, then call complete_goal with status complete and confirmBypassAuditor true."
 		);
 		try {
 			const result = f.run();
-			assertToolEvents(result.stdout, "update_goal", (events) => {
+			assertToolEvents(result.stdout, "complete_goal", (events) => {
 				const ev = events[0];
 				assert.equal(ev.start.args.status, "complete",
 					"args must contain status complete");
@@ -314,16 +314,16 @@ describe("Subagent E2E", () => {
 		} finally { f.cleanup(); }
 	});
 
-	// (removed — updatedObjective no longer exists in update_goal schema)
+	// (removed — updatedObjective no longer exists in complete_goal schema)
 
 	it("fork: deferred archival — complete without sync, result and filesystem",
 		{ skip: !isPiAvailable(), timeout: 120_000 }, async () => {
 		const f = forkFixture(
-			"Call get_goal first, then call update_goal with status complete and confirmBypassAuditor true."
+			"Call get_goal first, then call complete_goal with status complete and confirmBypassAuditor true."
 		);
 		try {
 			const result = f.run();
-			assertToolEvents(result.stdout, "update_goal", (events) => {
+			assertToolEvents(result.stdout, "complete_goal", (events) => {
 				const ev = events[0];
 				assert.equal(ev.start.args.status, "complete",
 					"args must contain status complete");

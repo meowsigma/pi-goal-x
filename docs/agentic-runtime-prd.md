@@ -131,7 +131,7 @@ The following behaviors remain runtime-enforced:
 4. **Mode consistency.** A draft proposal cannot silently change `/goals` into Sisyphus or `/sisyphus` into a regular goal.
 5. **Stale continuation protection.** A queued continuation for an old goal cannot perform work for a different current goal.
 6. **Human-owned focus.** The agent cannot silently switch focus between open goals.
-7. **Completion audit.** `update_goal(status="complete")` archives only if the independent auditor returns exactly one approving marker.
+7. **Completion audit.** `complete_goal(status="complete")` archives only if the independent auditor returns exactly one approving marker.
 8. **Path safety.** Goal files and archives must remain under expected `.pi/goals` paths.
 9. **Post-stop transaction boundary.** After pause, abort, approved completion, or applied tweak, the same turn should not continue substantive work.
 10. **No hard cost control/cap lifecycle.** Resource-control is outside this runtime; auto-continue uses semantic stop conditions and the empty-turn guard.
@@ -211,7 +211,7 @@ The runtime keeps tools for irreversible transitions:
 
 - `propose_goal_draft`
 - `get_goal`
-- `update_goal`
+- `complete_goal`
 - `pause_goal`
 - `abort_goal`
 - `apply_goal_tweak`

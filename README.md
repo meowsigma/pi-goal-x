@@ -158,7 +158,7 @@ The extension exposes tools only when they make sense for the current lifecycle 
 | `get_goal` | always | Read the focused goal state; mentions other open goals when present |
 | `propose_goal_draft` | drafting only (goal creation) | Submit a concrete draft for user confirmation |
 | `propose_goal_tweak` | tweak drafting only | Submit a revision to an existing goal (shows Confirm / Continue Chatting dialog) |
-| `update_goal` | focused active or paused goal | Mark the focused goal complete when all requirements are satisfied. When the auditor is disabled, supply `confirmBypassAuditor: true` after user confirmation to bypass the audit |
+| `complete_goal` | focused active or paused goal | Mark the focused goal complete — only when every requirement is satisfied. When the auditor is disabled, supply `confirmBypassAuditor: true` after user confirmation to bypass the audit |
 | `pause_goal` | focused active goal | Pause the focused goal because of a real blocker |
 | `abort_goal` | focused active or paused goal | Abort/archive an obsolete, impossible, unsafe, or user-cancelled focused goal |
 | `propose_goal_tweak` | tweak drafting only | Submit a revision to the focused goal (shows Confirm / Continue Chatting dialog) |
@@ -228,7 +228,7 @@ The shipped gates are intentionally small and mechanical.
 | Completion auditor gate | Archiving completion unless an independent pi auditor agent returns `<approved/>` |
 | Abort gate | Aborting missing, stale, completed, or reasonless goals |
 | Direct-create rejection | Hidden `create_goal` calls creating goals without the confirmation flow |
-| Post-stop block | Continuing to call tools after `pause_goal`, `abort_goal`, `update_goal`, or `propose_goal_tweak` stops the turn |
+| Post-stop block | Continuing to call tools after `pause_goal`, `abort_goal`, `complete_goal`, or `propose_goal_tweak` stops the turn |
 | Empty-turn guard | Pure chat loops that would keep auto-continuing without meaningful goal work |
 | Abort pause | Active goals staying active after user abort / Ctrl-C |
 | Disk reconciliation | External pause/archive/delete/status changes being ignored or overwritten by stale memory |

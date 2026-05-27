@@ -193,7 +193,7 @@ Continuation prompts include a goal id so stale prompts can be detected and neut
 
 ## Completion output
 
-Completion is intentionally verbose in the tool result and guarded by an independent auditor agent. `update_goal(status="complete")` is valid for active and paused goals; paused goals do not need to be resumed just to record completion when existing evidence is sufficient.
+Completion is intentionally verbose in the tool result and guarded by an independent auditor agent. `complete_goal(status="complete")` is valid for active and paused goals; paused goals do not need to be resumed just to record completion when existing evidence is sufficient.
 
 Before archiving, the tool starts a separate in-memory pi session with a focused auditor prompt. The auditor receives the objective, executor completion summary, and goal metadata, can inspect the workspace with `read`, `grep`, `find`, `ls`, and `bash`, and must end with exactly one marker:
 

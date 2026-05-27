@@ -136,10 +136,10 @@ describe("Extension E2E", () => {
 
 			apiCalls = [];
 
-			const updateGoal = getTool("update_goal");
+			const completeGoal = getTool("complete_goal");
 
 			// Complete without sync
-			const result = await (updateGoal.execute as Function)(
+			const result = await (completeGoal.execute as Function)(
 				"call-1",
 				{
 					status: "complete",
@@ -174,14 +174,14 @@ describe("Extension E2E", () => {
 	});
 
 	// ── 2: Rejection gate tests ─────────────────────────────────────────────
-	it("e2e: update_goal rejects null/absent goal state", async () => {
+	it("e2e: complete_goal rejects null/absent goal state", async () => {
 		const f = testFixture();
 		try {
 			// Do NOT fire session_start — state is empty
-			const updateGoal = getTool("update_goal");
+			const completeGoal = getTool("complete_goal");
 
-			// Without a goal, calling update_goal with status=complete should return error
-			const result = await (updateGoal.execute as Function)(
+			// Without a goal, calling complete_goal with status=complete should return error
+			const result = await (completeGoal.execute as Function)(
 				"call-2",
 				{ status: "complete" },
 				new AbortController().signal,
@@ -199,7 +199,7 @@ describe("Extension E2E", () => {
 	});
 
 	// ── 3: testResults parameter ────────────────────────────────────────────
-	it("e2e: update_goal accepts testResults parameter without error", async () => {
+	it("e2e: complete_goal accepts testResults parameter without error", async () => {
 		const f = testFixture();
 		try {
 			// Fire session_start to load state and set focusedGoalId/state.goal
@@ -209,8 +209,8 @@ describe("Extension E2E", () => {
 
 			apiCalls = []; // reset call tracking
 
-			const updateGoal = getTool("update_goal");
-			const result = await (updateGoal.execute as Function)(
+			const completeGoal = getTool("complete_goal");
+			const result = await (completeGoal.execute as Function)(
 				"call-3",
 				{
 					status: "complete",

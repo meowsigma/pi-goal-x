@@ -5,7 +5,7 @@ description: "Run end-to-end tests for the pi-goal extension: deferred archival.
 
 # e2e-test
 
-These tests verify the actual `update_goal` tool handler execution through the pi runtime using forked context (preserving the current session's goal state).
+These tests verify the actual `complete_goal` tool handler execution through the pi runtime using forked context (preserving the current session's goal state).
 
 **Automated alternative**: The tests in `tests/e2e/run.ts` use `pi --mode json --fork` with `--append-system-prompt` + `--tools` to achieve deterministic behavior (the AI model is forced to make the required tool calls). No free-text AI output is parsed — only structured JSONL events (`tool_execution_start`/`tool_execution_end`).
 
@@ -21,7 +21,7 @@ Run: `/run e2e-test-runner "Test scenario: deferred archival"`
 
 Steps the subagent performs:
 1. Get current goal state
-2. Call `update_goal({status: 'complete', completionSummary: 'e2e test archival'})`
+2. Call `complete_goal({status: 'complete', completionSummary: 'e2e test archival'})`
 3. Verify goal is complete but NOT archived (still in active dir)
 4. Note the deferred archival state
 5. Report PASS/FAIL

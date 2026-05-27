@@ -10,6 +10,13 @@ The extension is designed around one rule: **the user owns intent; the agent exe
 
 All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are preserved. The following changes are specific to pi-goal-x:
 
+### Task list system
+
+- **Structured task breakdown** — the agent can propose a task list via `propose_task_list`, which shows the user a Confirm / Continue Chatting dialog (mirrors the `propose_goal_draft` pattern). Once confirmed, tasks are displayed in prompts, the widget, serialized to disk, and included in auditor review.
+- **Per-task completion** — `complete_task` marks individual tasks done with optional evidence, and `skip_task` marks tasks as skipped with a required reason. Neither stops the turn, so the agent can continue uninterrupted.
+- **Optional `taskList`** — goals without a task list work exactly as before. The feature is entirely opt-in.
+- **Soft `complete_goal` gate** — when `blockCompletion: true` is set, `complete_goal` surfaces a warning if pending tasks remain (prompt-level only; the agent can still complete).
+
 ### Goal objective is immutable
 
 - The goal objective is immutable — the agent **must not** modify it autonomously. Objective changes are only possible through `propose_goal_tweak`, which presents the user with a Confirm / Continue Chatting dialog matching the `propose_goal_draft` confirmation pattern. This prevents the agent from silently changing the goal contract.
@@ -23,7 +30,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 ### E2e test infrastructure
 
 - **Deterministic fork tests using `--mode json`**: the e2e suite spawns a real `pi --fork --mode json` session, parses structured `tool_execution_start`/`tool_execution_end` JSON events for field-level assertions — no free-text AI output parsing. Uses `--append-system-prompt` + `--tools` to force deterministic tool calls.
-- **Full coverage**: 143 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), real `pi --fork --mode json` tests (3 scenarios: quick-sync, combined sync+complete, deferred archival), and propose_goal_tweak unit/integration/e2e tests (15).
+- **Full coverage**: 193 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), real `pi --fork --mode json` tests (3 scenarios), propose_goal_tweak unit/integration/e2e tests (15), and task list policy/round-trip/render tests (50+).
 
 ### Completion auditor
 
@@ -161,6 +168,9 @@ The extension exposes tools only when they make sense for the current lifecycle 
 | `complete_goal` | focused active or paused goal | Mark the focused goal complete — only when every requirement is satisfied. When the auditor is disabled, supply `confirmBypassAuditor: true` after user confirmation to bypass the audit |
 | `pause_goal` | focused active goal | Pause the focused goal because of a real blocker |
 | `abort_goal` | focused active or paused goal | Abort/archive an obsolete, impossible, unsafe, or user-cancelled focused goal |
+| `propose_task_list` | active or paused goal | Propose a structured task list for user confirmation (stops the turn) |
+| `complete_task` | active or paused goal | Mark a task complete with optional evidence (does not stop turn) |
+| `skip_task` | active or paused goal | Mark a task skipped with a required reason (does not stop turn) |
 | `propose_goal_tweak` | tweak drafting only | Submit a revision to the focused goal (shows Confirm / Continue Chatting dialog) |
 | `step_complete` | hidden / legacy | Compatibility no-op; Sisyphus no longer requires a step counter |
 | `create_goal` | hidden | Direct calls are rejected; normal creation goes through `propose_goal_draft` |

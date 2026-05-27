@@ -13,7 +13,7 @@ import {
 	type ExtensionContext,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import type { GoalRecord } from "./goal-record.ts";
+import type { GoalRecord, GoalTaskList } from "./goal-record.ts";
 
 export interface GoalAuditorConfig {
 	provider?: string;
@@ -138,6 +138,22 @@ export interface AuditorTestResults {
 	timestamp?: string;
 }
 
+function taskSummaryBlock(taskList?: GoalTaskList | null): string {
+	if (!taskList || taskList.tasks.length === 0) return "";
+	const total = taskList.tasks.length;
+	const complete = taskList.tasks.filter((t) => t.status === "complete").length;
+	const skipped = taskList.tasks.filter((t) => t.status === "skipped").length;
+	const pending = taskList.tasks.filter((t) => t.status === "pending");
+	const lines: string[] = [`Tasks: ${complete}/${total} complete${skipped > 0 ? `, ${skipped} skipped` : ""}`];
+	for (const task of taskList.tasks) {
+		const marker = task.status === "complete" ? "[x]" : task.status === "skipped" ? "[~]" : "[ ]";
+		lines.push(`  ${marker} ${task.id}: ${task.title}`);
+	}
+	const gate = taskList.blockCompletion && pending.length > 0 ? " | TASK GATE: pending tasks block completion" : "";
+	lines[0] = lines[0]! + gate;
+	return lines.join("\n");
+}
+
 export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
 	completionSummary?: string | null;
@@ -168,6 +184,7 @@ export function buildGoalAuditorPrompt(args: {
 		"Current goal metadata:",
 		"<goal_details>",
 		args.detailedSummary,
+		...(taskSummaryBlock(args.goal.taskList) ? ["", taskSummaryBlock(args.goal.taskList)] : []),
 		"</goal_details>",
 		...(args.testResults ? [
 			"",

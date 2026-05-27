@@ -10,6 +10,20 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [0.12.0] — 2026-05-27
 
+### Added
+
+- **Task list system** — goals can now include a structured task list with `propose_task_list`, `complete_task`, and `skip_task` tools. Key properties:
+  - **`propose_task_list`** — agent proposes a task list to the user via a Confirm / Continue Chatting dialog (mirrors `propose_goal_draft` pattern). Stops the turn. Merges with existing tasks, preserving statuses of matching IDs.
+  - **`complete_task`** — marks a task complete with optional evidence (≤200 chars). Does **not** stop the turn, allowing the agent to continue work.
+  - **`skip_task`** — marks a task skipped with a required reason. Does **not** stop the turn.
+  - **`complete_goal` task gate** — when `blockCompletion: true` and pending tasks exist, `complete_goal` surfaces a soft guard warning rather than blocking outright. The gate is prompt-level only; the agent can still complete.
+  - **Ledger events** — `task_list_set`, `task_complete`, `task_skipped` events recorded for full traceability.
+  - **Serialization** — tasks persisted as `## Tasks` markdown section in goal files with `[x]`/`[ ]`/`[~]` markers, evidence, skip reasons, and `blockCompletion` comment.
+  - **Prompt injection** — `taskListBlock` renders the active task list in both `goalPrompt` and `continuationPrompt`, including the TASK GATE warning when `blockCompletion` is enabled and pending tasks exist.
+  - **Widget display** — heading shows `N/M tasks`; body shows the next pending task or `All tasks complete`.
+  - **Auditor integration** — task summary block included in auditor prompt's `<goal_details>`.
+  - **Optional** — goals without a `taskList` work exactly as before.
+
 ### Changed
 
 - **`update_goal` renamed to `complete_goal`** — the completion tool is now named `complete_goal` to make its sole purpose unambiguous (marking the goal complete). The old name `update_goal` sounded generic and tempted agents to call it when work was unfinished. Prompt guidelines on the renamed tool were tightened: added "Do NOT call complete_goal if any work remains, even if substantial progress was made." All internal references, tests, prompts, and documentation updated.
@@ -335,6 +349,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.12.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.12.0
 [0.11.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.11.0
 [0.10.2]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.10.2
 [0.10.1]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.10.1

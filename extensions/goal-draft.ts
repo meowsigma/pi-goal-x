@@ -131,6 +131,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 		"- If the topic is already concrete, you may proceed directly to propose_goal_draft.",
 		"- The goal contract should make the objective, success criteria, boundaries, constraints, and blocker rule explicit.",
 		"- Keep grilling assumptions until the objective, success criteria, boundaries, constraints, and blocker rule are clear enough to confirm.",
+		"- After a goal is confirmed, you may call propose_task_list on the first continuation turn if the objective naturally decomposes into trackable milestones. Do not add a task list for simple, single-step goals.",
 		"- propose_goal_draft opens the user's Confirm / Continue Chatting dialog. Confirm creates and focuses the goal; Continue Chatting means keep refining through normal proposal cycles.",
 		"- create_goal is not a shortcut. Direct create_goal calls are rejected so the user keeps explicit say in goal creation.",
 	];

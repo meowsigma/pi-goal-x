@@ -16,7 +16,10 @@ export type GoalLedgerEvent =
   | { type: "audit_result"; goalId: string; verdict: "approved" | "disapproved" | "error"; report: string; at: string }
   | { type: "audit_skipped"; goalId: string; reason: "disabled" | "user_aborted"; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "goal_completed"; goalId: string; archivePath?: string; at: string }
-  | { type: "goal_aborted"; goalId: string; reason: string; archivePath?: string; at: string };
+  | { type: "goal_aborted"; goalId: string; reason: string; archivePath?: string; at: string }
+  | { type: "task_list_set"; goalId: string; taskCount: number; blockCompletion: boolean; at: string }
+  | { type: "task_complete"; goalId: string; taskId: string; evidence?: string; at: string }
+  | { type: "task_skipped"; goalId: string; taskId: string; reason: string; at: string };
 
 export interface GoalLedgerContext {
   cwd: string;
@@ -147,6 +150,12 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
       return typeof obj.goalId === "string" && (obj.archivePath === undefined || typeof obj.archivePath === "string");
     case "goal_aborted":
       return typeof obj.goalId === "string" && typeof obj.reason === "string" && (obj.archivePath === undefined || typeof obj.archivePath === "string");
+    case "task_list_set":
+      return typeof obj.goalId === "string" && typeof obj.taskCount === "number" && typeof obj.blockCompletion === "boolean";
+    case "task_complete":
+      return typeof obj.goalId === "string" && typeof obj.taskId === "string" && (obj.evidence === undefined || typeof obj.evidence === "string");
+    case "task_skipped":
+      return typeof obj.goalId === "string" && typeof obj.taskId === "string" && typeof obj.reason === "string";
     default:
       return false;
   }
@@ -175,6 +184,12 @@ function sanitizeEvent(event: GoalLedgerEvent): GoalLedgerEvent {
     case "goal_completed":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_aborted":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "task_list_set":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "task_complete":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "task_skipped":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_unfocused":
       return event;

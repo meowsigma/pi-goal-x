@@ -1,4 +1,5 @@
 import { statusLabel, type GoalDisplayRecordLike } from "./goal-core.ts";
+import type { GoalTaskList, TaskStatus } from "./goal-record.ts";
 
 export type GoalStatusLike = "active" | "paused" | "complete";
 export type StopReasonLike = "user" | "agent";
@@ -9,6 +10,7 @@ export interface GoalPolicyRecordLike extends GoalDisplayRecordLike {
 	updatedAt?: string;
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
+	taskList?: GoalTaskList;
 }
 
 export type PolicyValidation =
@@ -124,7 +126,68 @@ export function abortGoalCommandMessage(args: { archived: boolean; wasDrafting: 
 	return args.archived ? "Goal aborted and archived." : args.wasDrafting ? "Drafting cancelled." : "No goal is set.";
 }
 
-export function buildCompletionReport(args: { detailedSummary: string; completionSummary?: string | null; auditorReport?: string | null; auditSkippedReason?: string | null }): string {
+export function buildTaskSummary(taskList: GoalTaskList): string {
+	const total = taskList.tasks.length;
+	const complete = taskList.tasks.filter((t) => t.status === "complete").length;
+	const skipped = taskList.tasks.filter((t) => t.status === "skipped").length;
+	if (total === 0) return "No tasks";
+	const parts: string[] = [`${complete}/${total} tasks complete`];
+	if (skipped > 0) parts.push(`(${skipped} skipped)`);
+	return parts.join(" ");
+}
+
+export function taskCompletionBlockWarning(taskList: GoalTaskList): string | null {
+	if (!taskList.blockCompletion) return null;
+	const pending = taskList.tasks.filter((t) => t.status === "pending");
+	if (pending.length === 0) return null;
+	return `${pending.length} task${pending.length > 1 ? "s" : ""} still pending with blockCompletion enabled. Complete or skip all pending tasks before finishing the goal.`;
+}
+
+export function validateTaskCompletion(args: {
+	goal: GoalPolicyRecordLike | null;
+	taskId: string;
+}): PolicyValidation {
+	if (!args.goal) return { ok: false, message: "No goal is set." };
+	if (!args.goal.taskList) return { ok: false, message: "Goal has no task list." };
+	const task = args.goal.taskList.tasks.find((t) => t.id === args.taskId);
+	if (!task) return { ok: false, message: `Task "${args.taskId}" not found.` };
+	if (task.status === "complete") return { ok: false, message: `Task "${args.taskId}" is already complete.` };
+	if (task.status === "skipped") return { ok: false, message: `Task "${args.taskId}" was already skipped.` };
+	return { ok: true };
+}
+
+export function validateTaskSkip(args: {
+	goal: GoalPolicyRecordLike | null;
+	taskId: string;
+	reason: string;
+}): PolicyValidation {
+	if (!args.goal) return { ok: false, message: "No goal is set." };
+	if (!args.goal.taskList) return { ok: false, message: "Goal has no task list." };
+	const task = args.goal.taskList.tasks.find((t) => t.id === args.taskId);
+	if (!task) return { ok: false, message: `Task "${args.taskId}" not found.` };
+	if (task.status === "complete") return { ok: false, message: `Task "${args.taskId}" is already complete.` };
+	if (task.status === "skipped") return { ok: false, message: `Task "${args.taskId}" was already skipped.` };
+	if (!args.reason.trim()) return { ok: false, message: "skip_task requires a non-empty reason." };
+	return { ok: true };
+}
+
+export function validateTaskListProposal(args: {
+	goal: GoalPolicyRecordLike | null;
+	tasks: { id: string; title: string }[];
+}): PolicyValidation {
+	if (!args.goal) return { ok: false, message: "No goal is set." };
+	if (args.tasks.length > 50) return { ok: false, message: "Task list cannot exceed 50 tasks." };
+	const ids = new Set<string>();
+	for (const t of args.tasks) {
+		if (!t.id.trim()) return { ok: false, message: "All tasks must have a non-empty id." };
+		if (!t.title.trim()) return { ok: false, message: `Task "${t.id}" must have a non-empty title.` };
+		if (ids.has(t.id)) return { ok: false, message: `Duplicate task id: "${t.id}".` };
+		ids.add(t.id);
+	}
+	return { ok: true };
+}
+
+export function buildCompletionReport(args: { detailedSummary: string; completionSummary?: string | null; auditorReport?: string | null; auditSkippedReason?: string | null; taskSummary?: string | null }): string {
 	const auditSkipped = args.auditSkippedReason?.trim();
 	const auditorReport = args.auditorReport?.trim();
 	const lines = auditSkipped
@@ -135,6 +198,10 @@ export function buildCompletionReport(args: { detailedSummary: string; completio
 	const summary = args.completionSummary?.trim();
 	if (summary) {
 		lines.push("", "Completion summary:", summary);
+	}
+	const taskSummary = args.taskSummary?.trim();
+	if (taskSummary) {
+		lines.push("", `Task summary: ${taskSummary}`);
 	}
 	lines.push("", args.detailedSummary);
 	return lines.join("\n");

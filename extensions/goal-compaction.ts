@@ -46,6 +46,15 @@ export function buildGoalCompactSummary(goal: GoalRecord, events: GoalLedgerEven
         case "goal_completed":
           lines.push("    - completed");
           break;
+        case "task_list_set":
+          lines.push(`    - task list set: ${event.taskCount} tasks${event.blockCompletion ? " (blocking)" : ""}`);
+          break;
+        case "task_complete":
+          lines.push(`    - task complete: ${event.taskId}${event.evidence ? ` — ${truncateText(event.evidence, 60)}` : ""}`);
+          break;
+        case "task_skipped":
+          lines.push(`    - task skipped: ${event.taskId} — ${truncateText(event.reason, 60)}`);
+          break;
         case "goal_aborted":
           lines.push(`    - aborted: ${event.reason}`);
           break;

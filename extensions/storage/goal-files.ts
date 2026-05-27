@@ -13,6 +13,7 @@ import {
 	nowIso,
 	safeIdPart,
 	type GoalRecord,
+	type TaskStatus,
 } from "../goal-record.ts";
 
 export const GOALS_DIR = ".pi/goals";
@@ -115,12 +116,35 @@ export function archivedPathForGoal(ctx: GoalFileContext, goal: GoalRecord): str
 	return isSafeArchivedPath(ctx, goal.archivedPath) ? goal.archivedPath : makeArchivedGoalPath(goal);
 }
 
+function taskCheckbox(status: TaskStatus): string {
+	if (status === "complete") return "x";
+	if (status === "skipped") return "~";
+	return " ";
+}
+
+function taskLineSuffix(task: { status: TaskStatus; evidence?: string; skipReason?: string }): string {
+	if (task.status === "complete" && task.evidence) return ` — evidence: ${task.evidence}`;
+	if (task.status === "skipped" && task.skipReason) return ` — skipped: ${task.skipReason}`;
+	if (task.status === "complete") return "";
+	if (task.status === "skipped") return "";
+	return "";
+}
+
 export function serializeGoalFile(goal: GoalRecord): string {
 	const meta = JSON.stringify({ version: 3, ...goal }, null, 2);
 	const pauseLines: string[] = [];
 	if (goal.pauseReason) pauseLines.push(`- Agent pause reason: ${goal.pauseReason}`);
 	if (goal.pauseSuggestedAction) pauseLines.push(`- Agent suggests: ${goal.pauseSuggestedAction}`);
 	const pauseBlock = pauseLines.length > 0 ? `\n${pauseLines.join("\n")}` : "";
+	let taskSection = "";
+	if (goal.taskList) {
+		const taskLines = goal.taskList.tasks.map((t) => {
+			return `- [${taskCheckbox(t.status)}] ${t.id}: ${t.title}${taskLineSuffix(t)}`;
+		});
+		taskSection = `\n## Tasks
+
+<!-- blockCompletion: ${goal.taskList.blockCompletion} -->\n${taskLines.join("\n")}\n`;
+	}
 	return `${meta}
 
 # Goal Prompt
@@ -133,7 +157,7 @@ ${goal.objective.trim()}
 - Auto-continue: ${goal.autoContinue ? "on" : "off"}
 - Sisyphus mode: ${goal.sisyphus ? "yes (prompt/criteria style)" : "no"}
 - Time spent: ${formatDuration(goal.usage.activeSeconds)}
-- Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}${pauseBlock}
+- Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}${taskSection}${pauseBlock}
 `;
 }
 

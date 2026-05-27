@@ -4,6 +4,24 @@ export type GoalEventKind = "checkpoint" | "stale" | "drafting";
 export type DraftingFocus = "goal" | "sisyphus";
 export type GoalFocusReason = "created" | "selected" | "resumed" | "completed" | "cleared" | "aborted" | "migrated";
 
+export type TaskStatus = "pending" | "complete" | "skipped";
+
+export interface GoalTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  completedAt?: string;
+  skippedAt?: string;
+  evidence?: string;
+  skipReason?: string;
+}
+
+export interface GoalTaskList {
+  tasks: GoalTask[];
+  blockCompletion: boolean;
+  proposedAt: string;
+}
+
 export interface GoalUsage {
 	tokensUsed: number;
 	activeSeconds: number;
@@ -24,6 +42,7 @@ export interface GoalRecord {
 	// Set by the agent's pause_goal tool. Cleared when the goal becomes active again.
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
+	taskList?: GoalTaskList;
 }
 
 export interface GoalStateEntry {
@@ -90,7 +109,13 @@ export function emptyUsage(): GoalUsage {
 }
 
 export function cloneGoal(goal: GoalRecord): GoalRecord {
-	return { ...goal, usage: { ...goal.usage } };
+	return {
+		...goal,
+		usage: { ...goal.usage },
+		taskList: goal.taskList
+			? { ...goal.taskList, tasks: goal.taskList.tasks.map(t => ({ ...t })) }
+			: undefined,
+	};
 }
 
 export function goalFocusDetails(focusedGoalId: string | null, reason: GoalFocusReason): GoalFocusEntry {
@@ -136,6 +161,37 @@ export function normalizeUsage(value: unknown): GoalUsage {
 	return { tokensUsed, activeSeconds };
 }
 
+export function normalizeTaskList(value: unknown): GoalTaskList | undefined {
+	const raw = asRecord(value);
+	if (!raw) return undefined;
+	const tasksRaw = raw.tasks;
+	if (!Array.isArray(tasksRaw)) return undefined;
+	const tasks: GoalTask[] = [];
+	for (const item of tasksRaw) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const t = item as Record<string, unknown>;
+		const id = typeof t.id === "string" && t.id.trim() ? t.id.trim() : "";
+		const title = typeof t.title === "string" ? t.title.trim() : "";
+		if (!id || !title) continue;
+		const status: TaskStatus = t.status === "complete" ? "complete" : t.status === "skipped" ? "skipped" : "pending";
+		tasks.push({
+			id,
+			title,
+			status,
+			completedAt: typeof t.completedAt === "string" ? t.completedAt : undefined,
+			skippedAt: typeof t.skippedAt === "string" ? t.skippedAt : undefined,
+			evidence: typeof t.evidence === "string" ? t.evidence : undefined,
+			skipReason: typeof t.skipReason === "string" ? t.skipReason : undefined,
+		});
+	}
+	if (tasks.length === 0) return undefined;
+	return {
+		tasks,
+		blockCompletion: raw.blockCompletion === true,
+		proposedAt: typeof raw.proposedAt === "string" ? raw.proposedAt : nowIso(),
+	};
+}
+
 export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 	const raw = asRecord(value);
 	if (!raw) return null;
@@ -167,5 +223,6 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		stopReason: raw.stopReason === "agent" || raw.stopReason === "user" ? raw.stopReason : undefined,
 		pauseReason: typeof raw.pauseReason === "string" && raw.pauseReason.trim() ? raw.pauseReason : undefined,
 		pauseSuggestedAction: typeof raw.pauseSuggestedAction === "string" && raw.pauseSuggestedAction.trim() ? raw.pauseSuggestedAction : undefined,
+		taskList: normalizeTaskList(raw.taskList),
 	};
 }

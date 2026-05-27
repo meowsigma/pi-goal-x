@@ -31,15 +31,18 @@ import {
 import {
 	ABORT_GOAL_TOOL_NAME,
 	ACTIVE_GOAL_TOOL_NAMES,
+	COMPLETE_TASK_TOOL_NAME,
 	CREATE_GOAL_TOOL_NAME,
 	POST_STOP_ALLOWED_TOOLS,
 	PROPOSE_DRAFT_TOOL_NAME,
+	PROPOSE_TASK_LIST_TOOL_NAME,
+	PROPOSE_TWEAK_TOOL_NAME,
 	QUESTIONNAIRE_TOOL_NAME,
 	QUESTION_TOOL_NAME,
 	SISYPHUS_STEP_TOOL_NAME,
 	GOAL_PROGRESS_TOOL_NAMES,
 	lifecycleToolNamesForGoalStatus,
-	PROPOSE_TWEAK_TOOL_NAME,
+	SKIP_TASK_TOOL_NAME,
 } from "./goal-tool-names.ts";
 import {
 	asRecord,
@@ -60,6 +63,7 @@ import {
 	type GoalStateEntry,
 	type GoalStatus,
 	type StopReason,
+	type GoalTaskList,
 } from "./goal-record.ts";
 import {
 	appendGoalEvent,
@@ -102,13 +106,18 @@ import {
 	buildCompletionReport,
 	buildGoalCreatedReport,
 	buildPausedByAgentGoal,
+	buildTaskSummary,
 	clearGoalCommandMessage,
 	shouldArmPostCompactReminder,
 	shouldInjectPostCompactReminder,
+	taskCompletionBlockWarning,
 	validateGoalAbort,
 	validateGoalCompletion,
 	validatePauseGoal,
 	validateResumeGoal,
+	validateTaskCompletion,
+	validateTaskListProposal,
+	validateTaskSkip,
 } from "./goal-policy.ts";
 
 const STATE_ENTRY = "pi-goal-state";
@@ -174,6 +183,15 @@ function detailedSummary(goal: GoalRecord | null): string {
 	];
 	if (goal.sisyphus) {
 		lines.push("Mode: Sisyphus (prompt/criteria variant; shared goal lifecycle)");
+	}
+	if (goal.taskList) {
+		const total = goal.taskList.tasks.length;
+		const pending = goal.taskList.tasks.filter((t) => t.status === "pending");
+		const taskSummary = buildTaskSummary(goal.taskList);
+		lines.push(`Tasks: ${taskSummary}`);
+		if (pending.length > 0) {
+			lines.push(`Next pending task: ${pending[0]!.id} — ${pending[0]!.title}`);
+		}
 	}
 	if (goal.activePath) lines.push(`File: ${goal.activePath}`);
 	if (goal.archivedPath) lines.push(`Archive: ${goal.archivedPath}`);
@@ -1877,6 +1895,17 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				};
 			}
 			if (!state.goal) throw new Error("Goal disappeared during completion validation.");
+
+			// Task gate: warn if blockCompletion is enabled and tasks remain pending
+			const taskWarning = state.goal.taskList ? taskCompletionBlockWarning(state.goal.taskList) : null;
+			const taskSummaryText = state.goal.taskList ? buildTaskSummary(state.goal.taskList) : null;
+			if (taskWarning) {
+				return {
+					content: [{ type: "text", text: taskWarning }],
+					details: goalDetails(state.goal),
+				};
+			}
+
 			const auditTarget = mergeGoalPromptFromDisk(ctx, state.goal);
 			// Append ledger: completion requested
 			try {
@@ -1953,6 +1982,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 							detailedSummary: detailedSummary(state.goal),
 							completionSummary: params.completionSummary,
 							auditSkippedReason: "auditor disabled in settings",
+							taskSummary: state.goal?.taskList ? buildTaskSummary(state.goal.taskList) : null,
 						}),
 					}],
 					details: goalDetails(state.goal),
@@ -2151,6 +2181,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						detailedSummary: detailedSummary(state.goal),
 						completionSummary: params.completionSummary,
 						auditorReport: auditor.output,
+						taskSummary: state.goal?.taskList ? buildTaskSummary(state.goal.taskList) : null,
 					}),
 				}],
 				details: goalDetails(state.goal),
@@ -2325,6 +2356,258 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		},
 		renderCall(args, theme) {
 			return new Text(theme.fg("toolTitle", "step_complete legacy ") + theme.fg("muted", `#${args?.stepIndex ?? "?"}`), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			return renderGoalResult(result, theme);
+		},
+	}));
+
+	// ── propose_task_list ──────────────────────────────────────────────────
+	pi.registerTool(defineTool({
+		name: PROPOSE_TASK_LIST_TOOL_NAME,
+		label: "Propose Task List",
+		description: "Propose a structured task list for the current goal. Mirrors the propose_goal_tweak pattern: shows a confirmation dialog and stops the turn.",
+		promptSnippet: "Propose a task list with confirmation. Stops the turn after confirmation.",
+		promptGuidelines: [
+			"Use propose_task_list after a goal is confirmed, on the first continuation turn, if the objective naturally decomposes into trackable milestones.",
+			"Do not add a task list for simple, single-step goals.",
+			"Existing tasks with matching IDs preserve their status/evidence/timestamps; new IDs start as pending; removed IDs are gone.",
+			"After confirmation the turn stops; the next continuation will arrive automatically.",
+		],
+		parameters: Type.Object({
+			tasks: Type.Array(Type.Object({
+				id: Type.String({ description: "Short stable slug e.g. 'task-1'" }),
+				title: Type.String({ description: "Human-readable task title" }),
+			}), { description: "Array of task objects with id and title" }),
+			blockCompletion: Type.Optional(Type.Boolean({ description: "If true, warns when pending tasks remain during complete_goal. Default false." })),
+			changeSummary: Type.Optional(Type.String({ description: "Optional summary of the task list proposal" })),
+		}),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			reconcileFocusedGoalFromDisk(ctx);
+			if (!state.goal) {
+				return {
+					content: [{ type: "text", text: "No goal is set; propose_task_list requires an active goal." }],
+					details: goalDetails(state.goal),
+				};
+			}
+			const gate = validateTaskListProposal({ goal: state.goal, tasks: params.tasks });
+			if (!gate.ok) {
+				return {
+					content: [{ type: "text", text: gate.message }],
+					details: goalDetails(state.goal),
+				};
+			}
+			const blockCompletion = params.blockCompletion === true;
+			const now = nowIso();
+			const existingTasks = state.goal.taskList?.tasks ?? [];
+
+			// Merge: existing tasks with matching IDs preserve status/timestamps
+			const existingById = new Map(existingTasks.map((t) => [t.id, t]));
+			const mergedTasks = params.tasks.map((p) => {
+				const existing = existingById.get(p.id);
+				if (existing) {
+					return { ...existing, title: p.title };
+				}
+				return { id: p.id, title: p.title, status: "pending" as const };
+			});
+
+			const taskList: GoalTaskList = {
+				tasks: mergedTasks,
+				blockCompletion,
+				proposedAt: now,
+			};
+
+			// Show full proposed task list in confirmation dialog
+			const taskLines = taskList.tasks.map((t) => {
+				const marker = t.status === "complete" ? "[x]" : t.status === "skipped" ? "[~]" : "[ ]";
+				return `  ${marker} ${t.id}: ${t.title}`;
+			});
+			const gateLabel = blockCompletion ? " (blockCompletion enabled)" : "";
+			const proposalText = [`Proposed task list${gateLabel}:`, "", ...taskLines].join("\n");
+
+			const decision = await showProposalDialog(ctx, proposalText, "goal");
+			if (decision !== "confirm") {
+				return {
+					content: [{ type: "text", text: "Task list proposal declined." }],
+					details: goalDetails(state.goal),
+				};
+			}
+
+			// Apply
+			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
+			if (!state.goal) {
+				return {
+					content: [{ type: "text", text: "Goal disappeared during task list proposal." }],
+					details: goalDetails(null),
+				};
+			}
+			state.goal = { ...state.goal, taskList, updatedAt: now };
+			setGoal(state.goal, ctx);
+			turnStoppedFor = state.goal.id;
+			resetGetGoalNudgeState(state.goal.id);
+			syncGoalTools();
+			updateUI(ctx);
+
+			// Append ledger event
+			try {
+				appendGoalEvent(ctx, {
+					type: "task_list_set",
+					goalId: state.goal.id,
+					taskCount: taskList.tasks.length,
+					blockCompletion,
+					at: now,
+				});
+			} catch {
+				// Ledger failure should not block task list proposal
+			}
+
+			return {
+				content: [{ type: "text", text: `Task list proposed and confirmed. ${taskList.tasks.length} task${taskList.tasks.length === 1 ? "" : "s"} set.${gateLabel}` }],
+				details: goalDetails(state.goal),
+				terminate: true,
+			};
+		},
+		renderCall(args, theme) {
+			const summary = args?.changeSummary ? truncateText(args.changeSummary, 80) : `${args?.tasks?.length ?? 0} tasks`;
+			return new Text(theme.fg("toolTitle", "propose_task_list ") + theme.fg("muted", summary), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			return renderGoalResult(result, theme);
+		},
+	}));
+
+	// ── complete_task ─────────────────────────────────────────────────────
+	pi.registerTool(defineTool({
+		name: COMPLETE_TASK_TOOL_NAME,
+		label: "Complete Task",
+		description: "Mark a task as complete within the current goal's task list. Does NOT stop the turn — the agent can continue working.",
+		promptSnippet: "Mark a task done and continue. Does not stop the turn.",
+		promptGuidelines: [
+			"Use complete_task to mark a task as complete with optional evidence text (max 200 characters).",
+			"The turn does NOT stop after complete_task — you may continue with other work.",
+		],
+		parameters: Type.Object({
+			taskId: Type.String({ description: "Task id to mark as complete" }),
+			evidence: Type.Optional(Type.String({ description: "Optional evidence note (max 200 characters)" })),
+		}),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			reconcileFocusedGoalFromDisk(ctx);
+			const gate = validateTaskCompletion({ goal: state.goal, taskId: params.taskId });
+			if (!gate.ok) {
+				return {
+					content: [{ type: "text", text: gate.message }],
+					details: goalDetails(state.goal),
+				};
+			}
+			if (!state.goal?.taskList) throw new Error("Task list disappeared during task completion.");
+			const now = nowIso();
+			const evidence = params.evidence?.trim().slice(0, 200) || undefined;
+			const updatedTasks = state.goal.taskList.tasks.map((t) => {
+				if (t.id !== params.taskId) return t;
+				return { ...t, status: "complete" as const, completedAt: now, evidence };
+			});
+			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
+			if (!state.goal) throw new Error("Goal disappeared during task completion.");
+			state.goal = {
+				...state.goal,
+				taskList: { ...state.goal.taskList, tasks: updatedTasks },
+				updatedAt: now,
+			};
+			setGoal(state.goal, ctx);
+			syncGoalTools();
+			updateUI(ctx);
+
+			// Append ledger event
+			try {
+				appendGoalEvent(ctx, {
+					type: "task_complete",
+					goalId: state.goal.id,
+					taskId: params.taskId,
+					evidence,
+					at: now,
+				});
+			} catch {
+				// Ledger failure should not block task completion
+			}
+
+			const taskSummary = buildTaskSummary(state.goal.taskList);
+			return {
+				content: [{ type: "text", text: `${params.taskId} complete. ${taskSummary}.` }],
+				details: goalDetails(state.goal),
+			};
+		},
+		renderCall(args, theme) {
+			return new Text(theme.fg("toolTitle", "complete_task ") + theme.fg("success", args?.taskId ?? ""), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			return renderGoalResult(result, theme);
+		},
+	}));
+
+	// ── skip_task ─────────────────────────────────────────────────────────
+	pi.registerTool(defineTool({
+		name: SKIP_TASK_TOOL_NAME,
+		label: "Skip Task",
+		description: "Skip a pending task in the current goal's task list. Does NOT stop the turn — the agent can continue working.",
+		promptSnippet: "Skip a task with a reason. Does not stop the turn.",
+		promptGuidelines: [
+			"Use skip_task to mark a task as skipped with a required reason.",
+			"The turn does NOT stop after skip_task — you may continue with other work.",
+		],
+		parameters: Type.Object({
+			taskId: Type.String({ description: "Task id to skip" }),
+			reason: Type.String({ description: "Non-empty reason for skipping this task" }),
+		}),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			reconcileFocusedGoalFromDisk(ctx);
+			const gate = validateTaskSkip({ goal: state.goal, taskId: params.taskId, reason: params.reason });
+			if (!gate.ok) {
+				return {
+					content: [{ type: "text", text: gate.message }],
+					details: goalDetails(state.goal),
+				};
+			}
+			if (!state.goal?.taskList) throw new Error("Task list disappeared during task skip.");
+			const now = nowIso();
+			const updatedTasks = state.goal.taskList.tasks.map((t) => {
+				if (t.id !== params.taskId) return t;
+				return { ...t, status: "skipped" as const, skippedAt: now, skipReason: params.reason.trim() };
+			});
+			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
+			if (!state.goal) throw new Error("Goal disappeared during task skip.");
+			state.goal = {
+				...state.goal,
+				taskList: { ...state.goal.taskList, tasks: updatedTasks },
+				updatedAt: now,
+			};
+			setGoal(state.goal, ctx);
+			syncGoalTools();
+			updateUI(ctx);
+
+			// Append ledger event
+			try {
+				appendGoalEvent(ctx, {
+					type: "task_skipped",
+					goalId: state.goal.id,
+					taskId: params.taskId,
+					reason: params.reason.trim(),
+					at: now,
+				});
+			} catch {
+				// Ledger failure should not block task skip
+			}
+
+			const taskSummary = buildTaskSummary(state.goal.taskList);
+			return {
+				content: [{ type: "text", text: `${params.taskId} skipped. ${taskSummary}.` }],
+				details: goalDetails(state.goal),
+			};
+		},
+		renderCall(args, theme) {
+			return new Text(theme.fg("toolTitle", "skip_task ") + theme.fg("warning", args?.taskId ?? ""), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			return renderGoalResult(result, theme);

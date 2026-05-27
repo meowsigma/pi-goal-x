@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createGoal } from "../extensions/goal-record.ts";
+import { createGoal, type GoalTaskList } from "../extensions/goal-record.ts";
 import {
 	activePathForGoal,
 	archiveGoalFile,
@@ -144,3 +144,77 @@ function pathExists(filePath: string): boolean {
 		return false;
 	}
 }
+
+test("serializeGoalFile includes ## Tasks section when taskList is present", () => {
+	const goal = createGoal({ objective: "Do stuff", autoContinue: true, sisyphus: false });
+	const taskList: GoalTaskList = {
+		tasks: [
+			{ id: "t1", title: "Write tests", status: "complete", evidence: "all pass" },
+			{ id: "t2", title: "Add migration", status: "pending" },
+			{ id: "t3", title: "Update docs", status: "skipped", skipReason: "superseded" },
+		],
+		blockCompletion: true,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	goal.taskList = taskList;
+
+	const serialized = serializeGoalFile(goal);
+	assert.ok(serialized.includes("## Tasks"), "should include Tasks section");
+	assert.ok(serialized.includes("[x] t1: Write tests"), "complete task uses [x]");
+	assert.ok(serialized.includes("[ ] t2: Add migration"), "pending task uses [ ]");
+	assert.ok(serialized.includes("[~] t3: Update docs"), "skipped task uses [~]");
+	assert.ok(serialized.includes("blockCompletion: true"), "should include blockCompletion in comment");
+	assert.ok(serialized.includes("evidence: all pass"), "should include evidence for complete task");
+	assert.ok(serialized.includes("skipped: superseded"), "should include skipReason for skipped task");
+});
+
+test("serializeGoalFile omits ## Tasks section when no taskList", () => {
+	const goal = createGoal({ objective: "Simple goal", autoContinue: true, sisyphus: false });
+	const serialized = serializeGoalFile(goal);
+	assert.equal(serialized.includes("## Tasks"), false);
+});
+
+test("parseGoalFile round-trips taskList through JSON header", () => {
+	const goal = createGoal({ objective: "Stuff", autoContinue: true, sisyphus: false });
+	goal.taskList = {
+		tasks: [
+			{ id: "t1", title: "Task 1", status: "complete" },
+			{ id: "t2", title: "Task 2", status: "pending" },
+		],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+
+	const serialized = serializeGoalFile(goal);
+	const tmpDir = mkdtempSync(path.join(tmpdir(), "goal-test-"));
+	try {
+		const filePath = path.join(tmpDir, "test-goal.md");
+		writeFileSync(filePath, serialized, "utf8");
+		const parsed = parseGoalFile(filePath);
+		assert.ok(parsed);
+		assert.ok(parsed.taskList);
+		assert.equal(parsed.taskList.tasks.length, 2);
+		assert.equal(parsed.taskList.tasks[0]!.id, "t1");
+		assert.equal(parsed.taskList.tasks[0]!.status, "complete");
+		assert.equal(parsed.taskList.tasks[1]!.id, "t2");
+		assert.equal(parsed.taskList.tasks[1]!.status, "pending");
+		assert.equal(parsed.taskList.blockCompletion, false);
+	} finally {
+		rmSync(tmpDir, { recursive: true, force: true });
+	}
+});
+
+test("parseGoalFile parses goal without taskList unchanged", () => {
+	const goal = createGoal({ objective: "Simple task", autoContinue: true, sisyphus: false });
+	const serialized = serializeGoalFile(goal);
+	const tmpDir = mkdtempSync(path.join(tmpdir(), "goal-test-"));
+	try {
+		const filePath = path.join(tmpDir, "test-goal.md");
+		writeFileSync(filePath, serialized, "utf8");
+		const parsed = parseGoalFile(filePath);
+		assert.ok(parsed);
+		assert.equal(parsed.taskList, undefined);
+	} finally {
+		rmSync(tmpDir, { recursive: true, force: true });
+	}
+});

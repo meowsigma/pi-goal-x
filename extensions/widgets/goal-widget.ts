@@ -8,7 +8,7 @@ import {
 	truncateText,
 	type GoalDisplayRecordLike,
 } from "../goal-core.ts";
-
+import type { GoalTaskList, TaskStatus } from "../goal-record.ts";
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
 
@@ -17,6 +17,7 @@ export interface GoalWidgetRecord extends GoalDisplayRecordLike {
 	archivedPath?: string | null;
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
+	taskList?: { tasks: Array<{ id: string; title: string; status: TaskStatus }>; blockCompletion: boolean } | null;
 }
 
 export interface AuditorWidgetProgress {
@@ -79,6 +80,11 @@ function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0): string {
 	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
 	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
+	if (goal.taskList && goal.taskList.tasks.length > 0) {
+		const total = goal.taskList.tasks.length;
+		const done = goal.taskList.tasks.filter((t) => t.status === "complete" || t.status === "skipped").length;
+		bits.push(`${done}/${total} tasks`);
+	}
 	if (otherOpenGoalCount > 0) bits.push(`+${otherOpenGoalCount} open`);
 	return bits.join(" · ");
 }
@@ -210,6 +216,17 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const titleWidth = Math.max(12, safeWidth - 8);
 	const objective = truncateText(displayObjectiveTitle(goal.objective), titleWidth);
 	body.push(`${theme.fg("accent", "⟡")} ${theme.fg("text", objective)}`);
+
+	if (goal.taskList && goal.taskList.tasks.length > 0) {
+		const total = goal.taskList.tasks.length;
+		const done = goal.taskList.tasks.filter((t) => t.status === "complete" || t.status === "skipped").length;
+		const pending = goal.taskList.tasks.filter((t) => t.status === "pending");
+		if (done === total) {
+			body.push(`${theme.fg("success", "✓")} ${theme.fg("muted", "All tasks complete")}`);
+		} else if (pending.length > 0) {
+			body.push(`${theme.fg("warning", "◻")} ${theme.fg("muted", `${pending[0]!.id}: ${truncateText(pending[0]!.title, Math.max(8, safeWidth - 20))} (next)`)}`);
+		}
+	}
 
 	if (goal.status === "paused" && goal.stopReason === "agent" && goal.pauseReason) {
 		body.push(`${theme.fg("warning", "blocker")} ${theme.fg("warning", truncateText(goal.pauseReason, Math.max(12, safeWidth - 14)))}`);

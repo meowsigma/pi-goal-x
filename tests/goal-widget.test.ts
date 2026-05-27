@@ -193,3 +193,55 @@ test("renderAuditorWidgetLines no progress bar when percentage is undefined", ()
 	assert.match(allText, /Working/);
 	assert.doesNotMatch(allText, /\d+%/);
 });
+
+test("renderGoalWidgetLines shows task count in heading when taskList present", () => {
+	const lines = renderGoalWidgetLines(goal({
+		taskList: {
+			tasks: [
+				{ id: "t1", title: "Task 1", status: "complete" },
+				{ id: "t2", title: "Task 2", status: "pending" },
+				{ id: "t3", title: "Task 3", status: "skipped" },
+			],
+			blockCompletion: false,
+		},
+	}), theme, 100);
+	const heading = lines[0];
+	assert.ok(heading);
+	assert.match(heading, /2\/3 tasks/);
+});
+
+test("renderGoalWidgetLines shows next pending task in body", () => {
+	const lines = renderGoalWidgetLines(goal({
+		taskList: {
+			tasks: [
+				{ id: "t1", title: "Task 1", status: "complete" },
+				{ id: "t2", title: "Task 2", status: "pending" },
+				{ id: "t3", title: "Task 3", status: "pending" },
+			],
+			blockCompletion: false,
+		},
+	}), theme, 100);
+	const body = lines.slice(1).join(" ");
+	assert.match(body, /◻/);
+	assert.match(body, /next/);
+});
+
+test("renderGoalWidgetLines shows 'All tasks complete' when all done", () => {
+	const lines = renderGoalWidgetLines(goal({
+		taskList: {
+			tasks: [
+				{ id: "t1", title: "Task 1", status: "complete" },
+				{ id: "t2", title: "Task 2", status: "skipped" },
+			],
+			blockCompletion: false,
+		},
+	}), theme, 100);
+	const body = lines.slice(1).join(" ");
+	assert.match(body, /All tasks complete/);
+});
+
+test("renderGoalWidgetLines omits task line when no taskList", () => {
+	const lines = renderGoalWidgetLines(goal(), theme, 100);
+	const body = lines.slice(1).join(" ");
+	assert.equal(body.includes("tasks"), false);
+});

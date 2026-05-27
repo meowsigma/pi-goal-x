@@ -334,3 +334,75 @@ test("reconstructGoalLedger handles audit_skipped without changing goal status",
   // Focus should remain
   assert.equal(state.focusedGoalId, "g1");
 });
+
+test("task_list_set event round-trips correctly", () => {
+	const ctx = tempCtx();
+	try {
+		appendGoalEvent(ctx, {
+			type: "task_list_set",
+			goalId: "g1",
+			taskCount: 3,
+			blockCompletion: true,
+			at: "2026-05-27T00:00:00.000Z",
+		});
+		const result = readGoalLedger(ctx);
+		assert.equal(result.events.length, 1);
+		const event = result.events[0]!;
+		assert.equal(event.type, "task_list_set");
+		if (event.type === "task_list_set") {
+			assert.equal(event.taskCount, 3);
+			assert.equal(event.blockCompletion, true);
+			assert.equal(event.goalId, "g1");
+		}
+	} finally {
+		cleanup(ctx);
+	}
+});
+
+test("task_complete event round-trips correctly", () => {
+	const ctx = tempCtx();
+	try {
+		appendGoalEvent(ctx, {
+			type: "task_complete",
+			goalId: "g1",
+			taskId: "t1",
+			evidence: "all tests pass",
+			at: "2026-05-27T00:00:00.000Z",
+		});
+		const result = readGoalLedger(ctx);
+		assert.equal(result.events.length, 1);
+		const event = result.events[0]!;
+		assert.equal(event.type, "task_complete");
+		if (event.type === "task_complete") {
+			assert.equal(event.taskId, "t1");
+			assert.equal(event.evidence, "all tests pass");
+			assert.equal(event.goalId, "g1");
+		}
+	} finally {
+		cleanup(ctx);
+	}
+});
+
+test("task_skipped event round-trips correctly", () => {
+	const ctx = tempCtx();
+	try {
+		appendGoalEvent(ctx, {
+			type: "task_skipped",
+			goalId: "g1",
+			taskId: "t1",
+			reason: "No longer needed",
+			at: "2026-05-27T00:00:00.000Z",
+		});
+		const result = readGoalLedger(ctx);
+		assert.equal(result.events.length, 1);
+		const event = result.events[0]!;
+		assert.equal(event.type, "task_skipped");
+		if (event.type === "task_skipped") {
+			assert.equal(event.taskId, "t1");
+			assert.equal(event.reason, "No longer needed");
+			assert.equal(event.goalId, "g1");
+		}
+	} finally {
+		cleanup(ctx);
+	}
+});

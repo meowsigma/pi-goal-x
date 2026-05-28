@@ -143,6 +143,25 @@ export function taskCompletionBlockWarning(taskList: GoalTaskList): string | nul
 	return `${pending.length} task${pending.length > 1 ? "s" : ""} still pending with blockCompletion enabled. Complete or skip all pending tasks before finishing the goal.`;
 }
 
+/**
+ * Validate that a verificationSummary satisfies a verificationContract.
+ * If a contract exists, the summary must be non-empty.
+ */
+export function validateVerificationSummary(args: {
+	verificationContract?: string | null;
+	verificationSummary?: string | null;
+}): PolicyValidation {
+	const contract = args.verificationContract?.trim();
+	const summary = args.verificationSummary?.trim();
+	if (contract && !summary) {
+		return {
+			ok: false,
+			message: `This goal has a verification contract but no verificationSummary was provided. Provide a verificationSummary that addresses the contract requirements.`,
+		};
+	}
+	return { ok: true };
+}
+
 export function validateTaskCompletion(args: {
 	goal: GoalPolicyRecordLike | null;
 	taskId: string;

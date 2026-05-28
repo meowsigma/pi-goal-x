@@ -102,110 +102,75 @@ test("buildGoalAuditorPrompt demands semantic approval markers", () => {
 	assert.ok(prompt.includes("<approved/>"));
 	assert.ok(prompt.includes("<disapproved/>"));
 	assert.ok(prompt.includes("Generated a VitePress scaffold"));
-	assert.ok(!prompt.includes("<test_evidence>"), "should not contain <test_evidence> without testResults");
-	assert.ok(prompt.includes("3. Explain missing or weak evidence"));
-	assert.ok(prompt.includes("4. End with exactly <approved/>"));
+	assert.ok(!prompt.includes("<test_evidence>"), "should not contain deprecated <test_evidence>");
+	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
+	assert.ok(prompt.includes("6. End with exactly <approved/>"));
 });
-test("buildGoalAuditorPrompt renders test evidence block when testResults provided", () => {
+
+test("buildGoalAuditorPrompt renders verification summary when provided", () => {
 	const prompt = buildGoalAuditorPrompt({
 		goal: goal(),
 		completionSummary: "All tests pass.",
 		detailedSummary: "Goal: test",
-		testResults: {
-			exitCode: 0,
-			suiteName: "npm test",
-			output: "1..123\n# tests 123\n# pass 123\n# fail 0",
-			timestamp: "2026-05-26T12:42:00.000Z",
-		},
+		verificationSummary: "Ran npm test (0 failures). Re-read requirements and confirmed every item is addressed. Grepped for remaining STP references (none found).",
 	});
-	assert.ok(prompt.includes("<test_evidence>"));
-	assert.ok(prompt.includes("Suite: npm test"));
-	assert.ok(prompt.includes("Exit code: 0"));
-	assert.ok(prompt.includes("2026-05-26T12:42:00.000Z"));
-	assert.ok(prompt.includes("Output:"));
-	assert.ok(prompt.includes("1..123"));
-	assert.ok(prompt.includes("# tests 123"));
-	assert.ok(prompt.includes("# pass 123"));
-	assert.ok(prompt.includes("# fail 0"));
-	assert.ok(prompt.includes("</test_evidence>"));
-	assert.ok(prompt.includes("3. Before running a test suite with bash, check the <test_evidence> block"));
-	assert.ok(prompt.includes("5. End with exactly <approved/>"));
+	assert.ok(prompt.includes("<verification_summary>"));
+	assert.ok(prompt.includes("Ran npm test (0 failures)"));
+	assert.ok(prompt.includes("Re-read requirements"));
+	assert.ok(prompt.includes("Grepped for remaining STP"));
+	assert.ok(prompt.includes("</verification_summary>"));
+	// Step 3 appears when verificationSummary is present
+	assert.ok(prompt.includes("3. Check the <verification_summary> against real artifacts"));
+	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
+	assert.ok(prompt.includes("6. End with exactly <approved/>"));
 });
-test("buildGoalAuditorPrompt handles minimal testResults (only exitCode)", () => {
+
+test("buildGoalAuditorPrompt renders verification contract when goal has one", () => {
 	const prompt = buildGoalAuditorPrompt({
-		goal: goal(),
-		completionSummary: "Tests passed.",
+		goal: goal({ verificationContract: "Run npm test (0 failures), grep for remaining references, re-read requirements" }),
+		completionSummary: "All done.",
 		detailedSummary: "Goal: test",
-		testResults: {
-			exitCode: 0,
-		},
+		verificationSummary: "All checks passed.",
 	});
-	assert.ok(prompt.includes("<test_evidence>"));
-	assert.ok(prompt.includes("Suite: (not specified)"));
-	assert.ok(prompt.includes("Exit code: 0"));
-	assert.ok(prompt.includes("Timestamp: (not specified)"));
-	assert.ok(prompt.includes("(none provided)"));
-	assert.ok(prompt.includes("</test_evidence>"));
+	assert.ok(prompt.includes("<verification_contract>"));
+	assert.ok(prompt.includes("Run npm test (0 failures)"));
+	assert.ok(prompt.includes("grep for remaining references"));
+	assert.ok(prompt.includes("</verification_contract>"));
+	// Step 4 appears when verificationContract is present
+	assert.ok(prompt.includes("4. Verify that the executor has satisfied every item in the <verification_contract>"));
 });
-test("buildGoalAuditorPrompt omits test evidence block when testResults is null", () => {
+
+test("buildGoalAuditorPrompt omits verification sections when absent", () => {
 	const prompt = buildGoalAuditorPrompt({
 		goal: goal(),
 		completionSummary: "Done.",
 		detailedSummary: "Goal: test",
-		testResults: null,
 	});
-	assert.ok(!prompt.includes("<test_evidence>"), "should not contain <test_evidence> when testResults is null");
-	assert.ok(prompt.includes("3. Explain missing or weak evidence"));
-	assert.ok(prompt.includes("4. End with exactly <approved/>"));
-});
-test("buildGoalAuditorPrompt checklist instructs auditor to check test evidence before re-running tests", () => {
-	const prompt = buildGoalAuditorPrompt({
-		goal: goal(),
-		completionSummary: "Everything passes.",
-		detailedSummary: "Goal: test",
-		testResults: {
-			exitCode: 0,
-			suiteName: "npm test",
-		},
-	});
-	assert.ok(prompt.includes("Before running a test suite with bash"));
-	assert.ok(prompt.includes("check the <test_evidence> block"));
-	assert.ok(prompt.includes("accept them as evidence rather than re-running"));
-});
-test("buildGoalAuditorPrompt testResults with multi-line output indented correctly", () => {
-	const prompt = buildGoalAuditorPrompt({
-		goal: goal(),
-		completionSummary: "Suite passes.",
-		detailedSummary: "Goal: test",
-		testResults: {
-			exitCode: 0,
-			output: "line 1\nline 2\nline 3",
-		},
-	});
-	// Output lines must be indented inside the <test_evidence> block
-	assert.match(prompt, /Output:/);
-	assert.match(prompt, /    line 1/);
-	assert.match(prompt, /    line 2/);
-	assert.match(prompt, /    line 3/);
-	// Ensure each output line is prefixed with 4 spaces inside <test_evidence>
-	assert.doesNotMatch(prompt, /Output:\nline 1/);
+	assert.ok(!prompt.includes("<verification_summary>"), "should not contain <verification_summary> when not provided");
+	assert.ok(!prompt.includes("<verification_contract>"), "should not contain <verification_contract> when goal has none");
+	// Checklist should skip steps that depend on absent sections
+	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
+	assert.ok(prompt.includes("6. End with exactly <approved/>"));
+	assert.ok(!prompt.includes("3. Check the <verification_summary>"), "step 3 should be omitted without verificationSummary");
+	assert.ok(!prompt.includes("4. Verify that the executor has satisfied"), "step 4 should be omitted without verificationContract");
 });
 
-test("buildGoalAuditorPrompt testResults with non-passing exit code is still rendered", () => {
+test("buildGoalAuditorPrompt shows both verification summary and contract when both present", () => {
 	const prompt = buildGoalAuditorPrompt({
-		goal: goal(),
-		completionSummary: "Tests failed.",
+		goal: goal({ verificationContract: "Contract item A, Contract item B" }),
+		completionSummary: "Verified.",
 		detailedSummary: "Goal: test",
-		testResults: {
-			exitCode: 1,
-			output: "1 failing",
-		},
+		verificationSummary: "Verified A and B.",
 	});
-	assert.match(prompt, /<test_evidence>/);
-	assert.match(prompt, /Exit code: 1/);
-	assert.match(prompt, /    1 failing/);
-	// Step 3 instruction about checking evidence still present
-	assert.match(prompt, /Before running a test suite with bash/);
+	assert.ok(prompt.includes("<verification_summary>"));
+	assert.ok(prompt.includes("Verified A and B."));
+	assert.ok(prompt.includes("<verification_contract>"));
+	assert.ok(prompt.includes("Contract item A, Contract item B"));
+	// Both steps 3 and 4 should appear
+	assert.ok(prompt.includes("3. Check the <verification_summary>"));
+	assert.ok(prompt.includes("4. Verify that the executor has satisfied"));
+	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
+	assert.ok(prompt.includes("6. End with exactly <approved/>"));
 });
 
 test("runGoalCompletionAuditor returns aborted error when signal is already aborted (pre-flight)", async () => {

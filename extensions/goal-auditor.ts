@@ -127,15 +127,11 @@ export function parseAuditorDecision(output: string): { approved: boolean; disap
 	return { approved: approved && !disapproved, disapproved };
 }
 
-export interface AuditorTestResults {
-	/** Exit code of the test run (0 = success) */
-	exitCode: number;
-	/** Test suite name, e.g. 'npm test' */
-	suiteName?: string;
-	/** Last lines of test output showing results */
-	output?: string;
-	/** ISO timestamp of when tests were run */
-	timestamp?: string;
+export interface AuditorVerificationEvidence {
+	/** The agent's verification summary describing what was checked. */
+	summary: string;
+	/** The goal's verification contract (what the agent was required to verify), if any. */
+	contract?: string;
 }
 
 function taskSummaryBlock(taskList?: GoalTaskList | null): string {
@@ -158,7 +154,7 @@ export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
 	completionSummary?: string | null;
 	detailedSummary: string;
-	testResults?: AuditorTestResults | null;
+	verificationSummary?: string | null;
 }): string {
 	return [
 		"You are the independent completion auditor for pi-goal.",
@@ -186,31 +182,34 @@ export function buildGoalAuditorPrompt(args: {
 		args.detailedSummary,
 		...(taskSummaryBlock(args.goal.taskList) ? ["", taskSummaryBlock(args.goal.taskList)] : []),
 		"</goal_details>",
-		...(args.testResults ? [
+		...(args.verificationSummary?.trim() ? [
 			"",
-			"Executor test evidence:",
-			"<test_evidence>",
-			`  Suite: ${args.testResults.suiteName ?? "(not specified)"}`,
-			`  Exit code: ${args.testResults.exitCode}`,
-			`  Timestamp: ${args.testResults.timestamp ?? "(not specified)"}`,
-			`  Output:`,
-			...(args.testResults.output ? args.testResults.output.split("\n").map((l) => `    ${l}`) : ["    (none provided)"]),
-			"</test_evidence>",
+			"Executor verification summary:",
+			"<verification_summary>",
+			args.verificationSummary.trim(),
+			"</verification_summary>",
+		] : []),
+		...(args.goal.verificationContract?.trim() ? [
+			"",
+			"Goal verification contract (what the executor was required to verify):",
+			"<verification_contract>",
+			args.goal.verificationContract.trim(),
+			"</verification_contract>",
 		] : []),
 		"",
 		"Audit checklist:",
-		...(args.testResults ? [
+		...[
 			"1. Extract the real success criteria from the objective, including quality/reader outcomes.",
 			"2. Inspect artifacts or command output that can prove or disprove those criteria.",
-			"3. Before running a test suite with bash, check the <test_evidence> block. If the executor has provided recent passing test results for that suite, accept them as evidence rather than re-running the tests.",
-			"4. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
-			"5. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
-		] : [
-			"1. Extract the real success criteria from the objective, including quality/reader outcomes.",
-			"2. Inspect artifacts or command output that can prove or disprove those criteria.",
-			"3. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
-			"4. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
-		]),
+			...(args.verificationSummary?.trim()
+				? ["3. Check the <verification_summary> against real artifacts. If the executor claims to have run tests or searched for references, verify those claims with actual file/shell evidence. The summary is a claim, not proof — cross-check it."]
+				: []),
+			...(args.goal.verificationContract?.trim()
+				? ["4. Verify that the executor has satisfied every item in the <verification_contract>. If any item is missing or weakly addressed, disapprove."]
+				: []),
+			"5. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
+			"6. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
+		],
 		"",
 		"Progress reporting:",
 		"You have the report_auditor_progress tool available to report your progress to the user.",
@@ -288,7 +287,7 @@ export async function runGoalCompletionAuditor(args: {
 	goal: GoalRecord;
 	completionSummary?: string | null;
 	detailedSummary: string;
-	testResults?: AuditorTestResults | null;
+	verificationSummary?: string | null;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
 	/**

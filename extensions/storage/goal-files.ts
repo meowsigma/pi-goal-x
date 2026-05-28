@@ -122,12 +122,12 @@ function taskCheckbox(status: TaskStatus): string {
 	return " ";
 }
 
-function taskLineSuffix(task: { status: TaskStatus; evidence?: string; skipReason?: string }): string {
-	if (task.status === "complete" && task.evidence) return ` — evidence: ${task.evidence}`;
-	if (task.status === "skipped" && task.skipReason) return ` — skipped: ${task.skipReason}`;
-	if (task.status === "complete") return "";
-	if (task.status === "skipped") return "";
-	return "";
+function taskLineSuffix(task: { status: TaskStatus; evidence?: string; skipReason?: string; verificationContract?: string }): string {
+	const parts: string[] = [];
+	if (task.status === "complete" && task.evidence) parts.push(`evidence: ${task.evidence}`);
+	if (task.status === "skipped" && task.skipReason) parts.push(`skipped: ${task.skipReason}`);
+	if ((task.status === "pending") && task.verificationContract) parts.push(`contract: ${task.verificationContract}`);
+	return parts.length > 0 ? ` — ${parts.join("; ")}` : "";
 }
 
 export function serializeGoalFile(goal: GoalRecord): string {
@@ -145,6 +145,8 @@ export function serializeGoalFile(goal: GoalRecord): string {
 
 <!-- blockCompletion: ${goal.taskList.blockCompletion} -->\n${taskLines.join("\n")}\n`;
 	}
+	const contractLine = goal.verificationContract?.trim() ? `
+- Verification contract: ${goal.verificationContract.trim()}` : "";
 	return `${meta}
 
 # Goal Prompt
@@ -157,7 +159,7 @@ ${goal.objective.trim()}
 - Auto-continue: ${goal.autoContinue ? "on" : "off"}
 - Sisyphus mode: ${goal.sisyphus ? "yes (prompt/criteria style)" : "no"}
 - Time spent: ${formatDuration(goal.usage.activeSeconds)}
-- Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}${taskSection}${pauseBlock}
+- Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}${contractLine}${taskSection}${pauseBlock}
 `;
 }
 

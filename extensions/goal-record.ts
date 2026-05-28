@@ -14,6 +14,7 @@ export interface GoalTask {
   skippedAt?: string;
   evidence?: string;
   skipReason?: string;
+  verificationContract?: string;
 }
 
 export interface GoalTaskList {
@@ -43,6 +44,8 @@ export interface GoalRecord {
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
 	taskList?: GoalTaskList;
+	/** Plain-text description of what verification evidence is required before completing this goal. */
+	verificationContract?: string;
 }
 
 export interface GoalStateEntry {
@@ -182,6 +185,7 @@ export function normalizeTaskList(value: unknown): GoalTaskList | undefined {
 			skippedAt: typeof t.skippedAt === "string" ? t.skippedAt : undefined,
 			evidence: typeof t.evidence === "string" ? t.evidence : undefined,
 			skipReason: typeof t.skipReason === "string" ? t.skipReason : undefined,
+			verificationContract: typeof t.verificationContract === "string" ? t.verificationContract : undefined,
 		});
 	}
 	if (tasks.length === 0) return undefined;
@@ -224,5 +228,6 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		pauseReason: typeof raw.pauseReason === "string" && raw.pauseReason.trim() ? raw.pauseReason : undefined,
 		pauseSuggestedAction: typeof raw.pauseSuggestedAction === "string" && raw.pauseSuggestedAction.trim() ? raw.pauseSuggestedAction : undefined,
 		taskList: normalizeTaskList(raw.taskList),
+		verificationContract: typeof raw.verificationContract === "string" ? raw.verificationContract : undefined,
 	};
 }

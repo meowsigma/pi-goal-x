@@ -26,6 +26,57 @@ export function promptSafeObjective(objective: string): string {
 	return objective.replace(/<\/?untrusted_objective>/gi, (tag) => tag.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
 }
 
+const VERIFICATION_CONTRACT_RE = /^Verification contract:\s*(.+)$/im;
+
+const CONVENTIONAL_SECTION_NAMES = [
+	"success criteria",
+	"boundaries",
+	"constraints",
+	"if blocked",
+	"if blocked / unclear / failing",
+	"don'ts",
+	"sisyphus reminder",
+	"objective",
+	"目标",
+	"ordered steps",
+	"order rules",
+	"steps",
+];
+
+/**
+ * Extract a `Verification contract:` section from a goal objective and return
+ * the cleaned objective (without the contract section) and the contract text.
+ *
+ * The contract section is a single line matching:
+ *   Verification contract: <text>
+ *
+ * It can appear anywhere in the objective, but by convention it goes after
+ * the other sections (like Success criteria, Boundaries, Constraints).
+ *
+ * If no contract section is found, `verificationContract` is undefined.
+ */
+export function extractVerificationContract(objective: string): { objective: string; verificationContract?: string } {
+	const lines = objective.replace(/\r/g, "").split("\n");
+	let contract: string | undefined;
+	const filtered: string[] = [];
+
+	for (const line of lines) {
+		const trimmed = line.trim();
+		const m = VERIFICATION_CONTRACT_RE.exec(trimmed);
+		if (m) {
+			contract = m[1].trim();
+			// Skip this line — don't add it to the cleaned objective
+		} else {
+			filtered.push(line);
+		}
+	}
+
+	return {
+		objective: filtered.join("\n"),
+		verificationContract: contract || undefined,
+	};
+}
+
 export function buildDraftConfirmationText(args: {
 	focus: GoalDraftingFocus;
 	originalTopic: string;
@@ -143,6 +194,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 		"Success criteria: <observable evidence the goal is done>",
 		"Boundaries: <in scope / out of scope>",
 		"Constraints: <hard rules>",
+		"Verification contract: <optional — what verification evidence is required before marking complete, e.g. 'Run npm test (0 failures), grep for remaining references, re-read requirements and confirm every item is addressed'>",
 		"If blocked: <default = stop and ask the user>",
 		"Call propose_goal_draft with sisyphus=false and autoContinue=true unless the user asked otherwise.",
 	];
@@ -155,6 +207,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 		"Success criteria: <observable evidence the whole ordered goal is done>",
 		"Boundaries: <in scope / out of scope>",
 		"Constraints: <hard rules, files not to touch, etc.>",
+		"Verification contract: <optional — what verification evidence is required before marking complete>",
 		"Ordered steps: <preserve the user's requested steps and ordering; do not add preflight or reconnaissance steps they did not ask for>",
 		"If blocked / unclear / failing: <default = stop and ask the user>",
 		"Sisyphus reminder: Work patiently and sequentially. No rushing, no unrequested preflight steps, no improvising around blockers.",

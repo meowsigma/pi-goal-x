@@ -11,6 +11,7 @@ import {
 import {
 	buildDraftConfirmationText,
 	buildTweakConfirmationText,
+	extractVerificationContract,
 	goalDraftingPrompt,
 	validateGoalDraftProposal,
 	type GoalDraftingFocus,
@@ -118,6 +119,7 @@ import {
 	validateTaskCompletion,
 	validateTaskListProposal,
 	validateTaskSkip,
+	validateVerificationSummary,
 } from "./goal-policy.ts";
 
 const STATE_ENTRY = "pi-goal-state";
@@ -1010,8 +1012,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		continuationTimer.unref?.();
 	}
 
-	function replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow = true): void {
-		setGoal(createGoal(config), ctx, true, "created");
+	function replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow = true, verificationContract?: string): void {
+		const goal = createGoal(config);
+		if (verificationContract) goal.verificationContract = verificationContract;
+		setGoal(goal, ctx, true, "created");
 		beginAccounting();
 		// Reset continuation nudge state — this is a fresh goal.
 		resetGetGoalNudgeState(state.goal?.id);
@@ -1190,17 +1194,18 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}
 
 	function handleDirectGoalSet(rawObjective: string, ctx: ExtensionContext, focus: DraftingFocus): void {
-		const objective = rawObjective.trim();
-		if (!objective) {
+		const raw = rawObjective.trim();
+		if (!raw) {
 			const command = focus === "sisyphus" ? "/sisyphus-set" : "/goals-set";
 			ctx.ui.notify(`No objective provided. Use ${command} <objective>.`, "warning");
 			return;
 		}
+		const { objective, verificationContract } = extractVerificationContract(raw);
 		clearContinuationState();
 		clearActiveAccounting();
 		confirmationIntent = null;
 		syncGoalTools();
-		replaceGoal({ objective, autoContinue: true, sisyphus: focus === "sisyphus" }, ctx, true);
+		replaceGoal({ objective, autoContinue: true, sisyphus: focus === "sisyphus" }, ctx, true, verificationContract);
 	}
 
 	async function showGoalStatus(ctx: ExtensionContext): Promise<void> {
@@ -1611,6 +1616,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			"The sisyphus field must match the user's confirmation focus: /sisyphus -> sisyphus=true, /goals -> sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
 			"For sisyphus goals, preserve the user's requested ordered style and completion standard. Do not add reconnaissance/preflight steps, merge steps, reorder steps, or change the mode without explicit user confirmation.",
 			"create_goal is rejected; propose_goal_draft is the confirmation path. This is intentional — the user wants explicit say in goal creation.",
+			"You may include a Verification contract: section in the objective to specify what verification evidence is required before the goal can be completed. This is optional — if omitted, no per-goal contract enforcement applies.",
 		],
 		parameters: Type.Object({
 			objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input." }),
@@ -1672,13 +1678,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 
 			if (decision === "confirm") {
+				// Extract verification contract from objective before creation
+				const { objective: cleanedObjective, verificationContract } = extractVerificationContract(objective);
 				const config: GoalCreationConfig = {
-					objective,
+					objective: cleanedObjective,
 					autoContinue: autoContinueFlag,
 					sisyphus: sisyphusFlag,
 				};
 				confirmationIntent = null;
-				replaceGoal(config, ctx, false);
+				replaceGoal(config, ctx, false, verificationContract);
 				syncGoalTools();
 				return {
 					content: [{ type: "text", text: buildGoalCreatedReport({ objective, detailedSummary: detailedSummary(state.goal) }) }],
@@ -1782,10 +1790,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 
 			if (decision === "confirm") {
+				// Extract verification contract from revised objective
+				const { objective: cleanedObjective, verificationContract } = extractVerificationContract(newObjective);
 				// Apply the tweak: write the new objective to disk authoritatively.
 				const next: GoalRecord = {
 					...state.goal,
-					objective: newObjective,
+					objective: cleanedObjective,
+					verificationContract: verificationContract,
 					updatedAt: nowIso(),
 					// Clear any prior agent pause reason — the user has redefined the work.
 					pauseReason: undefined,
@@ -1857,25 +1868,19 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		promptSnippet: "Mark the active or paused pi goal complete — only when every requirement is satisfied.",
 		promptGuidelines: [
 			"Call complete_goal with status=complete only when the pi goal objective has actually been achieved and no required work remains.",
-			"Before calling complete_goal, summarize the evidence you believe proves completion; the tool will launch an independent pi auditor agent to inspect the workspace and judge the claim.",
+			"Before calling complete_goal, you MUST provide a verificationSummary that addresses every success criterion and any verification contract on the goal. Fold all verification evidence (test output, grep results, requirements coverage) into this single field.",
 			"The auditor is authoritative: completion is archived only if the auditor report ends with <approved/>. If it ends with <disapproved/> or no approval marker, complete_goal is rejected and the goal remains open.",
 			"Do NOT call complete_goal if any work remains, even if substantial progress was made. Do not use it merely because work is stopping, tests passed, or you are blocked.",
 			"Do not use complete_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
 			"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
 			"The goal objective is immutable. The agent MUST NOT modify the goal objective on its own initiative. If the user gives requirements, feedback, or corrections that differ from the goal objective, ask the user to run /goal-tweak to revise the goal. Use goal_question to confirm when the change is ambiguous.",
-			"If you have just run the test suite successfully and the tests all pass, include a testResults object with the exit code (0) and relevant output. The auditor will see this evidence and can skip re-running the tests.",
+			"If the goal has a verificationContract, your verificationSummary must address every item in the contract. The auditor will cross-check your claims against real artifacts.",
 		],
 		parameters: Type.Object({
 			status: Type.Optional(StringEnum([COMPLETE_STATUS] as const, { description: "Set to complete only when the objective is achieved." })),
 			completionSummary: Type.Optional(Type.String({ description: "Concise completion claim and evidence summary passed to the independent auditor agent." })),
+			verificationSummary: Type.String({ description: "Required verification evidence showing what was checked before declaring completion. Must address every success criterion and any verification contract on the goal. Examples: 'Ran npm test (0 failures), re-read requirements and confirmed A1-A3 complete, grepped for remaining STP references (none found).' The exact requirements depend on the specific goal." }),
 			confirmBypassAuditor: Type.Optional(Type.Boolean({ description: "Set to true to confirm bypassing the independent auditor when it is disabled in settings." })),
-
-			testResults: Type.Optional(Type.Object({
-				exitCode: Type.Number({ description: "Exit code of the test run (0 = success)" }),
-				suiteName: Type.Optional(Type.String({ description: "Test suite name, e.g. 'npm test'" })),
-				output: Type.Optional(Type.String({ description: "Last lines of test output showing results" })),
-				timestamp: Type.Optional(Type.String({ description: "ISO timestamp of when tests were run" })),
-			}, { description: "Structured test evidence passed to the auditor so it can skip redundant test re-runs. If you have just run the test suite successfully, include this so the auditor accepts the results without re-running." })),
 		}, { additionalProperties: false }),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -1902,6 +1907,18 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (taskWarning) {
 				return {
 					content: [{ type: "text", text: taskWarning }],
+					details: goalDetails(state.goal),
+				};
+			}
+
+			// Verification contract gate: if the goal has a contract, verificationSummary must be non-empty
+			const contractGate = validateVerificationSummary({
+				verificationContract: state.goal.verificationContract,
+				verificationSummary: params.verificationSummary,
+			});
+			if (!contractGate.ok) {
+				return {
+					content: [{ type: "text", text: contractGate.message }],
 					details: goalDetails(state.goal),
 				};
 			}
@@ -2043,7 +2060,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				goal: auditTarget,
 				completionSummary: params.completionSummary,
 				detailedSummary: detailedSummary(auditTarget),
-				testResults: params.testResults,
+				verificationSummary: params.verificationSummary,
 				signal: auditAbortController.signal,
 				onProgress: (progress) => {
 					auditProgress = {
@@ -2373,11 +2390,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			"Do not add a task list for simple, single-step goals.",
 			"Existing tasks with matching IDs preserve their status/evidence/timestamps; new IDs start as pending; removed IDs are gone.",
 			"After confirmation the turn stops; the next continuation will arrive automatically.",
+			"You may optionally specify a verificationContract per task to define what verification evidence is required before completing that task.",
 		],
 		parameters: Type.Object({
 			tasks: Type.Array(Type.Object({
 				id: Type.String({ description: "Short stable slug e.g. 'task-1'" }),
 				title: Type.String({ description: "Human-readable task title" }),
+				verificationContract: Type.Optional(Type.String({ description: "Optional verification contract for this task — what evidence is required before marking it complete." })),
 			}), { description: "Array of task objects with id and title" }),
 			blockCompletion: Type.Optional(Type.Boolean({ description: "If true, warns when pending tasks remain during complete_goal. Default false." })),
 			changeSummary: Type.Optional(Type.String({ description: "Optional summary of the task list proposal" })),
@@ -2407,9 +2426,18 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const mergedTasks = params.tasks.map((p) => {
 				const existing = existingById.get(p.id);
 				if (existing) {
-					return { ...existing, title: p.title };
+					return {
+						...existing,
+						title: p.title,
+						verificationContract: p.verificationContract ?? existing.verificationContract,
+					};
 				}
-				return { id: p.id, title: p.title, status: "pending" as const };
+				return {
+					id: p.id,
+					title: p.title,
+					status: "pending" as const,
+					verificationContract: p.verificationContract || undefined,
+				};
 			});
 
 			const taskList: GoalTaskList = {
@@ -2486,10 +2514,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Use complete_task to mark a task as complete with optional evidence text (max 200 characters).",
 			"The turn does NOT stop after complete_task — you may continue with other work.",
+			"If the task has a verificationContract, you MUST provide a verificationSummary that addresses it.",
 		],
 		parameters: Type.Object({
 			taskId: Type.String({ description: "Task id to mark as complete" }),
 			evidence: Type.Optional(Type.String({ description: "Optional evidence note (max 200 characters)" })),
+			verificationSummary: Type.Optional(Type.String({ description: "Verification evidence for this task. Required if the task has a verificationContract." })),
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -2502,6 +2532,19 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				};
 			}
 			if (!state.goal?.taskList) throw new Error("Task list disappeared during task completion.");
+
+			// Check verification contract for the task
+			const taskToComplete = state.goal.taskList.tasks.find((t) => t.id === params.taskId);
+			const contractGate = validateVerificationSummary({
+				verificationContract: taskToComplete?.verificationContract,
+				verificationSummary: params.verificationSummary,
+			});
+			if (!contractGate.ok) {
+				return {
+					content: [{ type: "text", text: contractGate.message }],
+					details: goalDetails(state.goal),
+				};
+			}
 			const now = nowIso();
 			const evidence = params.evidence?.trim().slice(0, 200) || undefined;
 			const updatedTasks = state.goal.taskList.tasks.map((t) => {
@@ -2509,10 +2552,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				return { ...t, status: "complete" as const, completedAt: now, evidence };
 			});
 			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
-			if (!state.goal) throw new Error("Goal disappeared during task completion.");
+			if (!state.goal || !state.goal.taskList) throw new Error("Goal disappeared during task completion.");
 			state.goal = {
 				...state.goal,
-				taskList: { ...state.goal.taskList, tasks: updatedTasks },
+				taskList: { ...state.goal.taskList, blockCompletion: state.goal.taskList.blockCompletion, tasks: updatedTasks },
 				updatedAt: now,
 			};
 			setGoal(state.goal, ctx);
@@ -2532,7 +2575,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				// Ledger failure should not block task completion
 			}
 
-			const taskSummary = buildTaskSummary(state.goal.taskList);
+			const taskSummary = buildTaskSummary(state.goal.taskList!);
 			return {
 				content: [{ type: "text", text: `${params.taskId} complete. ${taskSummary}.` }],
 				details: goalDetails(state.goal),
@@ -2577,10 +2620,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				return { ...t, status: "skipped" as const, skippedAt: now, skipReason: params.reason.trim() };
 			});
 			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
-			if (!state.goal) throw new Error("Goal disappeared during task skip.");
+			if (!state.goal || !state.goal.taskList) throw new Error("Goal disappeared during task skip.");
 			state.goal = {
 				...state.goal,
-				taskList: { ...state.goal.taskList, tasks: updatedTasks },
+				taskList: { ...state.goal.taskList, blockCompletion: state.goal.taskList.blockCompletion, tasks: updatedTasks },
 				updatedAt: now,
 			};
 			setGoal(state.goal, ctx);
@@ -2600,7 +2643,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				// Ledger failure should not block task skip
 			}
 
-			const taskSummary = buildTaskSummary(state.goal.taskList);
+			const taskSummary = buildTaskSummary(state.goal.taskList!);
 			return {
 				content: [{ type: "text", text: `${params.taskId} skipped. ${taskSummary}.` }],
 				details: goalDetails(state.goal),

@@ -24,6 +24,9 @@ export function taskListBlock(goal: GoalRecord): string {
 		if (task.status === "complete" && task.evidence) suffix = ` — ${task.evidence}`;
 		if (task.status === "skipped" && task.skipReason) suffix = ` — skipped: ${task.skipReason}`;
 		lines.push(`  ${taskMarker(task.status)} ${task.id}: ${task.title}${suffix}`);
+		if ((task.status === "pending") && task.verificationContract) {
+			lines.push(`    contract: ${task.verificationContract}`);
+		}
 	}
 	if (goal.taskList.blockCompletion && pending.length > 0) {
 		lines.push(`  TASK GATE: do not call complete_goal while tasks remain in [ ] pending state`);
@@ -32,6 +35,30 @@ export function taskListBlock(goal: GoalRecord): string {
 		lines.push(`  Next pending: ${pending[0]!.id} — ${pending[0]!.title}`);
 	}
 	return lines.join("\n");
+}
+
+/**
+ * Render a VERIFICATION CONTRACT section for the agent's prompts.
+ * This is shown when the goal has a verificationContract defined.
+ */
+export function verificationContractBlock(goal: GoalRecord): string {
+	if (!goal.verificationContract?.trim()) return "";
+	return [
+		"",
+		`[VERIFICATION CONTRACT goalId=${goal.id}]`,
+		"This goal has a verification contract that specifies what evidence the agent must provide before completing it.",
+		"",
+		"Verification contract:",
+		`  ${goal.verificationContract.trim()}`,
+		"",
+		"Rules:",
+		"- When calling complete_goal, you MUST provide a non-empty verificationSummary that addresses every item in the contract.",
+		"- The verificationSummary is a required parameter — complete_goal will reject calls without it.",
+		"- The independent auditor will cross-check your verificationSummary against the actual goal state.",
+		"- If a task in the task list has its own verificationContract, complete_task requires a verificationSummary that addresses it.",
+		"- Do NOT mark sub-items or tasks as complete until you have verified them against their contract.",
+		"- If there is no contract for this goal, these rules do not apply (backward compatible).",
+	].join("\n");
 }
 
 export function untrustedObjectiveBlock(goal: GoalRecord): string {
@@ -60,7 +87,9 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 export function goalPrompt(goal: GoalRecord): string {
 	const taskBlock = taskListBlock(goal);
 	const taskInjection = taskBlock ? `\n${taskBlock}` : "";
-	return `[PI GOAL ACTIVE goalId=${goal.id}]${taskInjection}
+	const contractBlock = verificationContractBlock(goal);
+	const contractInjection = contractBlock ? `\n${contractBlock}` : "";
+	return `[PI GOAL ACTIVE goalId=${goal.id}]${taskInjection}${contractInjection}
 Status: ${statusLabel(goal)}
 
 ${untrustedObjectiveBlock(goal)}
@@ -71,9 +100,11 @@ If the objective naturally decomposes into trackable milestones, you may call pr
 
 To ask the user a structured question (e.g. when the user's spec changes and you need to clarify before updating the goal), use goal_question. It opens a question dialog and returns the user's answer as tool output. Use plain conversation for simple clarifications.
 
-Keep this goal in force until it is actually achieved. Do not pause for confirmation just because a phase, chapter, file, or checklist item is finished. At each natural stopping point, compare every explicit requirement with concrete evidence from the workspace/session. If the objective is complete, call complete_goal with status=complete and summarize the evidence; complete_goal will launch an independent pi auditor agent and only archive if that auditor returns <approved/>. If it is not complete, choose the next concrete action and do it.
+Keep this goal in force until it is actually achieved. Do not pause for confirmation just because a phase, chapter, file, or checklist item is finished. At each natural stopping point, compare every explicit requirement with concrete evidence from the workspace/session. If the objective is complete, call complete_goal with status=complete and provide a verificationSummary; complete_goal will launch an independent pi auditor agent and only archive if that auditor returns <approved/>. If it is not complete, choose the next concrete action and do it.
 
 The completion auditor is independent and semantic, not a paperwork checklist. It may inspect files and command output, and it will reject scaffold-only, alpha, template, proxy-metric, or weakly verified completions with <disapproved/>.
+
+Before marking any sub-item as complete (including ✅ checkmarks in your output), verify thoroughly against the goal's success criteria and any verification contract. Only mark items as done when you have concrete evidence — not intent or partial progress.
 
 If the user presses Escape while the audit is running, the audit is skipped and the goal remains active. Use goal_question to ask the user whether to mark the goal complete anyway, give feedback, or continue working toward the goal.
 
@@ -88,6 +119,7 @@ Goal evolution: if the user gives requirements, feedback, or corrections that di
 
 export function continuationPrompt(goal: GoalRecord): string {
 	const taskBlock = taskListBlock(goal);
+	const contractBlock = verificationContractBlock(goal);
 	return [
 		// Phase 5 C1: structured outer marker (pi-codex-goal pattern).
 		`<pi_goal_continuation goal_id="${goal.id}" kind="checkpoint">`,
@@ -98,6 +130,7 @@ export function continuationPrompt(goal: GoalRecord): string {
 		"",
 		untrustedObjectiveBlock(goal),
 		...(taskBlock ? ["", taskBlock] : []),
+		...(contractBlock ? ["", contractBlock] : []),
 		"",
 		"Available work tools for pursuing the active goal include write, read, bash, and edit. Use those tools directly for file and shell work; do not call get_goal repeatedly to discover tools.",
 		"",
@@ -115,7 +148,9 @@ export function continuationPrompt(goal: GoalRecord): string {
 		"- Treat uncertainty as not achieved; do more verification or continue the work.",
 		"- For content/research/book/tutorial/report/reader-outcome goals, explicitly audit semantic quality: not merely scaffold/template/alpha, substantive content reviewed, and intended reader/user task outcome supported.",
 		"",
-		"Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when your own audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call complete_goal with status \"complete\"; the tool will launch an independent pi auditor agent and only archive if it returns <approved/>.",
+		"Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when your own audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call complete_goal with status \"complete\" and a verificationSummary that addresses every success criterion and any verification contract; the tool will launch an independent pi auditor agent and only archive if it returns <approved/>.",
+		"",
+		"Before marking any sub-item or task as complete (including ✅ checkmarks in your output), verify thoroughly against the relevant success criteria and any verification contract. Do NOT use completion indicators for items you have not fully verified.",
 		"",
 		"Do not call complete_goal unless the goal is complete enough to survive independent semantic auditing. Do not mark a goal complete merely because work is stopping.",
 		"Do not ask the user for confirmation unless there is a real blocker.",

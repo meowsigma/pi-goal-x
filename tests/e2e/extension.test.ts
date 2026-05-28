@@ -198,8 +198,8 @@ describe("Extension E2E", () => {
 		}
 	});
 
-	// ── 3: testResults parameter ────────────────────────────────────────────
-	it("e2e: complete_goal accepts testResults parameter without error", async () => {
+	// ── 3: verificationSummary parameter ────────────────────────────────────
+	it("e2e: complete_goal accepts verificationSummary parameter", async () => {
 		const f = testFixture();
 		try {
 			// Fire session_start to load state and set focusedGoalId/state.goal
@@ -215,13 +215,8 @@ describe("Extension E2E", () => {
 				{
 					status: "complete",
 					completionSummary: "All work done.",
+					verificationSummary: "Ran npm test (0 failures). Re-read requirements and confirmed all items. Grepped for remaining references (none found).",
 					confirmBypassAuditor: true,
-					testResults: {
-						exitCode: 0,
-						suiteName: "npm test",
-						output: "1..123\n# tests 123\n# pass 123\n# fail 0",
-						timestamp: "2026-05-26T12:42:00.000Z",
-					},
 				},
 				new AbortController().signal,
 				undefined,
@@ -234,7 +229,7 @@ describe("Extension E2E", () => {
 			assert.ok(text.includes("Goal complete") || text.includes("audit"),
 				`completion text should mention completion or audit. Got: ${text.substring(0, 100)}`);
 
-			// Verify no errors from testResults being passed through
+			// Verify no errors from verificationSummary being passed through
 			assert.equal(result.error, undefined, "should not return an error");
 		} finally {
 			f.cleanup();

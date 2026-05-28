@@ -8,7 +8,7 @@ import {
 	truncateText,
 	type GoalDisplayRecordLike,
 } from "../goal-core.ts";
-import type { GoalTaskList, TaskStatus } from "../goal-record.ts";
+import type { GoalTask, GoalTaskList, TaskStatus } from "../goal-record.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
@@ -18,7 +18,7 @@ export interface GoalWidgetRecord extends GoalDisplayRecordLike {
 	archivedPath?: string | null;
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
-	taskList?: { tasks: Array<{ id: string; title: string; status: TaskStatus }>; blockCompletion: boolean } | null;
+	taskList?: GoalTaskList | null;
 }
 
 export interface AuditorWidgetProgress {
@@ -77,14 +77,38 @@ function displayIcon(goal: GoalWidgetRecord): { icon: string; color: GoalWidgetC
 	return goal.autoContinue ? { icon: "●", color: "accent", label: "goal running" } : { icon: "○", color: "muted", label: "goal idle" };
 }
 
+function countFlatTasks(tasks: GoalTask[]): { total: number; done: number } {
+	let total = 0;
+	let done = 0;
+	for (const t of tasks) {
+		total++;
+		if (t.status === "complete" || t.status === "skipped") done++;
+		if (t.subtasks && t.subtasks.length > 0) {
+			const child = countFlatTasks(t.subtasks);
+			total += child.total;
+			done += child.done;
+		}
+	}
+	return { total, done };
+}
+
+function findFirstPending(tasks: GoalTask[]): GoalTask | undefined {
+	const queue = [...tasks];
+	while (queue.length > 0) {
+		const t = queue.shift()!;
+		if (t.status === "pending") return t;
+		if (t.subtasks) queue.push(...t.subtasks);
+	}
+	return undefined;
+}
+
 function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0, disableTasks = false): string {
 	const bits: string[] = [];
 	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
 	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
 	if (!disableTasks && goal.taskList && goal.taskList.tasks.length > 0) {
-		const total = goal.taskList.tasks.length;
-		const done = goal.taskList.tasks.filter((t) => t.status === "complete" || t.status === "skipped").length;
+		const { total, done } = countFlatTasks(goal.taskList.tasks);
 		bits.push(`${done}/${total} tasks`);
 	}
 	if (otherOpenGoalCount > 0) bits.push(`+${otherOpenGoalCount} open`);
@@ -220,13 +244,14 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	body.push(`${theme.fg("accent", "⟡")} ${theme.fg("text", objective)}`);
 
 	if (!options.disableTasks && goal.taskList && goal.taskList.tasks.length > 0) {
-		const total = goal.taskList.tasks.length;
-		const done = goal.taskList.tasks.filter((t) => t.status === "complete" || t.status === "skipped").length;
-		const pending = goal.taskList.tasks.filter((t) => t.status === "pending");
+		const { total, done } = countFlatTasks(goal.taskList.tasks);
 		if (done === total) {
 			body.push(`${theme.fg("success", "✓")} ${theme.fg("muted", "All tasks complete")}`);
-		} else if (pending.length > 0) {
-			body.push(`${theme.fg("warning", "◻")} ${theme.fg("muted", `${pending[0]!.id}: ${truncateText(pending[0]!.title, Math.max(8, safeWidth - 20))} (next)`)}`);
+		} else {
+			const firstPending = findFirstPending(goal.taskList.tasks);
+			if (firstPending) {
+				body.push(`${theme.fg("warning", "◻")} ${theme.fg("muted", `${firstPending.id}: ${truncateText(firstPending.title, Math.max(8, safeWidth - 20))} (next)`)}`);
+			}
 		}
 	}
 

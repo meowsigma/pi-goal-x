@@ -6,7 +6,12 @@ import test from "node:test";
 
 import {
 	buildTaskSummary,
+	checkSubtasksComplete,
+	findSubtaskDepthViolation,
+	findTaskInTree,
+	skipAllSubtasks,
 	taskCompletionBlockWarning,
+	updateTaskInTree,
 	validateTaskCompletion,
 	validateTaskSkip,
 	validateTaskListProposal,
@@ -236,42 +241,318 @@ test("validateTaskSkip: valid skip", () => {
 // ── validateTaskListProposal ──────────────────────────────────────────────────
 
 test("validateTaskListProposal: no goal", () => {
-	const result = validateTaskListProposal({ goal: null, tasks: [{ id: "t1", title: "T1" }] });
+	const result = validateTaskListProposal({ goal: null, tasks: [{ id: "t1", title: "T1", status: "pending" }] });
 	assert.equal(result.ok, false);
 	assert.match(result.message, /No goal/);
 });
 
 test("validateTaskListProposal: valid proposal", () => {
 	const goal = makeGoal([]);
-	const result = validateTaskListProposal({ goal, tasks: [{ id: "t1", title: "Task 1" }, { id: "t2", title: "Task 2" }] });
+	const result = validateTaskListProposal({ goal, tasks: [{ id: "t1", title: "Task 1", status: "pending" }, { id: "t2", title: "Task 2", status: "pending" }] });
 	assert.equal(result.ok, true);
 });
 
 test("validateTaskListProposal: duplicate ids", () => {
 	const goal = makeGoal([]);
-	const result = validateTaskListProposal({ goal, tasks: [{ id: "t1", title: "Task 1" }, { id: "t1", title: "Task 1 again" }] });
+	const result = validateTaskListProposal({ goal, tasks: [{ id: "t1", title: "Task 1", status: "pending" }, { id: "t1", title: "Task 1 again", status: "pending" }] });
 	assert.equal(result.ok, false);
 	assert.match(result.message, /Duplicate/);
 });
 
 test("validateTaskListProposal: empty id", () => {
 	const goal = makeGoal([]);
-	const result = validateTaskListProposal({ goal, tasks: [{ id: "", title: "Task" }] });
+	const result = validateTaskListProposal({ goal, tasks: [{ id: "", title: "Task", status: "pending" }] });
 	assert.equal(result.ok, false);
 	assert.match(result.message, /non-empty id/);
 });
 
 test("validateTaskListProposal: empty title", () => {
 	const goal = makeGoal([]);
-	const result = validateTaskListProposal({ goal, tasks: [{ id: "t1", title: "" }] });
+	const result = validateTaskListProposal({ goal, tasks: [{ id: "t1", title: "", status: "pending" }] });
 	assert.equal(result.ok, false);
 	assert.match(result.message, /non-empty title/);
 });
 
 test("validateTaskListProposal: over 50 tasks", () => {
 	const goal = makeGoal([]);
-	const tasks = Array.from({ length: 51 }, (_, i) => ({ id: `t${i}`, title: `Task ${i}` }));
+	const tasks = Array.from({ length: 51 }, (_, i) => ({ id: `t${i}`, title: `Task ${i}`, status: "pending" as const }));
 	const result = validateTaskListProposal({ goal, tasks });
 	assert.equal(result.ok, false);
 	assert.match(result.message, /cannot exceed 50/);
+});
+
+// ── Subtask depth validation ────────────────────────────────────────────
+
+test("findSubtaskDepthViolation: no violation at default depth", () => {
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "pending" as const },
+		],
+	}];
+	const violation = findSubtaskDepthViolation(tasks, 1);
+	assert.equal(violation, undefined);
+});
+
+test("findSubtaskDepthViolation: catches sub-sub-tasks at depth=1", () => {
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [{
+			id: "t1a", title: "Sub A", status: "pending" as const,
+			subtasks: [
+				{ id: "t1ai", title: "Sub-sub", status: "pending" as const },
+			],
+		}],
+	}];
+	const violation = findSubtaskDepthViolation(tasks, 1);
+	assert.ok(violation, "should find violation");
+	assert.match(violation!, /subtask nesting depth/);
+	assert.match(violation!, /maximum of 1/);
+});
+
+test("findSubtaskDepthViolation: sub-sub-tasks allowed at depth=2", () => {
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [{
+			id: "t1a", title: "Sub A", status: "pending" as const,
+			subtasks: [
+				{ id: "t1ai", title: "Sub-sub", status: "pending" as const },
+			],
+		}],
+	}];
+	const violation = findSubtaskDepthViolation(tasks, 2);
+	assert.equal(violation, undefined);
+});
+
+test("findSubtaskDepthViolation: catches 3-levels at depth=2", () => {
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [{
+			id: "t1a", title: "Sub A", status: "pending" as const,
+			subtasks: [{
+				id: "t1ai", title: "Sub-sub", status: "pending" as const,
+				subtasks: [{ id: "t1aia", title: "Sub-sub-sub", status: "pending" as const }],
+			}],
+		}],
+	}];
+	const violation = findSubtaskDepthViolation(tasks, 2);
+	assert.ok(violation);
+});
+
+test("findSubtaskDepthViolation: no violation for tasks without subtasks", () => {
+	const tasks = [
+		{ id: "t1", title: "Task 1", status: "pending" as const },
+		{ id: "t2", title: "Task 2", status: "pending" as const },
+	];
+	assert.equal(findSubtaskDepthViolation(tasks, 1), undefined);
+});
+
+test("validateTaskListProposal: passes with valid subtasks", () => {
+	const goal = makeGoal([]);
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "pending" as const },
+		],
+	}];
+	const result = validateTaskListProposal({ goal, tasks, maxSubtaskDepth: 1 });
+	assert.equal(result.ok, true);
+});
+
+test("validateTaskListProposal: rejects with subtasks exceeding depth", () => {
+	const goal = makeGoal([]);
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [{
+			id: "t1a", title: "Sub A", status: "pending" as const,
+			subtasks: [{ id: "t1ai", title: "Sub-sub", status: "pending" as const }],
+		}],
+	}];
+	const result = validateTaskListProposal({ goal, tasks, maxSubtaskDepth: 1 });
+	assert.equal(result.ok, false);
+});
+
+// ── checkSubtasksComplete ───────────────────────────────────────────────
+
+test("checkSubtasksComplete: returns undefined when no subtasks", () => {
+	const task = { id: "t1", title: "Task 1", status: "pending" as const };
+	assert.equal(checkSubtasksComplete(task), undefined);
+});
+
+test("checkSubtasksComplete: returns undefined when lightweight", () => {
+	const task = {
+		id: "t1", title: "Task 1", status: "pending" as const,
+		lightweightSubtasks: true,
+		subtasks: [{ id: "t1a", title: "Sub A", status: "pending" as const }],
+	};
+	assert.equal(checkSubtasksComplete(task), undefined);
+});
+
+test("checkSubtasksComplete: returns message when subtask is pending", () => {
+	const task = {
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "complete" as const },
+			{ id: "t1b", title: "Sub B", status: "pending" as const },
+		],
+	};
+	const result = checkSubtasksComplete(task);
+	assert.ok(result);
+	assert.match(result!, /pending subtask/);
+});
+
+test("checkSubtasksComplete: returns undefined when all subtasks complete/skipped", () => {
+	const task = {
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "complete" as const },
+			{ id: "t1b", title: "Sub B", status: "skipped" as const },
+		],
+	};
+	assert.equal(checkSubtasksComplete(task), undefined);
+});
+
+test("checkSubtasksComplete: checks nested subtasks", () => {
+	const task = {
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [{
+			id: "t1a", title: "Sub A", status: "complete" as const,
+			subtasks: [
+				{ id: "t1ai", title: "Sub-sub A", status: "complete" as const },
+				{ id: "t1aii", title: "Sub-sub B", status: "pending" as const },
+			],
+		}],
+	};
+	assert.ok(checkSubtasksComplete(task));
+});
+
+// ── skipAllSubtasks ─────────────────────────────────────────────────────
+
+test("skipAllSubtasks: skips direct subtasks", () => {
+	const task = {
+		id: "t1", title: "Task 1", status: "skipped" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "pending" as const },
+			{ id: "t1b", title: "Sub B", status: "pending" as const },
+		],
+	};
+	const result = skipAllSubtasks(task, "2026-01-01", "Test skip");
+	assert.equal(result.subtasks![0]!.status, "skipped");
+	assert.equal(result.subtasks![0]!.skipReason, "Test skip");
+	assert.equal(result.subtasks![1]!.status, "skipped");
+});
+
+test("skipAllSubtasks: does not modify completed subtasks", () => {
+	const task = {
+		id: "t1", title: "Task 1", status: "skipped" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "complete" as const, completedAt: "2026-01-01" },
+			{ id: "t1b", title: "Sub B", status: "pending" as const },
+		],
+	};
+	const result = skipAllSubtasks(task, "2026-06-01", "Cascade");
+	assert.equal(result.subtasks![0]!.status, "complete"); // unchanged
+	assert.equal(result.subtasks![1]!.status, "skipped");
+});
+
+test("skipAllSubtasks: skips nested subtasks", () => {
+	const task = {
+		id: "t1", title: "Task 1", status: "skipped" as const,
+		subtasks: [{
+			id: "t1a", title: "Sub A", status: "pending" as const,
+			subtasks: [
+				{ id: "t1ai", title: "Sub-sub", status: "pending" as const },
+			],
+		}],
+	};
+	const result = skipAllSubtasks(task, "2026-01-01", "Nested");
+	assert.equal(result.subtasks![0]!.subtasks![0]!.status, "skipped");
+});
+
+// ── findTaskInTree / updateTaskInTree ───────────────────────────────────
+
+test("findTaskInTree: finds top-level task", () => {
+	const tasks = [
+		{ id: "t1", title: "T1", status: "pending" as const },
+		{ id: "t2", title: "T2", status: "pending" as const },
+	];
+	assert.equal(findTaskInTree(tasks, "t2")?.id, "t2");
+});
+
+test("findTaskInTree: finds nested task", () => {
+	const tasks = [{
+		id: "t1", title: "T1", status: "pending" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "pending" as const },
+		],
+	}];
+	assert.equal(findTaskInTree(tasks, "t1a")?.id, "t1a");
+});
+
+test("findTaskInTree: returns undefined for missing task", () => {
+	const tasks = [{ id: "t1", title: "T1", status: "pending" as const }];
+	assert.equal(findTaskInTree(tasks, "missing"), undefined);
+});
+
+test("updateTaskInTree: updates top-level task", () => {
+	const tasks = [
+		{ id: "t1", title: "T1", status: "pending" as const },
+		{ id: "t2", title: "T2", status: "pending" as const },
+	];
+	const updated = updateTaskInTree(tasks, "t1", (t) => ({ ...t, status: "complete" as const }));
+	assert.equal(updated[0]!.status, "complete");
+	assert.equal(updated[1]!.status, "pending");
+});
+
+test("updateTaskInTree: updates nested task", () => {
+	const tasks = [{
+		id: "t1", title: "T1", status: "pending" as const,
+		subtasks: [
+			{ id: "t1a", title: "Sub A", status: "pending" as const },
+		],
+	}];
+	const updated = updateTaskInTree(tasks, "t1a", (t) => ({ ...t, status: "complete" as const }));
+	assert.equal(updated[0]!.subtasks![0]!.status, "complete");
+});
+
+test("updateTaskInTree: leaves unrelated tasks unchanged", () => {
+	const tasks = [
+		{ id: "t1", title: "T1", status: "pending" as const },
+		{ id: "t2", title: "T2", status: "pending" as const },
+	];
+	const updated = updateTaskInTree(tasks, "t2", (t) => ({ ...t, status: "skipped" as const }));
+	assert.equal(updated[0]!.status, "pending");
+	assert.equal(updated[1]!.status, "skipped");
+});
+
+test("buildTaskSummary: counts subtasks recursively", () => {
+	const taskList = {
+		tasks: [{
+			id: "t1", title: "T1", status: "complete" as const,
+			subtasks: [
+				{ id: "t1a", title: "Sub A", status: "pending" as const },
+			],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const result = buildTaskSummary(taskList);
+	// t1 (complete) + t1a (pending) = 1/2 complete
+	assert.match(result, /1\/2/);
+});
+
+test("taskCompletionBlockWarning: counts pending subtasks", () => {
+	const taskList = {
+		tasks: [{
+			id: "t1", title: "T1", status: "complete" as const,
+			subtasks: [
+				{ id: "t1a", title: "Sub A", status: "pending" as const },
+			],
+		}],
+		blockCompletion: true,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const result = taskCompletionBlockWarning(taskList);
+	assert.ok(result);
+	assert.match(result!, /1 task/);
 });

@@ -92,6 +92,11 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 	const totalTabs = questions.length + 1;
 
 	return await ctx.ui.custom<GoalQuestionnaireResult>((tui, theme, _kb, done) => {
+		// Suppress hardware cursor during dialog to reduce TUI auto-scroll
+		// (the TUI render loop runs at ~60fps and writes ANSI cursor positioning
+		// sequences every cycle, which can cause terminal viewport snapping).
+		const wasHardwareCursorShown = tui.getShowHardwareCursor();
+		tui.setShowHardwareCursor(false);
 		let currentTab = 0;
 		let optionIndex = 0;
 		let inputMode = false;
@@ -118,6 +123,8 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		}
 
 		function submit(cancelled: boolean) {
+			// Restore hardware cursor now that the dialog is closing
+			tui.setShowHardwareCursor(wasHardwareCursorShown);
 			const ordered = questions.map((q) => answers.get(q.id)).filter((a): a is GoalQuestionnaireAnswer => !!a);
 			done({ questions, answers: ordered, cancelled });
 		}

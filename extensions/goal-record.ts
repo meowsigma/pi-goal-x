@@ -15,6 +15,8 @@ export interface GoalTask {
   evidence?: string;
   skipReason?: string;
   verificationContract?: string;
+  lightweightSubtasks?: boolean;
+  subtasks?: GoalTask[];
 }
 
 export interface GoalTaskList {
@@ -111,12 +113,19 @@ export function emptyUsage(): GoalUsage {
 	return { tokensUsed: 0, activeSeconds: 0 };
 }
 
+function cloneGoalTask(task: GoalTask): GoalTask {
+	return {
+		...task,
+		subtasks: task.subtasks ? task.subtasks.map(cloneGoalTask) : undefined,
+	};
+}
+
 export function cloneGoal(goal: GoalRecord): GoalRecord {
 	return {
 		...goal,
 		usage: { ...goal.usage },
 		taskList: goal.taskList
-			? { ...goal.taskList, tasks: goal.taskList.tasks.map(t => ({ ...t })) }
+			? { ...goal.taskList, tasks: goal.taskList.tasks.map(cloneGoalTask) }
 			: undefined,
 	};
 }
@@ -164,30 +173,41 @@ export function normalizeUsage(value: unknown): GoalUsage {
 	return { tokensUsed, activeSeconds };
 }
 
+export function normalizeTaskItem(raw: Record<string, unknown>): GoalTask | undefined {
+	const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : "";
+	const title = typeof raw.title === "string" ? raw.title.trim() : "";
+	if (!id || !title) return undefined;
+	const status: TaskStatus = raw.status === "complete" ? "complete" : raw.status === "skipped" ? "skipped" : "pending";
+	const subtasksRaw = raw.subtasks;
+	let subtasks: GoalTask[] | undefined;
+	if (Array.isArray(subtasksRaw)) {
+		subtasks = subtasksRaw
+			.map((item) => (item && typeof item === "object" ? normalizeTaskItem(item as Record<string, unknown>) : undefined))
+			.filter((t): t is GoalTask => !!t);
+		if (subtasks.length === 0) subtasks = undefined;
+	}
+	return {
+		id,
+		title,
+		status,
+		completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
+		skippedAt: typeof raw.skippedAt === "string" ? raw.skippedAt : undefined,
+		evidence: typeof raw.evidence === "string" ? raw.evidence : undefined,
+		skipReason: typeof raw.skipReason === "string" ? raw.skipReason : undefined,
+		verificationContract: typeof raw.verificationContract === "string" ? raw.verificationContract : undefined,
+		lightweightSubtasks: raw.lightweightSubtasks === true ? true : undefined,
+		subtasks,
+	};
+}
+
 export function normalizeTaskList(value: unknown): GoalTaskList | undefined {
 	const raw = asRecord(value);
 	if (!raw) return undefined;
 	const tasksRaw = raw.tasks;
 	if (!Array.isArray(tasksRaw)) return undefined;
-	const tasks: GoalTask[] = [];
-	for (const item of tasksRaw) {
-		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-		const t = item as Record<string, unknown>;
-		const id = typeof t.id === "string" && t.id.trim() ? t.id.trim() : "";
-		const title = typeof t.title === "string" ? t.title.trim() : "";
-		if (!id || !title) continue;
-		const status: TaskStatus = t.status === "complete" ? "complete" : t.status === "skipped" ? "skipped" : "pending";
-		tasks.push({
-			id,
-			title,
-			status,
-			completedAt: typeof t.completedAt === "string" ? t.completedAt : undefined,
-			skippedAt: typeof t.skippedAt === "string" ? t.skippedAt : undefined,
-			evidence: typeof t.evidence === "string" ? t.evidence : undefined,
-			skipReason: typeof t.skipReason === "string" ? t.skipReason : undefined,
-			verificationContract: typeof t.verificationContract === "string" ? t.verificationContract : undefined,
-		});
-	}
+	const tasks: GoalTask[] = tasksRaw
+		.map((item) => (item && typeof item !== "object" || Array.isArray(item) ? undefined : normalizeTaskItem(item as Record<string, unknown>)))
+		.filter((t): t is GoalTask => !!t);
 	if (tasks.length === 0) return undefined;
 	return {
 		tasks,

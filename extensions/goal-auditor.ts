@@ -13,7 +13,7 @@ import {
 	type ExtensionContext,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import type { GoalRecord, GoalTaskList } from "./goal-record.ts";
+import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 import type { GoalSettings } from "./goal-settings.ts";
 
 export interface GoalAuditorConfig {
@@ -135,18 +135,43 @@ export interface AuditorVerificationEvidence {
 	contract?: string;
 }
 
+function renderAuditorTaskTree(tasks: GoalTask[], indent: number): string[] {
+	const prefix = "  ".repeat(indent);
+	const lines: string[] = [];
+	for (const task of tasks) {
+		const marker = task.status === "complete" ? "[x]" : task.status === "skipped" ? "[~]" : "[ ]";
+		lines.push(`${prefix}${marker} ${task.id}: ${task.title}`);
+		if (task.subtasks && task.subtasks.length > 0) {
+			lines.push(...renderAuditorTaskTree(task.subtasks, indent + 1));
+		}
+	}
+	return lines;
+}
+
+function countAuditorTasks(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: number } {
+	let total = 0;
+	let complete = 0;
+	let skipped = 0;
+	for (const t of tasks) {
+		total++;
+		if (t.status === "complete") complete++;
+		else if (t.status === "skipped") skipped++;
+		if (t.subtasks && t.subtasks.length > 0) {
+			const child = countAuditorTasks(t.subtasks);
+			total += child.total;
+			complete += child.complete;
+			skipped += child.skipped;
+		}
+	}
+	return { total, complete, skipped, pending: total - complete - skipped };
+}
+
 function taskSummaryBlock(taskList?: GoalTaskList | null): string {
 	if (!taskList || taskList.tasks.length === 0) return "";
-	const total = taskList.tasks.length;
-	const complete = taskList.tasks.filter((t) => t.status === "complete").length;
-	const skipped = taskList.tasks.filter((t) => t.status === "skipped").length;
-	const pending = taskList.tasks.filter((t) => t.status === "pending");
+	const { total, complete, skipped, pending } = countAuditorTasks(taskList.tasks);
 	const lines: string[] = [`Tasks: ${complete}/${total} complete${skipped > 0 ? `, ${skipped} skipped` : ""}`];
-	for (const task of taskList.tasks) {
-		const marker = task.status === "complete" ? "[x]" : task.status === "skipped" ? "[~]" : "[ ]";
-		lines.push(`  ${marker} ${task.id}: ${task.title}`);
-	}
-	const gate = taskList.blockCompletion && pending.length > 0 ? " | TASK GATE: pending tasks block completion" : "";
+	lines.push(...renderAuditorTaskTree(taskList.tasks, 0));
+	const gate = taskList.blockCompletion && pending > 0 ? " | TASK GATE: pending tasks block completion" : "";
 	lines[0] = lines[0]! + gate;
 	return lines.join("\n");
 }

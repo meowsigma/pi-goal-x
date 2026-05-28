@@ -53,6 +53,7 @@ import {
 	goalFocusDetails,
 	normalizeGoalRecord,
 	normalizeGoalFocusEntry,
+	normalizeTaskItem,
 	nowIso,
 	type AssistantMessageLike,
 	type DraftingFocus,
@@ -65,6 +66,7 @@ import {
 	type GoalStateEntry,
 	type GoalStatus,
 	type StopReason,
+	type GoalTask,
 	type GoalTaskList,
 } from "./goal-record.ts";
 import {
@@ -116,6 +118,11 @@ import {
 	validateGoalAbort,
 	validateGoalCompletion,
 	validatePauseGoal,
+	checkSubtasksComplete,
+	findSubtaskDepthViolation,
+	findTaskInTree,
+	skipAllSubtasks,
+	updateTaskInTree,
 	validateResumeGoal,
 	validateTaskCompletion,
 	validateTaskListProposal,
@@ -188,12 +195,18 @@ function detailedSummary(goal: GoalRecord | null): string {
 		lines.push("Mode: Sisyphus (prompt/criteria variant; shared goal lifecycle)");
 	}
 	if (goal.taskList) {
-		const total = goal.taskList.tasks.length;
-		const pending = goal.taskList.tasks.filter((t) => t.status === "pending");
 		const taskSummary = buildTaskSummary(goal.taskList);
 		lines.push(`Tasks: ${taskSummary}`);
-		if (pending.length > 0) {
-			lines.push(`Next pending task: ${pending[0]!.id} — ${pending[0]!.title}`);
+		// Find first pending task at any depth (BFS)
+		const queue = [...(goal.taskList.tasks ?? [])];
+		let firstPending: { id: string; title: string } | undefined;
+		while (queue.length > 0 && !firstPending) {
+			const t = queue.shift()!;
+			if (t.status === "pending") firstPending = t;
+			else if (t.subtasks) queue.push(...t.subtasks);
+		}
+		if (firstPending) {
+			lines.push(`Next pending task: ${firstPending.id} — ${firstPending.title}`);
 		}
 	}
 	if (goal.activePath) lines.push(`File: ${goal.activePath}`);
@@ -1626,6 +1639,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input." }),
 			autoContinue: Type.Optional(Type.Boolean({ description: "Whether pi should keep sending continuation prompts until complete. Default true." })),
 			sisyphus: Type.Optional(Type.Boolean({ description: "Must equal true for /sisyphus discussion, false for /goals discussion. Schema-enforced via B1 gate." })),
+			tasks: Type.Optional(Type.Array(Type.Object({
+				id: Type.String({ description: "Short stable slug e.g. 'task-1'" }),
+				title: Type.String({ description: "Human-readable task title" }),
+				verificationContract: Type.Optional(Type.String({ description: "Optional verification contract for this task." })),
+				lightweightSubtasks: Type.Optional(Type.Boolean({ description: "If true, subtasks are lightweight (no completion enforcement). Default false." })),
+				subtasks: Type.Optional(Type.Any({ description: "Optional recursive array of sub-tasks (same shape as parent)." })),
+			}), { description: "Optional task list to confirm together with the goal in a single step. Each task supports recursive subtasks." })),
 			draftId: Type.Optional(Type.String({ description: "Deprecated compatibility field. It is accepted but ignored; current goal confirmation no longer depends on hidden draft ids." })),
 		}),
 		executionMode: "sequential",
@@ -1654,10 +1674,46 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const objective = validation.objective;
 			const autoContinueFlag = params.autoContinue ?? true;
 			const sisyphusFlag = validation.expectedSisyphus;
+			// Build confirmation text: goal + optional task list
+			function renderConfirmationTasks(tasks: GoalTask[], indent: number): string[] {
+				const prefix = "  ".repeat(indent);
+				const lines: string[] = [];
+				for (const t of tasks) {
+					const lw = t.lightweightSubtasks ? " (lightweight)" : "";
+					const contract = t.verificationContract ? ` contract: ${t.verificationContract}` : "";
+					lines.push(`${prefix}[ ] ${t.id}: ${t.title}${lw}${contract}`);
+					if (t.subtasks && t.subtasks.length > 0) {
+						lines.push(...renderConfirmationTasks(t.subtasks, indent + 1));
+					}
+				}
+				return lines;
+			}
+
+			let taskSummarySection = "";
+			let tasksToCreate: GoalTask[] | undefined;
+			if (params.tasks && params.tasks.length > 0) {
+				tasksToCreate = params.tasks.map((t) => {
+					const task: GoalTask = {
+						id: (t as Record<string, unknown>).id as string,
+						title: (t as Record<string, unknown>).title as string,
+						status: "pending",
+						verificationContract: (t as Record<string, unknown>).verificationContract as string | undefined,
+						lightweightSubtasks: (t as Record<string, unknown>).lightweightSubtasks === true ? true : undefined,
+					};
+					const rawSubtasks = (t as Record<string, unknown>).subtasks;
+					if (Array.isArray(rawSubtasks) && rawSubtasks.length > 0) {
+						task.subtasks = rawSubtasks.map((s) => normalizeTaskItem(s as Record<string, unknown>)).filter((s): s is GoalTask => !!s);
+					}
+					return task;
+				});
+				const taskLines = renderConfirmationTasks(tasksToCreate, 0);
+				taskSummarySection = `\n\n┌─ TASKS ─────────────────────────────────────┐\n${taskLines.join("\n")}\n└──────────────────────────────────────────────┘`;
+			}
+
 			const draftSummary = buildDraftConfirmationText({
 				focus: activeIntent.focus,
 				originalTopic: activeIntent.originalTopic,
-				objective,
+				objective: objective + taskSummarySection,
 				autoContinue: autoContinueFlag,
 			});
 
@@ -1682,6 +1738,18 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 
 			if (decision === "confirm") {
+				// Validate subtask depth against settings
+				if (tasksToCreate && tasksToCreate.length > 0) {
+					const settings = loadGoalSettings(ctx.cwd);
+					const depthViolation = findSubtaskDepthViolation(tasksToCreate, settings.subtaskDepth ?? 1);
+					if (depthViolation) {
+						return {
+							content: [{ type: "text", text: depthViolation }],
+							details: goalDetails(state.goal),
+						};
+					}
+				}
+
 				// Extract verification contract from objective before creation
 				const { objective: cleanedObjective, verificationContract } = extractVerificationContract(objective);
 				const config: GoalCreationConfig = {
@@ -1691,6 +1759,36 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				};
 				confirmationIntent = null;
 				replaceGoal(config, ctx, false, verificationContract);
+
+				// Set task list if provided
+				if (tasksToCreate && tasksToCreate.length > 0 && state.goal) {
+					const now = nowIso();
+					state.goal = {
+						...state.goal,
+						taskList: {
+							tasks: tasksToCreate,
+							blockCompletion: false,
+							proposedAt: now,
+						},
+						updatedAt: now,
+					};
+					setGoal(state.goal, ctx);
+					// Append ledger event for task list
+					try {
+						appendGoalEvent(ctx, {
+							type: "task_list_set",
+							goalId: state.goal.id,
+							taskCount: tasksToCreate.length,
+							blockCompletion: false,
+							at: now,
+						});
+					} catch {
+						// Ledger failure should not block creation
+					}
+					syncGoalTools();
+					updateUI(ctx);
+				}
+
 				syncGoalTools();
 				return {
 					content: [{ type: "text", text: buildGoalCreatedReport({ objective, detailedSummary: detailedSummary(state.goal) }) }],
@@ -2407,7 +2505,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				id: Type.String({ description: "Short stable slug e.g. 'task-1'" }),
 				title: Type.String({ description: "Human-readable task title" }),
 				verificationContract: Type.Optional(Type.String({ description: "Optional verification contract for this task — what evidence is required before marking it complete." })),
-			}), { description: "Array of task objects with id and title" }),
+				lightweightSubtasks: Type.Optional(Type.Boolean({ description: "If true, subtasks are lightweight (no completion enforcement). Default false (full subtasks)." })),
+				subtasks: Type.Optional(Type.Any({ description: "Optional recursive array of sub-tasks (same shape as parent). Nested up to subtaskDepth (default 1, from .pi/goal-settings.json)." })),
+			}), { description: "Array of task objects with id, title, optional subtasks" }),
 			blockCompletion: Type.Optional(Type.Boolean({ description: "If true, warns when pending tasks remain during complete_goal. Default false." })),
 			changeSummary: Type.Optional(Type.String({ description: "Optional summary of the task list proposal" })),
 		}),
@@ -2427,7 +2527,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					details: goalDetails(state.goal),
 				};
 			}
-			const gate = validateTaskListProposal({ goal: state.goal, tasks: params.tasks });
+			const settings = loadGoalSettings(ctx.cwd);
+			const gate = validateTaskListProposal({ goal: state.goal, tasks: params.tasks as GoalTask[], maxSubtaskDepth: settings.subtaskDepth });
 			if (!gate.ok) {
 				return {
 					content: [{ type: "text", text: gate.message }],
@@ -2437,25 +2538,31 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const blockCompletion = params.blockCompletion === true;
 			const now = nowIso();
 			const existingTasks = state.goal.taskList?.tasks ?? [];
+			const existingById = new Map(existingTasks.map((t) => [t.id, t]));
 
 			// Merge: existing tasks with matching IDs preserve status/timestamps
-			const existingById = new Map(existingTasks.map((t) => [t.id, t]));
-			const mergedTasks = params.tasks.map((p) => {
-				const existing = existingById.get(p.id);
-				if (existing) {
-					return {
+			function mergeTask(input: GoalTask): GoalTask {
+				const existing = existingById.get(input.id);
+				const base: GoalTask = existing
+					? {
 						...existing,
-						title: p.title,
-						verificationContract: p.verificationContract ?? existing.verificationContract,
+						title: input.title,
+						verificationContract: input.verificationContract ?? existing.verificationContract,
+						lightweightSubtasks: input.lightweightSubtasks ?? existing.lightweightSubtasks,
+					}
+					: {
+						id: input.id,
+						title: input.title,
+						status: "pending" as const,
+						verificationContract: input.verificationContract || undefined,
+						lightweightSubtasks: input.lightweightSubtasks || undefined,
 					};
+				if (input.subtasks && input.subtasks.length > 0) {
+					base.subtasks = input.subtasks.map((child) => mergeTask(child));
 				}
-				return {
-					id: p.id,
-					title: p.title,
-					status: "pending" as const,
-					verificationContract: p.verificationContract || undefined,
-				};
-			});
+				return base;
+			}
+			const mergedTasks = params.tasks.map((p) => mergeTask(p as GoalTask));
 
 			const taskList: GoalTaskList = {
 				tasks: mergedTasks,
@@ -2463,11 +2570,21 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				proposedAt: now,
 			};
 
-			// Show full proposed task list in confirmation dialog
-			const taskLines = taskList.tasks.map((t) => {
-				const marker = t.status === "complete" ? "[x]" : t.status === "skipped" ? "[~]" : "[ ]";
-				return `  ${marker} ${t.id}: ${t.title}`;
-			});
+			// Show full proposed task list in confirmation dialog (with subtasks)
+			function renderTaskLines(tasks: GoalTask[], indent = 0): string[] {
+				const prefix = "  ".repeat(indent);
+				const lines: string[] = [];
+				for (const t of tasks) {
+					const marker = t.status === "complete" ? "[x]" : t.status === "skipped" ? "[~]" : "[ ]";
+					const lw = t.lightweightSubtasks ? " (lightweight)" : "";
+					lines.push(`${prefix}${marker} ${t.id}: ${t.title}${lw}`);
+					if (t.subtasks && t.subtasks.length > 0) {
+						lines.push(...renderTaskLines(t.subtasks, indent + 1));
+					}
+				}
+				return lines;
+			}
+			const taskLines = renderTaskLines(taskList.tasks);
 			const gateLabel = blockCompletion ? " (blockCompletion enabled)" : "";
 			const proposalText = [`Proposed task list${gateLabel}:`, "", ...taskLines].join("\n");
 
@@ -2557,8 +2674,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (!state.goal?.taskList) throw new Error("Task list disappeared during task completion.");
 
 			// Check verification contract for the task (skip if contracts disabled)
-			const taskToComplete = state.goal.taskList.tasks.find((t) => t.id === params.taskId);
-			if (!loadGoalSettings(ctx.cwd).disableContracts) {
+			const settings = loadGoalSettings(ctx.cwd);
+			const taskToComplete = findTaskInTree(state.goal.taskList.tasks, params.taskId);
+			if (!settings.disableContracts) {
 				const contractGate = validateVerificationSummary({
 					verificationContract: taskToComplete?.verificationContract,
 					verificationSummary: params.verificationSummary,
@@ -2570,12 +2688,26 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					};
 				}
 			}
+
+			// Check subtask completion (full subtasks only)
+			if (taskToComplete) {
+				const subtaskGate = checkSubtasksComplete(taskToComplete);
+				if (subtaskGate) {
+					return {
+						content: [{ type: "text", text: subtaskGate }],
+						details: goalDetails(state.goal),
+					};
+				}
+			}
+
 			const now = nowIso();
 			const evidence = params.evidence?.trim().slice(0, 200) || undefined;
-			const updatedTasks = state.goal.taskList.tasks.map((t) => {
-				if (t.id !== params.taskId) return t;
-				return { ...t, status: "complete" as const, completedAt: now, evidence };
-			});
+			const updatedTasks = updateTaskInTree(state.goal.taskList.tasks, params.taskId, (t) => ({
+				...t,
+				status: "complete" as const,
+				completedAt: now,
+				evidence,
+			}));
 			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
 			if (!state.goal || !state.goal.taskList) throw new Error("Goal disappeared during task completion.");
 			state.goal = {
@@ -2646,9 +2778,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 			if (!state.goal?.taskList) throw new Error("Task list disappeared during task skip.");
 			const now = nowIso();
-			const updatedTasks = state.goal.taskList.tasks.map((t) => {
-				if (t.id !== params.taskId) return t;
-				return { ...t, status: "skipped" as const, skippedAt: now, skipReason: params.reason.trim() };
+			const updatedTasks = updateTaskInTree(state.goal.taskList.tasks, params.taskId, (t) => {
+				// Cascade skip to all subtasks (full subtasks only)
+				const base = { ...t, status: "skipped" as const, skippedAt: now, skipReason: params.reason.trim() };
+				if (t.subtasks && t.subtasks.length > 0 && !t.lightweightSubtasks) {
+					return skipAllSubtasks(base, now, params.reason.trim());
+				}
+				return base;
 			});
 			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
 			if (!state.goal || !state.goal.taskList) throw new Error("Goal disappeared during task skip.");

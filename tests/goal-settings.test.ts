@@ -306,3 +306,42 @@ test("validateVerificationSummary: passes when contracts disabled even with empt
 	});
 	assert.equal(gate.ok, true, "valid summary passes when gate is reached");
 });
+
+// ── subtaskDepth ────────────────────────────────────────────────────────
+
+test("parseGoalSettings: parses subtaskDepth as number", () => {
+	const result = parseGoalSettings({ disableTasks: false, disableContracts: false, subtaskDepth: 2 });
+	assert.equal(result.subtaskDepth, 2);
+});
+
+test("parseGoalSettings: parses subtaskDepth string", () => {
+	const result = parseGoalSettings({ disableTasks: false, disableContracts: false, subtaskDepth: "3" });
+	assert.equal(result.subtaskDepth, 3);
+});
+
+test("parseGoalSettings: rejects subtaskDepth below 1", () => {
+	const result = parseGoalSettings({ disableTasks: false, disableContracts: false, subtaskDepth: 0 });
+	assert.equal(result.subtaskDepth, undefined);
+});
+
+test("parseGoalSettings: rejects non-numeric subtaskDepth", () => {
+	const result = parseGoalSettings({ disableTasks: false, disableContracts: false, subtaskDepth: "abc" });
+	assert.equal(result.subtaskDepth, undefined);
+});
+
+test("loadGoalSettings: default subtaskDepth is 1", () => {
+	withTempDir((dir) => {
+		const result = loadGoalSettings(dir, {});
+		assert.equal(result.subtaskDepth, 1);
+	});
+});
+
+test("loadGoalSettings: reads subtaskDepth from file", () => {
+	withTempDir((dir) => {
+		const configPath = goalSettingsPath(dir);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, JSON.stringify({ disableTasks: false, disableContracts: false, subtaskDepth: 3 }), "utf8");
+		const result = loadGoalSettings(dir, {});
+		assert.equal(result.subtaskDepth, 3);
+	});
+});

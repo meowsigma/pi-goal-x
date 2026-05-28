@@ -1,5 +1,5 @@
 import { statusLabel, type GoalDisplayRecordLike } from "./goal-core.ts";
-import type { GoalTaskList, TaskStatus } from "./goal-record.ts";
+import type { GoalTask, GoalTaskList, TaskStatus } from "./goal-record.ts";
 
 export type GoalStatusLike = "active" | "paused" | "complete";
 export type StopReasonLike = "user" | "agent";
@@ -126,10 +126,27 @@ export function abortGoalCommandMessage(args: { archived: boolean; wasDrafting: 
 	return args.archived ? "Goal aborted and archived." : args.wasDrafting ? "Drafting cancelled." : "No goal is set.";
 }
 
+/** Count tasks in subtree recursively */
+function countSubtreeTasks(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: number } {
+	let total = 0;
+	let complete = 0;
+	let skipped = 0;
+	for (const t of tasks) {
+		total++;
+		if (t.status === "complete") complete++;
+		else if (t.status === "skipped") skipped++;
+		if (t.subtasks && t.subtasks.length > 0) {
+			const child = countSubtreeTasks(t.subtasks);
+			total += child.total;
+			complete += child.complete;
+			skipped += child.skipped;
+		}
+	}
+	return { total, complete, skipped, pending: total - complete - skipped };
+}
+
 export function buildTaskSummary(taskList: GoalTaskList): string {
-	const total = taskList.tasks.length;
-	const complete = taskList.tasks.filter((t) => t.status === "complete").length;
-	const skipped = taskList.tasks.filter((t) => t.status === "skipped").length;
+	const { total, complete, skipped } = countSubtreeTasks(taskList.tasks);
 	if (total === 0) return "No tasks";
 	const parts: string[] = [`${complete}/${total} tasks complete`];
 	if (skipped > 0) parts.push(`(${skipped} skipped)`);
@@ -138,9 +155,9 @@ export function buildTaskSummary(taskList: GoalTaskList): string {
 
 export function taskCompletionBlockWarning(taskList: GoalTaskList): string | null {
 	if (!taskList.blockCompletion) return null;
-	const pending = taskList.tasks.filter((t) => t.status === "pending");
-	if (pending.length === 0) return null;
-	return `${pending.length} task${pending.length > 1 ? "s" : ""} still pending with blockCompletion enabled. Complete or skip all pending tasks before finishing the goal.`;
+	const { pending } = countSubtreeTasks(taskList.tasks);
+	if (pending === 0) return null;
+	return `${pending} task${pending > 1 ? "s" : ""} still pending with blockCompletion enabled. Complete or skip all pending tasks before finishing the goal.`;
 }
 
 /**
@@ -190,9 +207,43 @@ export function validateTaskSkip(args: {
 	return { ok: true };
 }
 
+/**
+ * Count the maximum nesting depth of a task's subtask tree.
+ * Root level = 0. Returns the deepest nesting depth found.
+ */
+export function measureSubtaskDepth(task: GoalTask): number {
+	if (!task.subtasks || task.subtasks.length === 0) return 0;
+	let maxChild = 0;
+	for (const child of task.subtasks) {
+		const childDepth = measureSubtaskDepth(child);
+		if (childDepth > maxChild) maxChild = childDepth;
+	}
+	return maxChild + 1;
+}
+
+/**
+ * Validate that a task's subtask tree does not exceed the configured max depth.
+ * maxDepth is the subtaskDepth setting (default 1) — how many levels of nesting are allowed.
+ * Returns the first violation found, or undefined if valid.
+ */
+export function findSubtaskDepthViolation(tasks: GoalTask[], maxDepth: number): string | undefined {
+	for (const task of tasks) {
+		const depth = measureSubtaskDepth(task);
+		if (depth > maxDepth) {
+			return `Task "${task.id}" has subtask nesting depth ${depth}, exceeding the configured maximum of ${maxDepth}`;
+		}
+		if (task.subtasks) {
+			const childViolation = findSubtaskDepthViolation(task.subtasks, maxDepth);
+			if (childViolation) return childViolation;
+		}
+	}
+	return undefined;
+}
+
 export function validateTaskListProposal(args: {
 	goal: GoalPolicyRecordLike | null;
-	tasks: { id: string; title: string }[];
+	tasks: GoalTask[];
+	maxSubtaskDepth?: number;
 }): PolicyValidation {
 	if (!args.goal) return { ok: false, message: "No goal is set." };
 	if (args.tasks.length > 50) return { ok: false, message: "Task list cannot exceed 50 tasks." };
@@ -203,7 +254,76 @@ export function validateTaskListProposal(args: {
 		if (ids.has(t.id)) return { ok: false, message: `Duplicate task id: "${t.id}".` };
 		ids.add(t.id);
 	}
+	// Check subtask depth limit
+	const maxDepth = args.maxSubtaskDepth ?? 1;
+	const depthViolation = findSubtaskDepthViolation(args.tasks, maxDepth);
+	if (depthViolation) return { ok: false, message: depthViolation };
 	return { ok: true };
+}
+
+/**
+ * Recursively find a task by ID in a task tree.
+ */
+export function findTaskInTree(tasks: GoalTask[], taskId: string): GoalTask | undefined {
+	for (const t of tasks) {
+		if (t.id === taskId) return t;
+		if (t.subtasks) {
+			const found = findTaskInTree(t.subtasks, taskId);
+			if (found) return found;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Recursively update a task by ID in a task tree using an updater function.
+ */
+export function updateTaskInTree(tasks: GoalTask[], taskId: string, updater: (task: GoalTask) => GoalTask): GoalTask[] {
+	return tasks.map((t) => {
+		if (t.id === taskId) return updater(t);
+		if (t.subtasks) {
+			return { ...t, subtasks: updateTaskInTree(t.subtasks, taskId, updater) };
+		}
+		return t;
+	});
+}
+
+/**
+ * Check if all subtasks of a task are complete (for full subtasks only).
+ * Returns undefined when all are complete/skipped, or an error message.
+ */
+export function checkSubtasksComplete(task: GoalTask): string | undefined {
+	if (!task.subtasks || task.subtasks.length === 0 || task.lightweightSubtasks) return undefined;
+	for (const child of task.subtasks) {
+		if (child.status === "pending") {
+			return `Task "${task.id}" has pending subtask "${child.id}". Complete or skip all subtasks first.`;
+		}
+		// Check recursively
+		const childCheck = checkSubtasksComplete(child);
+		if (childCheck) return childCheck;
+	}
+	return undefined;
+}
+
+/**
+ * Recursively skip all subtasks of a task.
+ * Returns a set of all skipped task IDs.
+ */
+export function skipAllSubtasks(task: GoalTask, now: string, reason: string): GoalTask {
+	if (!task.subtasks || task.subtasks.length === 0) return task;
+	return {
+		...task,
+		subtasks: task.subtasks.map((child) => {
+			if (child.status === "complete") return child;
+			const skipped = {
+				...child,
+				status: "skipped" as const,
+				skippedAt: now,
+				skipReason: reason,
+			};
+			return skipAllSubtasks(skipped, now, reason);
+		}),
+	};
 }
 
 export function buildCompletionReport(args: { detailedSummary: string; completionSummary?: string | null; auditorReport?: string | null; auditSkippedReason?: string | null; taskSummary?: string | null }): string {

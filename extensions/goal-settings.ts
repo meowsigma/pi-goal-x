@@ -15,6 +15,7 @@ import * as path from "node:path";
 export interface GoalSettings {
 	disableTasks?: boolean;
 	disableContracts?: boolean;
+	subtaskDepth?: number;
 }
 
 /**
@@ -34,7 +35,16 @@ function asBool(value: unknown): boolean | undefined {
 	return undefined;
 }
 
-const ALLOWED_SETTINGS_KEYS = new Set(["disableTasks", "disableContracts"]);
+function asPositiveInt(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isInteger(value) && value >= 1) return value;
+	if (typeof value === "string") {
+		const n = parseInt(value, 10);
+		if (!isNaN(n) && n >= 1) return n;
+	}
+	return undefined;
+}
+
+const ALLOWED_SETTINGS_KEYS = new Set(["disableTasks", "disableContracts", "subtaskDepth"]);
 
 /**
  * Parse raw (deserialized JSON) into a GoalSettings object.
@@ -50,8 +60,10 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	const settings: GoalSettings = {};
 	const disableTasks = asBool(record.disableTasks);
 	const disableContracts = asBool(record.disableContracts);
+	const subtaskDepth = asPositiveInt(record.subtaskDepth);
 	if (disableTasks !== undefined) settings.disableTasks = disableTasks;
 	if (disableContracts !== undefined) settings.disableContracts = disableContracts;
+	if (subtaskDepth !== undefined) settings.subtaskDepth = subtaskDepth;
 	return settings;
 }
 
@@ -78,5 +90,6 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
 	return {
 		disableTasks: asBool(env.PI_GOAL_DISABLE_TASKS) ?? fileConfig.disableTasks ?? false,
 		disableContracts: asBool(env.PI_GOAL_DISABLE_CONTRACTS) ?? fileConfig.disableContracts ?? false,
+		subtaskDepth: fileConfig.subtaskDepth ?? 1,
 	};
 }

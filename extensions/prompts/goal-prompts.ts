@@ -3,7 +3,7 @@ import {
 	truncateText,
 } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-draft.ts";
-import type { GoalRecord, TaskStatus } from "../goal-record.ts";
+import type { GoalRecord, GoalTask, TaskStatus } from "../goal-record.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 
 function taskMarker(status: TaskStatus): string {
@@ -12,24 +12,55 @@ function taskMarker(status: TaskStatus): string {
 	return "[ ]";
 }
 
-export function taskListBlock(goal: GoalRecord, settings?: GoalSettings): string {
-	if (settings?.disableTasks) return "";
-	if (!goal.taskList || goal.taskList.tasks.length === 0) return "";
-	const total = goal.taskList.tasks.length;
-	const complete = goal.taskList.tasks.filter((t) => t.status === "complete").length;
-	const skipped = goal.taskList.tasks.filter((t) => t.status === "skipped").length;
-	const pending = goal.taskList.tasks.filter((t) => t.status === "pending");
+/** Count tasks in subtree recursively */
+function countSubtree(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: GoalTask[] } {
+	let total = 0;
+	let complete = 0;
+	let skipped = 0;
+	const pending: GoalTask[] = [];
+	for (const t of tasks) {
+		total++;
+		if (t.status === "complete") complete++;
+		else if (t.status === "skipped") skipped++;
+		else pending.push(t);
+		if (t.subtasks && t.subtasks.length > 0) {
+			const child = countSubtree(t.subtasks);
+			total += child.total;
+			complete += child.complete;
+			skipped += child.skipped;
+			pending.push(...child.pending);
+		}
+	}
+	return { total, complete, skipped, pending };
+}
+
+/** Render task subtree recursively */
+function renderTaskTree(tasks: GoalTask[], indent: number): string[] {
+	const prefix = "  ".repeat(indent);
 	const lines: string[] = [];
-	lines.push(`[TASK LIST — ${complete}/${total} tasks complete${skipped > 0 ? ` (${skipped} skipped)` : ""}]`);
-	for (const task of goal.taskList.tasks) {
+	for (const task of tasks) {
 		let suffix = "";
 		if (task.status === "complete" && task.evidence) suffix = ` — ${task.evidence}`;
 		if (task.status === "skipped" && task.skipReason) suffix = ` — skipped: ${task.skipReason}`;
-		lines.push(`  ${taskMarker(task.status)} ${task.id}: ${task.title}${suffix}`);
-		if ((task.status === "pending") && task.verificationContract) {
-			lines.push(`    contract: ${task.verificationContract}`);
+		const lw = task.lightweightSubtasks ? " (lightweight)" : "";
+		lines.push(`${prefix}${taskMarker(task.status)} ${task.id}: ${task.title}${lw}${suffix}`);
+		if (task.status === "pending" && task.verificationContract) {
+			lines.push(`${prefix}  contract: ${task.verificationContract}`);
+		}
+		if (task.subtasks && task.subtasks.length > 0) {
+			lines.push(...renderTaskTree(task.subtasks, indent + 1));
 		}
 	}
+	return lines;
+}
+
+export function taskListBlock(goal: GoalRecord, settings?: GoalSettings): string {
+	if (settings?.disableTasks) return "";
+	if (!goal.taskList || goal.taskList.tasks.length === 0) return "";
+	const { total, complete, skipped, pending } = countSubtree(goal.taskList.tasks);
+	const lines: string[] = [];
+	lines.push(`[TASK LIST — ${complete}/${total} tasks complete${skipped > 0 ? ` (${skipped} skipped)` : ""}]`);
+	lines.push(...renderTaskTree(goal.taskList.tasks, 0));
 	if (goal.taskList.blockCompletion && pending.length > 0) {
 		lines.push(`  TASK GATE: do not call complete_goal while tasks remain in [ ] pending state`);
 	}

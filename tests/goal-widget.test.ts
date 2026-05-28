@@ -194,6 +194,8 @@ test("renderAuditorWidgetLines no progress bar when percentage is undefined", ()
 	assert.doesNotMatch(allText, /\d+%/);
 });
 
+const testProposedAt = "2026-01-01T00:00:00.000Z";
+
 test("renderGoalWidgetLines shows task count in heading when taskList present", () => {
 	const lines = renderGoalWidgetLines(goal({
 		taskList: {
@@ -203,6 +205,7 @@ test("renderGoalWidgetLines shows task count in heading when taskList present", 
 				{ id: "t3", title: "Task 3", status: "skipped" },
 			],
 			blockCompletion: false,
+			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
 	const heading = lines[0];
@@ -219,6 +222,7 @@ test("renderGoalWidgetLines shows next pending task in body", () => {
 				{ id: "t3", title: "Task 3", status: "pending" },
 			],
 			blockCompletion: false,
+			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
 	const body = lines.slice(1).join(" ");
@@ -234,6 +238,7 @@ test("renderGoalWidgetLines shows 'All tasks complete' when all done", () => {
 				{ id: "t2", title: "Task 2", status: "skipped" },
 			],
 			blockCompletion: false,
+			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
 	const body = lines.slice(1).join(" ");

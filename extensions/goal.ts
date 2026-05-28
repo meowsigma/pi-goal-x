@@ -105,6 +105,7 @@ import {
 } from "./prompts/goal-prompts.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { GoalWidgetComponent, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
+import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 
 import {
 	abortGoalCommandMessage,
@@ -407,6 +408,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	let auditProgress: AuditorWidgetProgress | null = null;
 	let auditAnimationTimer: ReturnType<typeof setInterval> | null = null;
 	let auditAbortController: AbortController | null = null;
+	let showingEscapeDialog = false;
 
 
 	// Per-turn flags reset in turn_start (#4, C9 fix).
@@ -959,6 +961,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// Must return { consume: true } so the TUI doesn't also process the key
 			// and abort the running tool execution, which would cascade into pausing
 			// the entire goal (agent_end sees ctx.signal?.aborted and calls pauseActiveGoal).
+			if (showingEscapeDialog) return undefined;
 			if (matchesKey(data, "escape") && auditProgress) {
 				abortAudit(ctx);
 				return { consume: true };
@@ -2192,41 +2195,88 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// Clear auditor progress display
 			stopAuditAnimation();
 
-			// If the audit was aborted by the user (Esc), skip the audit and leave the
-			// goal active/paused so the agent can ask the user what to do next.
+			// If the audit was aborted by the user (Esc), show a TUI dialog letting
+			// the user choose: mark complete without audit, or continue working.
 			if (auditor.error === "Auditor aborted.") {
-				pi.sendMessage<GoalAuditEventDetails>({
-					customType: GOAL_AUDIT_ENTRY,
-					content: [
-						`Goal audit skipped — auditor bypassed (user pressed Escape during audit).`, 
-						`Goal remains ${statusLabel(auditTarget)}.`, 
-						"", 
-						"Use goal_question to ask the user whether to:", 
-						"  - Mark the goal complete anyway (call complete_goal again)", 
-						"  - Give feedback on the work so far", 
-						"  - Continue working toward the goal",
-					].join("\n"),
-					display: true,
-					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
-				});
 				auditProgress = null;
 				goalWidgetComponent?.invalidate();
-				syncGoalTools();
 				updateUI(ctx);
-				return {
-					content: [{
-						type: "text",
-						text: [
-							"Goal audit skipped (Escape pressed). The goal remains active.",
-							"",
-							"Use goal_question to ask the user whether to:",
-							"  - Mark the goal complete anyway (call complete_goal again)",
-							"  - Give feedback on the work so far",
-							"  - Continue working toward the goal",
+
+				showingEscapeDialog = true;
+				const userChoice: EscapeDialogResult = await showEscapeDialog(ctx, auditTarget.objective);
+				showingEscapeDialog = false;
+
+				if (userChoice === "complete_without_audit") {
+					// ── Mark complete without audit ────────────────────────────
+					pi.sendMessage<GoalAuditEventDetails>({
+						customType: GOAL_AUDIT_ENTRY,
+						content: `Goal completed — user bypassed audit via Escape.`,
+						display: true,
+						details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
+					});
+					try {
+						appendGoalEvent(ctx, {
+							type: "audit_skipped",
+							goalId: auditTarget.id,
+							reason: "user_aborted",
+							provider: settings.provider,
+							model: settings.model,
+							thinkingLevel: settings.thinkingLevel,
+							at: nowIso(),
+						});
+					} catch {
+						// Ledger append failure should not block completion
+					}
+					// Set goal complete in memory (defer archival to turn_end)
+					accountProgress(ctx);
+					state.goal = {
+						...auditTarget,
+						status: "complete",
+						stopReason: "agent",
+						updatedAt: nowIso(),
+					};
+					state.goal = writeActiveGoalFile(ctx, state.goal);
+					pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+					turnStoppedFor = state.goal?.id ?? null;
+					resetGetGoalNudgeState(state.goal?.id);
+					syncGoalTools();
+					updateUI(ctx);
+					return {
+						content: [{
+							type: "text",
+							text: [
+								"User chose to mark the goal complete (bypassed audit via Escape).",
+								"",
+								"The goal is complete. Provide a final summary of what was accomplished.",
+							].join("\n"),
+						}],
+						details: goalDetails(state.goal),
+					};
+				} else {
+					// ── Continue working ────────────────────────────────────
+					pi.sendMessage<GoalAuditEventDetails>({
+						customType: GOAL_AUDIT_ENTRY,
+						content: [
+							`Goal audit skipped — user chose to continue working.`,
+							`Goal remains ${statusLabel(auditTarget)}.`,
 						].join("\n"),
-					}],
-					details: goalDetails(state.goal),
-				};
+						display: true,
+						details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
+					});
+					syncGoalTools();
+					updateUI(ctx);
+					return {
+						content: [{
+							type: "text",
+							text: [
+								"User chose to continue working (bypassed audit via Escape).",
+								"",
+								"Resume working toward the goal.",
+							].join("\n"),
+						}],
+						details: goalDetails(state.goal),
+					};
+				}
 			}
 
 			// Show final audit output briefly before clearing

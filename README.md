@@ -19,10 +19,19 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 - **Auditor integration** — the independent completion auditor receives both the `verificationContract` and `verificationSummary` and cross-checks claims against real artifacts.
 - **`complete_goal` `testResults` removed** — replaced with `verificationSummary`. The old structured test results interface is gone.
 
-### Task list system
+### Unified goal + task acceptance
 
-- **Structured task breakdown** — the agent can propose a task list via `propose_task_list`, which shows the user a Confirm / Continue Chatting dialog (mirrors the `propose_goal_draft` pattern). Once confirmed, tasks are displayed in prompts, the widget, serialized to disk, and included in auditor review.
-- **Per-task completion** — `complete_task` marks individual tasks done with optional evidence, and `skip_task` marks tasks as skipped with a required reason. Neither stops the turn, so the agent can continue uninterrupted.
+- **Single-dialog confirmation** — `propose_goal_draft` now accepts an optional `tasks` array parameter. The confirmation dialog shows the goal objective AND the proposed task list together in a single rich TUI view with box-drawing panel (`┌─ TASKS ───┐`), section headers, and hierarchical indentation for subtasks.
+- **Atomic creation** — one confirmation (single enter press) creates the goal AND its task list together. No need for separate `propose_goal_draft` + `propose_task_list` calls.
+- **Backward compatible** — existing separate `propose_task_list` flow continues to work unchanged. Goals without tasks work as before.
+
+### Task list & sub-task system
+
+- **Structured task breakdown** — the agent can propose a task list via `propose_task_list` (standalone) or `propose_goal_draft` with `tasks` (unified). Both show a Confirm / Continue Chatting dialog. Once confirmed, tasks are displayed in prompts, the widget, serialized to disk, and included in auditor review.
+- **Recursive subtasks** — tasks can have nested sub-tasks via `subtasks?: GoalTask[]` (full recursive type). Subtask depth is controlled globally by `subtaskDepth` in `.pi/goal-settings.json` (default: 1 level). Too-deep subtrees are rejected at proposal.
+- **Lightweight subtasks** — each task has an optional `lightweightSubtasks?: boolean` flag. When true, the parent can complete regardless of subtask status. When false/absent (full subtasks), all subtasks must be individually complete before the parent can close.
+- **Per-task completion** — `complete_task` marks individual tasks done with optional evidence/verificationSummary, and `skip_task` marks tasks as skipped with a required reason. Neither stops the turn, so the agent can continue uninterrupted.
+- **Hierarchical display** — task lists with subtasks render with indentation in prompts (`taskListBlock`, `goalPrompt`, `continuationPrompt`) and in the TUI widget (recursive count, BFS next-pending).
 - **Optional `taskList`** — goals without a task list work exactly as before. The feature is entirely opt-in.
 - **Soft `complete_goal` gate** — when `blockCompletion: true` is set, `complete_goal` surfaces a warning if pending tasks remain (prompt-level only; the agent can still complete).
 
@@ -39,7 +48,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 ### E2e test infrastructure
 
 - **Deterministic fork tests using `--mode json`**: the e2e suite spawns a real `pi --fork --mode json` session, parses structured `tool_execution_start`/`tool_execution_end` JSON events for field-level assertions — no free-text AI output parsing. Uses `--append-system-prompt` + `--tools` to force deterministic tool calls.
-- **Full coverage**: 205 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), real `pi --fork --mode json` tests (3 scenarios), propose_goal_tweak unit/integration/e2e tests (15), task list policy/round-trip/render tests (50+), and verification contract tests (14).
+- **Full coverage**: 281 tests total — function-level integration tests, mock-pi handler tests, file-validity checks, real `pi --fork --mode json` E2E tests, propose_goal_tweak unit/integration/e2e tests, task list policy/round-trip/render tests (including subtasks), and verification contract tests.
 
 ### Completion auditor
 
@@ -271,6 +280,26 @@ Each file contains:
 Before commands, tools, and lifecycle hooks act on a focused goal, the runtime reconciles the focused record against the active goal file on disk. External archive/delete/status changes therefore win over stale in-memory state and cannot resurrect deleted active files. Prompt-body edits are still picked up from the `# Goal Prompt` section; focus is never stored in goal markdown.
 
 Goal paths are constrained to `.pi/goals/` and `.pi/goals/archived/`; absolute paths, traversal, NUL bytes, symlinks, and unsafe metadata paths are rejected.
+
+## Goal settings file (`.pi/goal-settings.json`)
+
+Configured via `/goal-settings` or edited directly:
+
+```json
+{
+  "disableTasks": false,
+  "disableContracts": false,
+  "subtaskDepth": 1
+}
+```
+
+| Field | Default | Purpose |
+|---|---:|---|
+| `disableTasks` | `false` | Suppress task list features entirely when `true` |
+| `disableContracts` | `false` | Suppress verification contract enforcement when `true` |
+| `subtaskDepth` | `1` | Maximum nesting depth for subtasks (`1` = tasks → subtasks, `2` = tasks → subtasks → sub-subtasks, etc.) |
+
+Environment variables `PI_GOAL_TASKS_DISABLED`, `PI_GOAL_CONTRACTS_DISABLED` take precedence over file settings.
 
 ## Environment variables
 

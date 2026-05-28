@@ -8,6 +8,24 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.14.0] — 2026-05-28
+
+### Added
+
+- **Unified goal + task acceptance** — `propose_goal_draft` accepts an optional `tasks` array parameter (full task list structure). The confirmation dialog shows the goal objective AND proposed task list together in a single rich TUI view with box-drawing panel (`┌─ TASKS ───┐`), section headers, and hierarchical indentation for subtasks. One confirmation (single enter press) creates both the goal and its task list atomically. Backward compatible: existing `propose_task_list` flow unchanged.
+- **Recursive sub-task system** — `GoalTask` type gains optional `subtasks?: GoalTask[]` (recursive — sub-tasks are full task records with id, title, status, evidence, completedAt, verificationContract, and their own subtasks). `GoalSettings` gains `subtaskDepth?: number` field (default 1) in `.pi/goal-settings.json`. Depth validation/policy in `goal-policy.ts` enforces the limit at all proposal points. `lightweightSubtasks?: boolean` flag allows parent completion without child enforcement.
+- **Depth-validated proposal flow** — subtask depth is validated BEFORE showing the confirmation dialog (moves pre-dialog to match `propose_task_list` behavior). `findSubtaskDepthViolation` and `validateTaskListProposal` used in both `propose_goal_draft` and `propose_task_list`.
+- **Subtask enforcement on complete/skip** — `complete_task` rejects when a task has pending full subtasks (`checkSubtasksComplete`). `skip_task` cascades skip to all child subtasks (`skipAllSubtasks`). Both use `findTaskInTree`/`updateTaskInTree` helpers.
+- **Hierarchical task display** — `taskListBlock` in prompts renders subtask trees with indentation via `renderTaskTree`. `buildTaskSummary`/`taskSummaryBlock` recursive. Widget (`goal-widget.ts`) counts subtasks recursively in `countFlatTasks` and finds next pending task via BFS `findFirstPending`.
+- **Scroll fix for proposal dialogs** — `runGoalQuestionnaire` suppresses hardware cursor during dialog (`setShowHardwareCursor(false)`) to reduce ~60fps ANSI cursor-positioning writes that fight manual scrolling. Cursor restored on dialog close. Affects `propose_goal_draft`, `propose_task_list`, and all goal questionnaire dialogs.
+- **E2E test coverage** — unified acceptance flow (goal creation + task list + subtasks + verification contract, disk round-trip verified) and scroll fix (headless dialog path exercises cursor operations).
+- **Subtask normalization/roundtrip** — `normalizeTaskList`, `normalizeTaskItem`, and `cloneGoal` handle recursive subtask structures.
+- **Subtask depth edge cases** — tests for depth below 1, non-integer, negative, and missing config file defaults.
+
+### Changed
+
+- **`subtaskDepth` default is 1** — one level of nesting (tasks → subtasks). Set via `.pi/goal-settings.json`. No config file means default 1.
+
 ## [0.13.0] — 2026-05-28
 
 ### Added
@@ -366,6 +384,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.14.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.14.0
 [0.13.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.13.0
 [0.12.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.12.0
 [0.11.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.11.0

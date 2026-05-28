@@ -155,3 +155,114 @@ test("continuationPrompt omits taskListBlock when no taskList", () => {
 	const continuation = continuationPrompt(goal());
 	assert.equal(continuation.includes("[TASK LIST"), false);
 });
+
+// ── Subtask hierarchical display ──────────────────────────────────────────────
+
+test("taskListBlock renders subtasks indented", () => {
+	const g = goal();
+	g.taskList = {
+		tasks: [{
+			id: "t1", title: "Setup", status: "pending",
+			subtasks: [
+				{ id: "t1a", title: "Install", status: "pending" },
+				{ id: "t1b", title: "Configure", status: "complete", completedAt: "2026-01-01", evidence: "done" },
+			],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const block = taskListBlock(g);
+	assert.ok(block);
+	assert.match(block, /\[ \] t1/);
+	// Subtasks indented
+	assert.match(block, /  \[ \] t1a/);
+	assert.match(block, /  \[x\] t1b/);
+	// All tasks counted: t1 + t1a + t1b = 3 total, 1 complete
+	assert.match(block, /1\/3 tasks complete/);
+});
+
+test("taskListBlock renders nested subtasks up to depth limit", () => {
+	const g = goal();
+	g.taskList = {
+		tasks: [{
+			id: "t1", title: "Parent", status: "pending",
+			subtasks: [{
+				id: "t1a", title: "Child", status: "pending",
+				subtasks: [
+					{ id: "t1ai", title: "Grandchild", status: "complete", completedAt: "2026-01-01" },
+				],
+			}],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const block = taskListBlock(g);
+	assert.ok(block);
+	assert.match(block, /\[ \] t1/);
+	assert.match(block, /\[ \] t1a/);
+	assert.match(block, /\[x\] t1ai/);
+	// 3-level hierarchy: 3 tasks, 1 complete
+	assert.match(block, /1\/3 tasks complete/);
+});
+
+test("taskListBlock shows lightweight subtask indicator", () => {
+	const g = goal();
+	g.taskList = {
+		tasks: [{
+			id: "t1", title: "Parent", status: "pending",
+			lightweightSubtasks: true,
+			subtasks: [
+				{ id: "t1a", title: "Sub A", status: "pending" },
+			],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const block = taskListBlock(g);
+	assert.ok(block);
+	// Lightweight indicator shown
+	assert.match(block, /\(lightweight\)/);
+});
+
+test("taskListBlock omits subtask section when disableTasks is true", () => {
+	const g = goal();
+	g.taskList = {
+		tasks: [{
+			id: "t1", title: "Task", status: "pending",
+			subtasks: [{ id: "t1a", title: "Sub", status: "pending" }],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	assert.equal(taskListBlock(g, { disableTasks: true }), "");
+});
+
+test("goalPrompt includes subtask rendering", () => {
+	const g = goal();
+	g.taskList = {
+		tasks: [{
+			id: "t1", title: "Parent", status: "pending",
+			subtasks: [{ id: "t1a", title: "Child", status: "complete" }],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const prompt = goalPrompt(g);
+	assert.match(prompt, /\[ \] t1/);
+	assert.match(prompt, /\[x\] t1a/);
+});
+
+test("continuationPrompt includes subtask rendering", () => {
+	const g = goal();
+	g.taskList = {
+		tasks: [{
+			id: "t1", title: "Parent", status: "pending",
+			subtasks: [{ id: "t1a", title: "Child", status: "pending" }],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const prompt = continuationPrompt(g);
+	assert.match(prompt, /\[ \] t1/);
+	assert.match(prompt, /\[ \] t1a/);
+});

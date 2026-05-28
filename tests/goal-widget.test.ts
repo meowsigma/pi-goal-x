@@ -250,3 +250,75 @@ test("renderGoalWidgetLines omits task line when no taskList", () => {
 	const body = lines.slice(1).join(" ");
 	assert.equal(body.includes("tasks"), false);
 });
+
+// ── Subtask widget display ──────────────────────────────────────────────
+
+test("renderGoalWidgetLines counts subtasks recursively in heading", () => {
+	const lines = renderGoalWidgetLines(goal({
+		taskList: {
+			tasks: [{
+				id: "t1", title: "Parent", status: "complete",
+				subtasks: [
+					{ id: "t1a", title: "Child", status: "pending" },
+					{ id: "t1b", title: "Child2", status: "pending" },
+				],
+			}],
+			blockCompletion: false,
+			proposedAt: testProposedAt,
+		},
+	}), theme, 100);
+	// Heading: 1/3 tasks (1 parent complete + 2 pending children)
+	assert.match(lines[0], /1\/3 tasks/);
+});
+
+test("renderGoalWidgetLines finds first pending at any depth (BFS)", () => {
+	const lines = renderGoalWidgetLines(goal({
+		taskList: {
+			tasks: [{
+				id: "t1", title: "Parent", status: "complete",
+				subtasks: [
+					{ id: "t1a", title: "Child", status: "pending" },
+				],
+			}],
+			blockCompletion: false,
+			proposedAt: testProposedAt,
+		},
+	}), theme, 100);
+	const body = lines.slice(1).join(" ");
+	// Should show t1a as next, not t1 (t1 is complete, t1a is pending)
+	assert.match(body, /t1a/);
+	assert.match(body, /next/);
+});
+
+test("renderGoalWidgetLines shows all complete when subtasks are done", () => {
+	const lines = renderGoalWidgetLines(goal({
+		taskList: {
+			tasks: [{
+				id: "t1", title: "Parent", status: "complete",
+				subtasks: [
+					{ id: "t1a", title: "Child", status: "complete" },
+				],
+			}],
+			blockCompletion: false,
+			proposedAt: testProposedAt,
+		},
+	}), theme, 100);
+	const body = lines.slice(1).join(" ");
+	assert.match(body, /All tasks complete/);
+});
+
+test("renderGoalWidgetLines suppresses task info when disableTasks is true with subtasks", () => {
+	const lines = renderGoalWidgetLines(goal({
+		taskList: {
+			tasks: [{
+				id: "t1", title: "Parent", status: "pending",
+				subtasks: [{ id: "t1a", title: "Child", status: "pending" }],
+			}],
+			blockCompletion: false,
+			proposedAt: testProposedAt,
+		},
+	}), theme, 100, { disableTasks: true });
+	const body = lines.slice(1).join(" ");
+	assert.equal(body.includes("tasks"), false);
+	assert.equal(body.includes("t1a"), false);
+});

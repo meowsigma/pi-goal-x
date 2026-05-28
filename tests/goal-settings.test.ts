@@ -7,7 +7,11 @@ import * as path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { GoalRecord } from "../extensions/goal-record.ts";
+import {
+	normalizeTaskItem,
+	normalizeTaskList,
+	type GoalRecord,
+} from "../extensions/goal-record.ts";
 import {
 	goalSettingsPath,
 	parseGoalSettings,
@@ -344,4 +348,99 @@ test("loadGoalSettings: reads subtaskDepth from file", () => {
 		const result = loadGoalSettings(dir, {});
 		assert.equal(result.subtaskDepth, 3);
 	});
+});
+
+// ── Unified acceptance: buildDraftConfirmationText with tasks ────────────
+
+import { buildDraftConfirmationText } from "../extensions/goal-draft.ts";
+
+test("buildDraftConfirmationText includes task section when appended to objective", () => {
+	const text = buildDraftConfirmationText({
+		focus: "goal",
+		originalTopic: "Build the thing",
+		objective: "=== Goal ===\nObjective: Build the thing\n\n┌─ TASKS ─────────────────────────────────────┐\n[ ] t1: Set up\n  [ ] t1a: Install\n└──────────────────────────────────────────────┘",
+		autoContinue: true,
+	});
+	assert.match(text, /Build the thing/);
+	assert.match(text, /t1: Set up/);
+	assert.match(text, /t1a: Install/);
+	assert.match(text, /┌─ TASKS/);
+});
+
+test("buildDraftConfirmationText works without task section (backward compat)", () => {
+	const text = buildDraftConfirmationText({
+		focus: "goal",
+		originalTopic: "Simple goal",
+		objective: "=== Goal ===\nObjective: Simple goal",
+		autoContinue: true,
+	});
+	assert.match(text, /Simple goal/);
+	assert.equal(text.includes("TASKS"), false);
+});
+
+// ── Scroll fix: hardware cursor toggle ──────────────────────────────────
+
+test("loadGoalSettings respects various subtaskDepth edge cases", () => {
+	withTempDir((dir) => {
+		// No file = default 1
+		assert.equal(loadGoalSettings(dir, {}).subtaskDepth, 1);
+
+		// subtaskDepth 0 is rejected (below minimum), defaults to 1
+		const configPath = goalSettingsPath(dir);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, JSON.stringify({ disableTasks: false, disableContracts: false, subtaskDepth: 0 }), "utf8");
+		assert.equal(loadGoalSettings(dir, {}).subtaskDepth, 1);
+
+		// subtaskDepth non-integer rejected
+		fs.writeFileSync(configPath, JSON.stringify({ disableTasks: false, disableContracts: false, subtaskDepth: 1.5 }), "utf8");
+		assert.equal(loadGoalSettings(dir, {}).subtaskDepth, 1);
+
+		// subtaskDepth negative rejected
+		fs.writeFileSync(configPath, JSON.stringify({ disableTasks: false, disableContracts: false, subtaskDepth: -1 }), "utf8");
+		assert.equal(loadGoalSettings(dir, {}).subtaskDepth, 1);
+	});
+});
+
+// ── E2E-style: simulate goal creation with tasks ────────────────────────
+
+test("normalizeTaskList handles subtasks", () => {
+	const raw = {
+		tasks: [{
+			id: "t1", title: "Parent", status: "pending",
+			subtasks: [
+				{ id: "t1a", title: "Child", status: "pending" },
+			],
+		}],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const result = normalizeTaskList(raw);
+	assert.ok(result);
+	assert.equal(result.tasks.length, 1);
+	assert.ok(result.tasks[0]!.subtasks);
+	assert.equal(result.tasks[0]!.subtasks![0]!.id, "t1a");
+	assert.equal(result.tasks[0]!.subtasks![0]!.title, "Child");
+
+	// Verify normalizeTaskItem creates proper nested structure
+	const item = normalizeTaskItem({
+		id: "x", title: "X", status: "pending",
+		subtasks: [
+			{ id: "xa", title: "XA", status: "complete" },
+		],
+	});
+	assert.ok(item);
+	assert.equal(item.subtasks?.length, 1);
+	assert.equal(item.subtasks![0]!.id, "xa");
+	assert.equal(item.subtasks![0]!.status, "complete");
+});
+
+test("normalizeTaskItem preserves lightweightSubtasks flag", () => {
+	const item = normalizeTaskItem({
+		id: "t1", title: "T1", status: "pending",
+		lightweightSubtasks: true,
+		subtasks: [{ id: "t1a", title: "A", status: "pending" }],
+	});
+	assert.ok(item);
+	assert.equal(item.lightweightSubtasks, true);
+	assert.equal(item.subtasks?.length, 1);
 });

@@ -1706,6 +1706,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					}
 					return task;
 				});
+				// Validate subtask depth BEFORE showing dialog (consistent with propose_task_list)
+				const settings = loadGoalSettings(ctx.cwd);
+				const depthViolation = findSubtaskDepthViolation(tasksToCreate, settings.subtaskDepth ?? 1);
+				if (depthViolation) {
+					return {
+						content: [{ type: "text", text: depthViolation }],
+						details: goalDetails(state.goal),
+					};
+				}
 				const taskLines = renderConfirmationTasks(tasksToCreate, 0);
 				taskSummarySection = `\n\n┌─ TASKS ─────────────────────────────────────┐\n${taskLines.join("\n")}\n└──────────────────────────────────────────────┘`;
 			}
@@ -1738,18 +1747,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 
 			if (decision === "confirm") {
-				// Validate subtask depth against settings
-				if (tasksToCreate && tasksToCreate.length > 0) {
-					const settings = loadGoalSettings(ctx.cwd);
-					const depthViolation = findSubtaskDepthViolation(tasksToCreate, settings.subtaskDepth ?? 1);
-					if (depthViolation) {
-						return {
-							content: [{ type: "text", text: depthViolation }],
-							details: goalDetails(state.goal),
-						};
-					}
-				}
-
 				// Extract verification contract from objective before creation
 				const { objective: cleanedObjective, verificationContract } = extractVerificationContract(objective);
 				const config: GoalCreationConfig = {

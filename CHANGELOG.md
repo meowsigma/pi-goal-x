@@ -8,6 +8,15 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.15.0] — 2026-05-28
+
+### Changed
+
+- **Unified settings file** — all settings now live in a single `.pi/pi-goal-x-settings.json` file instead of two separate files. The unified file includes `disableTasks`, `disableContracts`, `subtaskDepth`, `provider`, `model`, `thinkingLevel`, and `disabled`. Clean break: old `.pi/goal-settings.json` and `.pi/goal-auditor.json` files are no longer read. Users must manually merge into the new file.
+- **`loadGoalSettings` replaces `loadGoalAuditorConfig`** — the auditor now reads its config (provider, model, thinkingLevel, disabled) from the unified settings file via `loadGoalSettings()`. Old individual `loadGoalAuditorConfig`, `loadGoalAuditorFileConfig`, `saveGoalAuditorFileConfig`, `parseGoalAuditorConfig`, and `goalAuditorConfigPath()` functions removed from `goal-auditor.ts`.
+- **Auditor env vars removed** — `PI_GOAL_AUDITOR_PROVIDER`, `PI_GOAL_AUDITOR_MODEL`, and `PI_GOAL_AUDITOR_THINKING_LEVEL` removed. Replaced with single `PI_GOAL_SETTINGS_FILE` env var that points at an alternative settings file path (relative to cwd or absolute). `PI_GOAL_DISABLE_TASKS` and `PI_GOAL_DISABLE_CONTRACTS` remain unchanged.
+- **`/goal-settings` TUI updated** — now shows all settings in one list (disabled, provider, model, thinking_level, subtaskDepth, disableTasks, disableContracts) instead of a separate auditor-only sub-menu.
+
 ## [0.14.0] — 2026-05-28
 
 ### Added
@@ -384,6 +393,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.15.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.15.0
 [0.14.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.14.0
 [0.13.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.13.0
 [0.12.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.12.0

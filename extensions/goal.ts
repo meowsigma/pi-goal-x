@@ -17,13 +17,15 @@ import {
 	type GoalDraftingFocus,
 } from "./goal-draft.ts";
 import {
-	goalAuditorConfigPath,
-	loadGoalAuditorFileConfig,
 	runGoalCompletionAuditor,
-	saveGoalAuditorFileConfig,
-	type GoalAuditorConfig,
 } from "./goal-auditor.ts";
-import { loadGoalSettings, type GoalSettings } from "./goal-settings.ts";
+import {
+	goalSettingsPath,
+	loadGoalSettings,
+	loadGoalSettingsFileConfig,
+	saveGoalSettingsFileConfig,
+	type GoalSettings,
+} from "./goal-settings.ts";
 import {
 	proposalDialogFailureMessage,
 	registerQuestionnaireTools,
@@ -482,7 +484,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	function abortAudit(ctx: ExtensionContext): void {
 		if (!auditAbortController || !auditProgress) return;
-		const auditorConfig = loadGoalAuditorFileConfig(ctx.cwd);
+		const settings = loadGoalSettingsFileConfig(ctx.cwd);
 		auditAbortController.abort();
 		auditAbortController = null;
 		stopAuditAnimation();
@@ -495,9 +497,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					type: "audit_skipped",
 					goalId: state.goal.id,
 					reason: "user_aborted",
-					provider: auditorConfig.provider,
-					model: auditorConfig.model,
-					thinkingLevel: auditorConfig.thinkingLevel,
+					provider: settings.provider,
+					model: settings.model,
+					thinkingLevel: settings.thinkingLevel,
 					at: nowIso(),
 				});
 			} catch {
@@ -1306,75 +1308,85 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	function auditorConfigValue(config: GoalAuditorConfig, key: keyof GoalAuditorConfig): string {
+	function settingsValue(config: GoalSettings, key: keyof GoalSettings): string {
 		if (key === "disabled") return config.disabled === true ? "true" : "false";
+		if (key === "disableTasks") return config.disableTasks === true ? "true" : "false";
+		if (key === "disableContracts") return config.disableContracts === true ? "true" : "false";
+		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
 		return config[key] ?? "(default)";
 	}
 
-	function auditorSettingsLines(config: GoalAuditorConfig): string[] {
+	function settingsLines(config: GoalSettings): string[] {
 		return [
-			`disabled: ${auditorConfigValue(config, "disabled")}`,
-			`provider: ${auditorConfigValue(config, "provider")}`,
-			`model: ${auditorConfigValue(config, "model")}`,
-			`thinking_level: ${auditorConfigValue(config, "thinkingLevel")}`,
+			`disabled: ${settingsValue(config, "disabled")}`,
+			`provider: ${settingsValue(config, "provider")}`,
+			`model: ${settingsValue(config, "model")}`,
+			`thinking_level: ${settingsValue(config, "thinkingLevel")}`,
+			`disableTasks: ${settingsValue(config, "disableTasks")}`,
+			`disableContracts: ${settingsValue(config, "disableContracts")}`,
+			`subtaskDepth: ${settingsValue(config, "subtaskDepth")}`,
 		];
 	}
 
-	async function handleGoalAuditorSettings(ctx: ExtensionContext): Promise<void> {
+	async function handleSettingsMenu(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI) {
-			ctx.ui.notify(`Goal auditor settings file: ${goalAuditorConfigPath(ctx.cwd)}`, "info");
+			ctx.ui.notify(`Settings file: ${goalSettingsPath(ctx.cwd)}`, "info");
 			return;
 		}
-		const fieldLabels = ["disabled", "provider", "model", "thinking_level"] as const;
+		const editorKeys = ["disabled", "provider", "model", "thinking_level", "subtaskDepth"] as const;
 		while (true) {
-			const config = loadGoalAuditorFileConfig(ctx.cwd);
-			const options = [
-				`disabled: ${auditorConfigValue(config, "disabled")}`,
-				`provider: ${auditorConfigValue(config, "provider")}`,
-				`model: ${auditorConfigValue(config, "model")}`,
-				`thinking_level: ${auditorConfigValue(config, "thinkingLevel")}`,
-			];
-			const selected = await ctx.ui.select("Goal auditor settings", options);
-			if (!selected) return;
-			const index = options.indexOf(selected);
-			const field = fieldLabels[index];
-			if (!field) return;
-			const key = field === "thinking_level" ? "thinkingLevel" : field;
+			const config = loadGoalSettingsFileConfig(ctx.cwd);
+			const options = settingsLines(config).map((line) => `  ${line}`);
+			options.unshift("─── Settings ───");
+			options.push("Done");
+			const selected = await ctx.ui.select("Goal settings", options);
+			if (!selected || selected === "Done" || selected === "─── Settings ───") return;
+			// Strip leading spaces from selection
+			const selectedTrimmed = selected.trim();
+			const colon = selectedTrimmed.indexOf(":");
+			if (colon === -1) continue;
+			const field = selectedTrimmed.slice(0, colon).trim();
+			const editorKey = field === "thinking_level" ? "thinkingLevel" : field;
+			if (!(editorKeys as readonly string[]).includes(editorKey)) continue;
+			const key = editorKey as keyof GoalSettings;
 			if (key === "disabled") {
-				// Toggle the disabled flag
-				const next: GoalAuditorConfig = { ...config, disabled: !config.disabled };
-				saveGoalAuditorFileConfig(ctx.cwd, next);
-				ctx.ui.notify(`Goal auditor settings saved:\n${auditorSettingsLines(loadGoalAuditorFileConfig(ctx.cwd)).join("\n")}`, "info");
+				const next = { ...config, disabled: !config.disabled };
+				saveGoalSettingsFileConfig(ctx.cwd, next);
+				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
 				continue;
 			}
-			const currentValue = auditorConfigValue(config, key as keyof GoalAuditorConfig);
-			const input = await ctx.ui.input(`Set auditor ${field}`, currentValue === "(default)" ? "Leave empty for default" : currentValue);
+			if (key === "subtaskDepth") {
+				const input = await ctx.ui.input("Set subtaskDepth", String(config.subtaskDepth ?? 1));
+				if (input === undefined) continue;
+				const n = parseInt(input.trim(), 10);
+				if (isNaN(n) || n < 1) {
+					ctx.ui.notify("subtaskDepth must be a positive integer", "warning");
+					continue;
+				}
+				const next = { ...config, subtaskDepth: n };
+				saveGoalSettingsFileConfig(ctx.cwd, next);
+				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
+				continue;
+			}
+			const currentValue = settingsValue(config, key);
+			const input = await ctx.ui.input(`Set ${field}`, currentValue === "(default)" ? "Leave empty for default" : currentValue);
 			if (input === undefined) continue;
-			const next: GoalAuditorConfig = { ...config };
-			const trimmed = input.trim();
-			if (!trimmed) {
-				delete next[key as keyof GoalAuditorConfig];
+			const next: GoalSettings = { ...config };
+			const inputTrimmed = input.trim();
+			if (!inputTrimmed) {
+				delete next[key];
 			} else if (key === "thinkingLevel") {
-				if (!["off", "minimal", "low", "medium", "high", "xhigh"].includes(trimmed)) {
+				if (!["off", "minimal", "low", "medium", "high", "xhigh"].includes(inputTrimmed)) {
 					ctx.ui.notify("thinking_level must be one of: off, minimal, low, medium, high, xhigh", "warning");
 					continue;
 				}
-				next.thinkingLevel = trimmed as GoalAuditorConfig["thinkingLevel"];
+				next.thinkingLevel = inputTrimmed as GoalSettings["thinkingLevel"];
 			} else if (key === "provider" || key === "model") {
-				next[key] = trimmed;
+				next[key] = inputTrimmed;
 			}
-			saveGoalAuditorFileConfig(ctx.cwd, next);
-			ctx.ui.notify(`Goal auditor settings saved:\n${auditorSettingsLines(loadGoalAuditorFileConfig(ctx.cwd)).join("\n")}`, "info");
+			saveGoalSettingsFileConfig(ctx.cwd, next);
+			ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
 		}
-	}
-
-	async function handleGoalSettings(ctx: ExtensionContext): Promise<void> {
-		if (!ctx.hasUI) {
-			ctx.ui.notify(`Goal settings require UI. Auditor config file: ${goalAuditorConfigPath(ctx.cwd)}`, "warning");
-			return;
-		}
-		const selected = await ctx.ui.select("Goal settings", ["auditor"]);
-		if (selected === "auditor") await handleGoalAuditorSettings(ctx);
 	}
 
 	async function handleGoalClear(ctx: ExtensionContext): Promise<void> {
@@ -1461,7 +1473,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("goal-settings", {
 		description: "Open pi-goal settings, including auditor provider/model/thinking_level.",
 		handler: async (_rawArgs, ctx) => {
-			await handleGoalSettings(ctx);
+			await handleSettingsMenu(ctx);
 		},
 	});
 
@@ -2039,13 +2051,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			} catch {
 				// Ledger append failure should not block completion
 			}
-			const auditorConfig = loadGoalAuditorFileConfig(ctx.cwd);
-			const auditorLabel = auditorConfig.provider || auditorConfig.model || auditorConfig.thinkingLevel
-				? `${auditorConfig.provider ?? "default"}/${auditorConfig.model ?? "default"}${auditorConfig.thinkingLevel ? `:${auditorConfig.thinkingLevel}` : ""}`
+			const settings = loadGoalSettingsFileConfig(ctx.cwd);
+			const auditorLabel = settings.provider || settings.model || settings.thinkingLevel
+				? `${settings.provider ?? "default"}/${settings.model ?? "default"}${settings.thinkingLevel ? `:${settings.thinkingLevel}` : ""}`
 				: "default";
 
 			// Check if auditor is disabled
-			if (auditorConfig.disabled === true) {
+			if (settings.disabled === true) {
 				if (params.confirmBypassAuditor !== true) {
 					return {
 						content: [{ type: "text", text: [
@@ -2072,9 +2084,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						type: "audit_skipped",
 						goalId: auditTarget.id,
 						reason: "disabled",
-						provider: auditorConfig.provider,
-						model: auditorConfig.model,
-						thinkingLevel: auditorConfig.thinkingLevel,
+						provider: settings.provider,
+						model: settings.model,
+						thinkingLevel: settings.thinkingLevel,
 						at: nowIso(),
 					});
 				} catch {
@@ -2128,9 +2140,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				appendGoalEvent(ctx, {
 					type: "audit_started",
 					goalId: auditTarget.id,
-					provider: auditorConfig.provider,
-					model: auditorConfig.model,
-					thinkingLevel: auditorConfig.thinkingLevel,
+					provider: settings.provider,
+					model: settings.model,
+					thinkingLevel: settings.thinkingLevel,
 					at: nowIso(),
 				});
 			} catch {

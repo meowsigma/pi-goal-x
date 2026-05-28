@@ -54,7 +54,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 
 - **Live progress widget** — when the auditor runs, the TUI shows a spinner, a progress bar (`[████░░░░] 40%`), step labels (`Inspecting files...`, `Verifying success criteria...`), the current tool being executed, and recent output lines. No more wondering if anything is happening.
 - **Escape to skip** — press Escape during an audit to abort it and complete the goal immediately. The skip is recorded in the ledger as `audit_skipped` with reason `user_aborted` and auditor model metadata.
-- **Disable the auditor entirely** — set `disabled: true` in `.pi/goal-auditor.json` (or toggle it via `/goal-settings` → `disabled`). The agent can still bypass with user confirmation by passing `confirmBypassAuditor: true` to `update_goal`.
+- **Disable the auditor entirely** — set `disabled: true` in `.pi/pi-goal-x-settings.json` (or toggle it via `/goal-settings`). The agent can still bypass with user confirmation by passing `confirmBypassAuditor: true` to `update_goal`.
 - **Skipped audits are recorded** — every skip (whether disabled or Escape-aborted) is logged to the ledger with the reason, provider, model, and thinking level for full traceability.
 - **Robust abort detection** — the auditor detects aborts both from exceptions *and* from `session.prompt()` returning after an abort signal, preventing stuck goals or ghost states.
 - **Cleaner lifecycle** — `AbortSignal` is properly wired to `session.abort()`, animation timers are cleaned up, and the unsubscribe path is always executed. No more having to kill the session.
@@ -223,7 +223,7 @@ Before archiving the goal, `update_goal` starts a separate pi agent in an isolat
 
 The auditor is semantic, not a paperwork checklist: it should reject scaffold-only, alpha, generated-template, proxy-metric, build-only, or weakly verified completions when the real user outcome is not satisfied.
 
-By default the auditor uses the current/default pi model. Configure it via `.pi/goal-auditor.json`, interactively with `/goal-settings` → `auditor`, or environment variables (see [Settings files](#settings-files)).
+By default the auditor uses the current/default pi model. Configure it via `.pi/pi-goal-x-settings.json`, or interactively with `/goal-settings` (see [Configuration](#configuration)).
 
 The completion result prints a full report into the conversation:
 
@@ -271,11 +271,9 @@ Before commands, tools, and lifecycle hooks act on a focused goal, the runtime r
 
 Goal paths are constrained to `.pi/goals/` and `.pi/goals/archived/`; absolute paths, traversal, NUL bytes, symlinks, and unsafe metadata paths are rejected.
 
-## Settings files
+## Configuration
 
-Configuration is split across two files under `.pi/`.
-
-### `.pi/goal-settings.json`
+All settings live in a single file: **`.pi/pi-goal-x-settings.json`**
 
 Configured interactively via `/goal-settings`, or edited directly:
 
@@ -283,24 +281,7 @@ Configured interactively via `/goal-settings`, or edited directly:
 {
   "disableTasks": false,
   "disableContracts": false,
-  "subtaskDepth": 1
-}
-```
-
-| Field | Default | Purpose |
-|---|---:|---|
-| `disableTasks` | `false` | Suppress task list features entirely when `true` |
-| `disableContracts` | `false` | Suppress verification contract enforcement when `true` |
-| `subtaskDepth` | `1` | Maximum nesting depth for subtasks (`1` = tasks → subtasks, `2` = tasks → subtasks → sub-subtasks) |
-
-**Env var overrides:** `PI_GOAL_DISABLE_TASKS=1` and `PI_GOAL_DISABLE_CONTRACTS=1` take precedence over the file. Set to any truthy string to disable.
-
-### `.pi/goal-auditor.json`
-
-Configured interactively via `/goal-settings` → `auditor`, or edited directly:
-
-```json
-{
+  "subtaskDepth": 1,
   "provider": "fireworks",
   "model": "accounts/fireworks/models/deepseek-v4-flash",
   "thinkingLevel": "high",
@@ -310,18 +291,27 @@ Configured interactively via `/goal-settings` → `auditor`, or edited directly:
 
 | Field | Default | Purpose |
 |---|---:|---|
-| `provider` | system default | Provider name for the auditor agent (`anthropic`, `fireworks`, `google`, `groq`, etc.) |
+| `disableTasks` | `false` | Suppress task list features entirely when `true` |
+| `disableContracts` | `false` | Suppress verification contract enforcement when `true` |
+| `subtaskDepth` | `1` | Maximum nesting depth for subtasks |
+| `provider` | system default | Provider name for the auditor agent |
 | `model` | system default | Model name for the auditor agent |
-| `thinkingLevel` | system default | Thinking level: `none`, `low`, `medium`, `high` |
+| `thinkingLevel` | system default | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `disabled` | `false` | When `true`, skip the completion audit entirely |
 
-**Env var overrides:** `PI_GOAL_AUDITOR_PROVIDER`, `PI_GOAL_AUDITOR_MODEL`, and `PI_GOAL_AUDITOR_THINKING_LEVEL` take precedence over file config. `PI_GOAL_AUDITOR_THINKING` is also accepted as an alias for the thinking level.
+**Env var overrides:**
+- `PI_GOAL_DISABLE_TASKS=1` — disable task features (takes precedence over file)
+- `PI_GOAL_DISABLE_CONTRACTS=1` — disable contract enforcement (takes precedence over file)
+- `PI_GOAL_SETTINGS_FILE=custom-path.json` — alternative settings file path (relative to cwd or absolute)
 
 ## Environment variables
 
 | Variable | Default | Purpose |
 |---|---:|---|
 | `PI_GOAL_AUTO_CONFIRM` | unset | When `1`, auto-confirms drafts in headless/test contexts |
+| `PI_GOAL_DISABLE_TASKS` | — | When `1`, disable task features (overrides settings file) |
+| `PI_GOAL_DISABLE_CONTRACTS` | — | When `1`, disable contract enforcement (overrides settings file) |
+| `PI_GOAL_SETTINGS_FILE` | `.pi/pi-goal-x-settings.json` | Alternative settings file path (relative to cwd or absolute) |
 
 ## Development
 

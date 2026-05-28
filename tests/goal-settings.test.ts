@@ -62,7 +62,7 @@ test("parseGoalSettings: string true/false values accepted", () => {
 test("parseGoalSettings: unknown keys rejected", () => {
 	assert.throws(
 		() => parseGoalSettings({ disableTasks: true, disableContracts: false, foo: "bar" }),
-		/Unknown goal-settings.json key/,
+		/Unknown pi-goal-x-settings.json key/,
 	);
 });
 
@@ -75,10 +75,24 @@ test("parseGoalSettings: multiple unknown keys rejected", () => {
 
 // ── goalSettingsPath ────────────────────────────────────────────────────
 
-test("goalSettingsPath: resolves under .pi/", () => {
+test("goalSettingsPath: resolves under .pi/ with new filename", () => {
 	const p = goalSettingsPath("/tmp/project");
-	assert.ok(p.endsWith(path.join(".pi", "goal-settings.json")));
+	assert.ok(p.endsWith(path.join(".pi", "pi-goal-x-settings.json")));
 	assert.ok(p.startsWith("/tmp/project"));
+});
+
+test("goalSettingsPath: respects PI_GOAL_SETTINGS_FILE env var", () => {
+	// Relative path
+	const rel = goalSettingsPath("/tmp/project", { PI_GOAL_SETTINGS_FILE: "custom-settings.json" });
+	assert.equal(rel, path.join("/tmp/project", "custom-settings.json"));
+
+	// Absolute path
+	const abs = goalSettingsPath("/tmp/project", { PI_GOAL_SETTINGS_FILE: "/etc/pi/settings.json" });
+	assert.equal(abs, "/etc/pi/settings.json");
+
+	// No env var — defaults to .pi/pi-goal-x-settings.json
+	const def = goalSettingsPath("/tmp/project", {});
+	assert.ok(def.endsWith(path.join(".pi", "pi-goal-x-settings.json")));
 });
 
 // ── loadGoalSettingsFileConfig ──────────────────────────────────────────

@@ -84,7 +84,7 @@ function createMockCtx(cwd: string, sessionEntries: unknown[]): ExtensionContext
 function testFixture() {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-propose-tweak-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
-	writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
+	writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disabled: true }));
 
 	const goal = createGoal({
 		objective: "Propose tweak integration test: initial objective",

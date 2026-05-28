@@ -200,7 +200,7 @@ Before archiving, the tool starts a separate in-memory pi session with a focused
 - `<approved/>` allows archiving;
 - `<disapproved/>`, no marker, an error, or abort rejects completion and leaves the goal open.
 
-The auditor uses the current/default model unless `.pi/goal-auditor.json` or `PI_GOAL_AUDITOR_PROVIDER`, `PI_GOAL_AUDITOR_MODEL`, and `PI_GOAL_AUDITOR_THINKING_LEVEL` override provider/model/thinking. `/goal-settings` opens a small UI menu with an `auditor` item; inside it, `provider`, `model`, and `thinking_level` each open a free-text input and save back to `.pi/goal-auditor.json`.
+The auditor uses the current/default model unless `.pi/pi-goal-x-settings.json` overrides `provider`, `model`, or `thinkingLevel`. `/goal-settings` opens a TUI showing all settings (disabled, provider, model, thinking_level, subtaskDepth, disableTasks, disableContracts); each editable field opens a free-text input and saves back to `.pi/pi-goal-x-settings.json`.
 
 The user sees:
 

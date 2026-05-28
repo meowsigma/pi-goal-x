@@ -122,7 +122,7 @@ function createMockCtx(cwd: string, goal: GoalRecord, written: GoalRecord): Exte
 function testFixture() {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-subagent-e2e-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
-	writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
+	writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disabled: true }));
 	const goal = createGoal({ objective: "Subagent e2e: initial", autoContinue: true, sisyphus: false });
 	const written = writeActiveGoalFile({ cwd } as any, goal as GoalRecord);
 	return { cwd, goal: goal as GoalRecord, written, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
@@ -148,7 +148,7 @@ function forkFixture(instruction: string): {
 		createdAt: now, updatedAt: now, activePath,
 	};
 	writeFileSync(path.join(cwd, activePath), JSON.stringify(goalData) + "\n\n# Goal Prompt\n\nE2E fork test: initial\n");
-	writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
+	writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disabled: true }));
 	const sessionFile = path.join(cwd, "session.jsonl");
 	writeFileSync(sessionFile, [
 		JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: now, cwd }),
@@ -366,7 +366,7 @@ describe("Subagent E2E", () => {
 				createdAt: now, updatedAt: now, activePath,
 			};
 			writeFileSync(path.join(cwd, activePath), JSON.stringify(goalData) + "\n\n# Goal Prompt\n\nE2E fork tweak test\n");
-			writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
+			writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disabled: true }));
 			const sessionFile = path.join(cwd, "session.jsonl");
 			writeFileSync(sessionFile, [
 				JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: now, cwd }),

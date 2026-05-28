@@ -67,9 +67,9 @@ function testFixture() {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-e2e-ext-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 
-	// Create auditor config that disables the auditor (so completion tests
+	// Create settings file that disables the auditor (so completion tests
 	// don't try to spawn the actual auditor subprocess)
-	writeFileSync(path.join(cwd, ".pi", "goal-auditor.json"), JSON.stringify({ disabled: true }));
+	writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disabled: true }));
 
 	const goal = createGoal({
 		objective: "E2E test: initial",

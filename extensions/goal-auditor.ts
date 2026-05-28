@@ -14,14 +14,7 @@ import {
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
-import type { GoalSettings } from "./goal-settings.ts";
-
-export interface GoalAuditorConfig {
-	provider?: string;
-	model?: string;
-	thinkingLevel?: ThinkingLevel;
-	disabled?: boolean;
-}
+import { loadGoalSettings, type GoalSettings } from "./goal-settings.ts";
 
 export interface AuditorProgress {
 	/** Current tool being executed by the auditor, if any */
@@ -55,10 +48,6 @@ export interface GoalAuditorResult {
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
-export function goalAuditorConfigPath(cwd: string): string {
-	return path.join(cwd, ".pi", "goal-auditor.json");
-}
-
 function asNonEmptyString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -68,59 +57,7 @@ function asThinkingLevel(value: unknown): ThinkingLevel | undefined {
 	return text && THINKING_LEVELS.has(text) ? text as ThinkingLevel : undefined;
 }
 
-export function parseGoalAuditorConfig(raw: unknown): GoalAuditorConfig {
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-	const record = raw as Record<string, unknown>;
-	const config: GoalAuditorConfig = {};
-	const provider = asNonEmptyString(record.provider);
-	const model = asNonEmptyString(record.model);
-	const thinkingLevel = asThinkingLevel(record.thinkingLevel ?? record.thinking_level);
-	if (provider) config.provider = provider;
-	if (model) config.model = model;
-	if (thinkingLevel) config.thinkingLevel = thinkingLevel;
-	if (record.disabled === true || record.disabled === "true") config.disabled = true;
-	return config;
-}
 
-export function loadGoalAuditorFileConfig(cwd: string): GoalAuditorConfig {
-	try {
-		const configPath = goalAuditorConfigPath(cwd);
-		if (fs.existsSync(configPath)) return parseGoalAuditorConfig(JSON.parse(fs.readFileSync(configPath, "utf8")));
-	} catch {
-		return {};
-	}
-	return {};
-}
-
-export function loadGoalAuditorConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): GoalAuditorConfig {
-	const fileConfig = loadGoalAuditorFileConfig(cwd);
-	return {
-		...fileConfig,
-		provider: asNonEmptyString(env.PI_GOAL_AUDITOR_PROVIDER) ?? fileConfig.provider,
-		model: asNonEmptyString(env.PI_GOAL_AUDITOR_MODEL) ?? fileConfig.model,
-		thinkingLevel: asThinkingLevel(env.PI_GOAL_AUDITOR_THINKING_LEVEL ?? env.PI_GOAL_AUDITOR_THINKING) ?? fileConfig.thinkingLevel,
-	};
-}
-
-export function saveGoalAuditorFileConfig(cwd: string, config: GoalAuditorConfig): GoalAuditorConfig {
-	const clean: GoalAuditorConfig = {};
-	const provider = asNonEmptyString(config.provider);
-	const model = asNonEmptyString(config.model);
-	const thinkingLevel = asThinkingLevel(config.thinkingLevel);
-	if (provider) clean.provider = provider;
-	if (model) clean.model = model;
-	if (thinkingLevel) clean.thinkingLevel = thinkingLevel;
-	if (config.disabled === true) clean.disabled = true;
-	const configPath = goalAuditorConfigPath(cwd);
-	fs.mkdirSync(path.dirname(configPath), { recursive: true });
-	const persisted: Record<string, unknown> = {};
-	if (clean.provider) persisted.provider = clean.provider;
-	if (clean.model) persisted.model = clean.model;
-	if (clean.thinkingLevel) persisted.thinking_level = clean.thinkingLevel;
-	if (clean.disabled) persisted.disabled = true;
-	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
-	return clean;
-}
 
 export function parseAuditorDecision(output: string): { approved: boolean; disapproved: boolean } {
 	const approved = /<approved\s*\/>/.test(output);
@@ -282,7 +219,7 @@ function makeAuditorResourceLoader(): ResourceLoader {
 	};
 }
 
-function resolveAuditorModel(ctx: ExtensionContext, config: GoalAuditorConfig): { model: Model<any> | undefined; error?: string } {
+function resolveAuditorModel(ctx: ExtensionContext, config: GoalSettings): { model: Model<any> | undefined; error?: string } {
 	if (!config.model && !config.provider) return { model: ctx.model };
 	if (config.provider && config.model) {
 		const model = ctx.modelRegistry.find(config.provider, config.model);
@@ -325,7 +262,7 @@ export async function runGoalCompletionAuditor(args: {
 	 */
 	createSession?: typeof createAgentSession;
 }): Promise<GoalAuditorResult> {
-	const config = loadGoalAuditorConfig(args.ctx.cwd);
+	const config = loadGoalSettings(args.ctx.cwd);
 	const resolved = resolveAuditorModel(args.ctx, config);
 	const model = resolved.model;
 	const thinkingLevel = config.thinkingLevel;

@@ -6,14 +6,16 @@ import test from "node:test";
 
 import {
 	buildGoalAuditorPrompt,
-	goalAuditorConfigPath,
-	loadGoalAuditorConfig,
-	loadGoalAuditorFileConfig,
 	parseAuditorDecision,
-	parseGoalAuditorConfig,
 	runGoalCompletionAuditor,
-	saveGoalAuditorFileConfig,
 } from "../extensions/goal-auditor.ts";
+import {
+	goalSettingsPath,
+	loadGoalSettings,
+	loadGoalSettingsFileConfig,
+	parseGoalSettings,
+	saveGoalSettingsFileConfig,
+} from "../extensions/goal-settings.ts";
 import type { GoalRecord } from "../extensions/goal-record.ts";
 
 function goal(overrides: Partial<GoalRecord> = {}): GoalRecord {
@@ -37,26 +39,26 @@ test("parseAuditorDecision requires explicit approval and lets disapproval win",
 	assert.deepEqual(parseAuditorDecision("no marker"), { approved: false, disapproved: false });
 });
 
-test("parseGoalAuditorConfig supports provider/model and thinking_level aliases", () => {
-	assert.deepEqual(parseGoalAuditorConfig({ provider: "fireworks", model: "accounts/fireworks/routers/kimi", thinking_level: "high" }), {
+test("parseGoalSettings supports provider/model and thinking_level aliases", () => {
+	assert.deepEqual(parseGoalSettings({ provider: "fireworks", model: "accounts/fireworks/routers/kimi", thinking_level: "high" }), {
 		provider: "fireworks",
 		model: "accounts/fireworks/routers/kimi",
 		thinkingLevel: "high",
 	});
-	assert.deepEqual(parseGoalAuditorConfig({ provider: " ", model: 123, thinkingLevel: "ludicrous" }), {});
+	assert.deepEqual(parseGoalSettings({ provider: " ", model: 123, thinkingLevel: "ludicrous" }), {});
 });
 
-test("parseGoalAuditorConfig reads disabled flag", () => {
-	assert.deepEqual(parseGoalAuditorConfig({ disabled: true }), { disabled: true });
-	assert.deepEqual(parseGoalAuditorConfig({ disabled: "true" }), { disabled: true });
-	assert.deepEqual(parseGoalAuditorConfig({ disabled: false }), {});
-	assert.deepEqual(parseGoalAuditorConfig({}), {});
+test("parseGoalSettings reads disabled flag", () => {
+	assert.deepEqual(parseGoalSettings({ disabled: true }), { disabled: true });
+	assert.deepEqual(parseGoalSettings({ disabled: "true" }), { disabled: true });
+	assert.deepEqual(parseGoalSettings({ disabled: false }), {});
+	assert.deepEqual(parseGoalSettings({}), {});
 });
 
-test("saveGoalAuditorFileConfig persists UI-editable auditor settings", () => {
-	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
+test("saveGoalSettingsFileConfig persists UI-editable settings (auditor + task fields)", () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-settings-test-"));
 	try {
-		const saved = saveGoalAuditorFileConfig(cwd, {
+		const saved = saveGoalSettingsFileConfig(cwd, {
 			provider: "fireworks",
 			model: "accounts/fireworks/routers/kimi",
 			thinkingLevel: "high",
@@ -66,29 +68,29 @@ test("saveGoalAuditorFileConfig persists UI-editable auditor settings", () => {
 			model: "accounts/fireworks/routers/kimi",
 			thinkingLevel: "high",
 		});
-		assert.equal(goalAuditorConfigPath(cwd), path.join(cwd, ".pi", "goal-auditor.json"));
-		assert.deepEqual(loadGoalAuditorFileConfig(cwd), saved);
-		assert.match(fs.readFileSync(goalAuditorConfigPath(cwd), "utf8"), /"thinking_level": "high"/);
+		assert.equal(goalSettingsPath(cwd), path.join(cwd, ".pi", "pi-goal-x-settings.json"));
+		assert.deepEqual(loadGoalSettingsFileConfig(cwd), saved);
+		assert.match(fs.readFileSync(goalSettingsPath(cwd), "utf8"), /"thinking_level": "high"/);
 
 		// Save with disabled flag
-		const saved2 = saveGoalAuditorFileConfig(cwd, {
+		const saved2 = saveGoalSettingsFileConfig(cwd, {
 			provider: "fireworks",
 			model: "accounts/fireworks/routers/kimi",
 			thinkingLevel: "high",
 			disabled: true,
 		});
 		assert.equal(saved2.disabled, true);
-		assert.match(fs.readFileSync(goalAuditorConfigPath(cwd), "utf8"), /"disabled": true/);
-		assert.deepEqual(loadGoalAuditorFileConfig(cwd), saved2);
+		assert.match(fs.readFileSync(goalSettingsPath(cwd), "utf8"), /"disabled": true/);
+		assert.deepEqual(loadGoalSettingsFileConfig(cwd), saved2);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
-test("loadGoalAuditorConfig merges env and file config", () => {
-	assert.equal(loadGoalAuditorConfig("/tmp", { PI_GOAL_AUDITOR_PROVIDER: "fireworks", PI_GOAL_AUDITOR_MODEL: "kimi" }).provider, "fireworks");
-	// disabled is file-only, not read from env
-	assert.equal(loadGoalAuditorConfig("/tmp", { PI_GOAL_AUDITOR_DISABLED: "true" }).disabled, undefined);
+test("loadGoalSettings does not read old env vars", () => {
+	// Old env vars are ignored; only PI_GOAL_DISABLE_TASKS/CONTRACTS work
+	assert.deepEqual(loadGoalSettings("/tmp", { PI_GOAL_AUDITOR_PROVIDER: "fireworks" as string }).provider, undefined);
+	// PI_GOAL_SETTINGS_FILE env var can point to an alternative path
 });
 
 test("buildGoalAuditorPrompt demands semantic approval markers", () => {

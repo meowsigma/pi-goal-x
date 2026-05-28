@@ -46,13 +46,6 @@ export async function showEscapeDialog(
 				},
 			];
 
-			/** Build a bordered line: fits exactly `innerWidth` visible chars between ││ */
-			function line(leftContent: string): string {
-				const vis = visibleWidth(leftContent);
-				const fill = innerWidth - vis;
-				return accent("│") + leftContent + (fill > 0 ? " ".repeat(fill) : "") + accent("│");
-			}
-
 			const accent = (s: string) => theme.fg("accent", s);
 			const dim = (s: string) => theme.fg("dim", s);
 			const warning = (s: string) => theme.fg("warning", s);
@@ -70,6 +63,14 @@ export async function showEscapeDialog(
 				render(width: number): string[] {
 					const termWidth = Math.min(width, 80);
 					const innerWidth = Math.min(termWidth, 64) - 2; // inner content width between ││
+
+					/** Build a bordered line: fits exactly `innerWidth` visible chars between ││ */
+					function line(leftContent: string): string {
+						const vis = visibleWidth(leftContent);
+						const fill = innerWidth - vis;
+						return accent("│") + leftContent + (fill > 0 ? " ".repeat(fill) : "") + accent("│");
+					}
+
 					const horizLine = "─".repeat(innerWidth);
 					const lines: string[] = [];
 					const p = "  "; // left padding inside the border

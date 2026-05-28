@@ -2555,6 +2555,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Use propose_task_list after a goal is confirmed, on the first continuation turn, if the objective naturally decomposes into trackable milestones.",
 			"Do not add a task list for simple, single-step goals.",
+			"If a task list already exists on the goal, only call propose_task_list to restructure it when (a) the user explicitly asks for a change, or (b) the goal objective or requirements have structurally changed. Do not restructure the task list autonomously.",
 			"Existing tasks with matching IDs preserve their status/evidence/timestamps; new IDs start as pending; removed IDs are gone.",
 			"After confirmation the turn stops; the next continuation will arrive automatically.",
 			"You may optionally specify a verificationContract per task to define what verification evidence is required before completing that task.",
@@ -2811,9 +2812,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		label: "Skip Task",
 		description: "Skip a pending task in the current goal's task list. Does NOT stop the turn — the agent can continue working.",
 		promptSnippet: "Skip a task with a reason. Does not stop the turn.",
-		promptGuidelines: [
+promptGuidelines: [
 			"Use skip_task to mark a task as skipped with a required reason.",
 			"The turn does NOT stop after skip_task — you may continue with other work.",
+			"Only skip a task when the user explicitly asks you to, or when the task directly contradicts a hard constraint (e.g. an impossible requirement).",
+			"Do NOT autonomously skip tasks to avoid work, or because they look optional, inconvenient, or out of scope. When in doubt, ask the user first.",
+			"If skip_task is called on an already-skipped task, it toggles back to pending (unskip).",
 		],
 		parameters: Type.Object({
 			taskId: Type.String({ description: "Task id to skip" }),
@@ -2837,8 +2841,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 			if (!state.goal?.taskList) throw new Error("Task list disappeared during task skip.");
 			const now = nowIso();
+			const wasAlreadySkipped = findTaskInTree(state.goal.taskList.tasks, params.taskId)?.status === "skipped";
+
 			const updatedTasks = updateTaskInTree(state.goal.taskList.tasks, params.taskId, (t) => {
-				// Cascade skip to all subtasks (full subtasks only)
+				if (t.status === "skipped") {
+					// Toggle back to pending — clear skip state, do NOT cascade to subtasks
+					const { skippedAt, skipReason, ...rest } = t;
+					return { ...rest, status: "pending" as const };
+				}
+				// First-time skip: cascade to all subtasks (full subtasks only)
 				const base = { ...t, status: "skipped" as const, skippedAt: now, skipReason: params.reason.trim() };
 				if (t.subtasks && t.subtasks.length > 0 && !t.lightweightSubtasks) {
 					return skipAllSubtasks(base, now, params.reason.trim());
@@ -2856,22 +2867,33 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			syncGoalTools();
 			updateUI(ctx);
 
-			// Append ledger event
+// Append ledger event
 			try {
-				appendGoalEvent(ctx, {
-					type: "task_skipped",
-					goalId: state.goal.id,
-					taskId: params.taskId,
-					reason: params.reason.trim(),
-					at: now,
-				});
+				if (wasAlreadySkipped) {
+					appendGoalEvent(ctx, {
+						type: "task_skipped",
+						goalId: state.goal.id,
+						taskId: params.taskId,
+	reason: "unskipped (toggle via skip_task)",
+						at: now,
+					});
+				} else {
+					appendGoalEvent(ctx, {
+						type: "task_skipped",
+						goalId: state.goal.id,
+						taskId: params.taskId,
+						reason: params.reason.trim(),
+						at: now,
+					});
+				}
 			} catch {
 				// Ledger failure should not block task skip
 			}
 
 			const taskSummary = buildTaskSummary(state.goal.taskList!);
+			const action = wasAlreadySkipped ? "unsikpped" : "skipped";
 			return {
-				content: [{ type: "text", text: `${params.taskId} skipped. ${taskSummary}.` }],
+				content: [{ type: "text", text: `${params.taskId} ${action}. ${taskSummary}.` }],
 				details: goalDetails(state.goal),
 			};
 		},

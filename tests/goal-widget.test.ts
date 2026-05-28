@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { renderGoalWidgetLines, renderAuditorWidgetLines, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
+import { renderGoalWidgetLines, renderAuditorWidgetLines, GoalWidgetComponent, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
+import { createMockTUI, createMockTheme } from "./tui-test-utils.ts";
 
 const theme = {
 	fg: (_color: string, value: string) => value,
@@ -321,4 +322,126 @@ test("renderGoalWidgetLines suppresses task info when disableTasks is true with 
 	const body = lines.slice(1).join(" ");
 	assert.equal(body.includes("tasks"), false);
 	assert.equal(body.includes("t1a"), false);
+});
+
+// ── TUI rendering path: GoalWidgetComponent ───────────────────────────
+
+test("GoalWidgetComponent renders through mock TUI path", () => {
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+
+	const lines = component.render(100);
+	assert.ok(lines.length > 0, "Component renders lines");
+	assert.match(lines[0], /◆ Sisyphus running/);
+	assert.match(lines[1], /├─ ⟡ Componentize the goal widget/);
+});
+
+test("GoalWidgetComponent shows open goal count when > 1", () => {
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 3,
+		getSettings: () => ({}),
+	});
+
+	const lines = component.render(100);
+	const text = lines.join("\n");
+assert.match(text, /\+2 open/);
+});
+
+test("GoalWidgetComponent update triggers requestRender", () => {
+	const { tui, state } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+
+	const before = state.requestRenderCalls;
+	component.update();
+	assert.ok(state.requestRenderCalls > before, "update() triggers requestRender");
+});
+
+test("GoalWidgetComponent invalidate triggers requestRender", () => {
+	const { tui, state } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+
+	const before = state.requestRenderCalls;
+	component.invalidate();
+	assert.ok(state.requestRenderCalls > before, "invalidate() triggers requestRender");
+});
+
+test("GoalWidgetComponent renders auditor progress when present", () => {
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getAuditorProgress: () => ({
+			currentTool: "read",
+			currentToolArgs: '{"path":"test.txt"}',
+			currentToolStartedAt: Date.now() - 5000,
+			recentOutput: ["checking..."],
+			phase: "tool_executing",
+			elapsedMs: 5000,
+		}),
+		getSettings: () => ({}),
+	});
+
+	const lines = component.render(100);
+	const text = lines.join("\n");
+	assert.match(text, /read/);
+	assert.match(text, /test\.txt/);
+});
+
+test("GoalWidgetComponent renders with disableTasks setting", () => {
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+getGoal: () => goal({
+			taskList: {
+				tasks: [{ id: "t1", title: "Task 1", status: "pending" }],
+				blockCompletion: false,
+				proposedAt: "2026-01-01T00:00:00.000Z",
+			},
+		}),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({ disableTasks: true }),
+	});
+
+	const lines = component.render(100);
+	const text = lines.join("\n");
+	assert.equal(text.includes("tasks"), false, "Tasks hidden when disableTasks is true");
+});
+
+test("GoalWidgetComponent shows completed goal status", () => {
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal({ status: "complete", archivedPath: ".pi/goals/archived/g.md", sisyphus: false }),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+
+	const lines = component.render(100);
+	assert.match(lines[0], /Goal complete/);
 });

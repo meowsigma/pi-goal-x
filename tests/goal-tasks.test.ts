@@ -218,11 +218,10 @@ test("validateTaskSkip: already complete", () => {
 	assert.match(result.message, /already complete/);
 });
 
-test("validateTaskSkip: already skipped", () => {
+test("validateTaskSkip: already skipped passes validation (toggle handled by executor)", () => {
 	const goal = makeGoal([{ id: "t1", title: "T1", status: "skipped" }]);
 	const result = validateTaskSkip({ goal, taskId: "t1", reason: "irrelevant" });
-	assert.equal(result.ok, false);
-	assert.match(result.message, /already skipped/);
+	assert.equal(result.ok, true, "Skipped tasks pass validation; executor handles the toggle");
 });
 
 test("validateTaskSkip: empty reason", () => {

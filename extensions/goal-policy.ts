@@ -202,7 +202,8 @@ export function validateTaskSkip(args: {
 	const task = args.goal.taskList.tasks.find((t) => t.id === args.taskId);
 	if (!task) return { ok: false, message: `Task "${args.taskId}" not found.` };
 	if (task.status === "complete") return { ok: false, message: `Task "${args.taskId}" is already complete.` };
-	if (task.status === "skipped") return { ok: false, message: `Task "${args.taskId}" was already skipped.` };
+	// Skipped tasks toggle via the executor; reason is only required for first-time skips.
+	if (task.status === "skipped") return { ok: true };
 	if (!args.reason.trim()) return { ok: false, message: "skip_task requires a non-empty reason." };
 	return { ok: true };
 }

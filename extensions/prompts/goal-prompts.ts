@@ -130,9 +130,11 @@ ${untrustedObjectiveBlock(goal)}
 
 Available work tools for pursuing the active goal include write, read, bash, and edit. Use those tools directly for file and shell work; do not call get_goal repeatedly to discover tools.
 
-If the objective naturally decomposes into trackable milestones, you may call propose_task_list to set up structured tasks. Do not add a task list for simple, single-step goals.
+After goal confirmation, you may call propose_task_list once to set up an initial task list if the objective decomposes into trackable milestones. If a task list already exists, only restructure it when the user asks or the goal structurally changes — do not restructure autonomously. Do not add a task list for simple, single-step goals.
 
 To ask the user a structured question (e.g. when the user's spec changes and you need to clarify before updating the goal), use goal_question. It opens a question dialog and returns the user's answer as tool output. Use plain conversation for simple clarifications.
+
+Task skipping restrictions: Only skip a task when the user explicitly asks you to, or when the task directly contradicts a hard constraint (e.g. an impossible requirement). Do NOT autonomously skip tasks to avoid work, or because they look optional, inconvenient, or out of scope. When in doubt, ask the user first. Calling skip_task on an already-skipped task toggles it back to pending (unskip).
 
 Keep this goal in force until it is actually achieved. Do not pause for confirmation just because a phase, chapter, file, or checklist item is finished. At each natural stopping point, compare every explicit requirement with concrete evidence from the workspace/session. If the objective is complete, call complete_goal with status=complete and provide a verificationSummary; complete_goal will launch an independent pi auditor agent and only archive if that auditor returns <approved/>. If it is not complete, choose the next concrete action and do it.
 
@@ -168,7 +170,9 @@ export function continuationPrompt(goal: GoalRecord, settings?: GoalSettings): s
 		"",
 		"Available work tools for pursuing the active goal include write, read, bash, and edit. Use those tools directly for file and shell work; do not call get_goal repeatedly to discover tools.",
 		"",
-		"To ask the user a structured question (e.g. when the user's spec changes and you need to clarify before updating the goal), use goal_question. It opens a question dialog and returns the user's answer as tool output. Use plain conversation for simple clarifications.",
+"To ask the user a structured question (e.g. when the user's spec changes and you need to clarify before updating the goal), use goal_question. It opens a question dialog and returns the user's answer as tool output. Use plain conversation for simple clarifications.",
+		"",
+		"Task skipping restrictions: Only skip a task when the user explicitly asks you to, or when the task directly contradicts a hard constraint (e.g. an impossible requirement). Do NOT autonomously skip tasks to avoid work, or because they look optional, inconvenient, or out of scope. When in doubt, ask the user first. Calling skip_task on an already-skipped task toggles it back to pending (unskip).",
 		"",
 		"Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
 		"",

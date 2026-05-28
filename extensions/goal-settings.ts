@@ -34,13 +34,19 @@ function asBool(value: unknown): boolean | undefined {
 	return undefined;
 }
 
+const ALLOWED_SETTINGS_KEYS = new Set(["disableTasks", "disableContracts"]);
+
 /**
  * Parse raw (deserialized JSON) into a GoalSettings object.
- * Unknown keys are silently ignored (default false).
+ * Rejects unknown keys (additionalProperties: false semantics).
  */
 export function parseGoalSettings(raw: unknown): GoalSettings {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
 	const record = raw as Record<string, unknown>;
+	const unknownKeys = Object.keys(record).filter((k) => !ALLOWED_SETTINGS_KEYS.has(k));
+	if (unknownKeys.length > 0) {
+		throw new Error(`Unknown goal-settings.json key(s): ${unknownKeys.join(", ")}`);
+	}
 	const settings: GoalSettings = {};
 	const disableTasks = asBool(record.disableTasks);
 	const disableContracts = asBool(record.disableContracts);

@@ -90,7 +90,7 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	const taskBlock = taskListBlock(goal, settings);
 	const taskInjection = taskBlock ? `\n${taskBlock}` : "";
-	const contractBlock = verificationContractBlock(goal);
+	const contractBlock = verificationContractBlock(goal, settings);
 	const contractInjection = contractBlock ? `\n${contractBlock}` : "";
 	return `[PI GOAL ACTIVE goalId=${goal.id}]${taskInjection}${contractInjection}
 Status: ${statusLabel(goal)}

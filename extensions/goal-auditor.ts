@@ -182,7 +182,7 @@ export function buildGoalAuditorPrompt(args: {
 		"Current goal metadata:",
 		"<goal_details>",
 		args.detailedSummary,
-		...(taskSummaryBlock(args.goal.taskList) ? ["", taskSummaryBlock(args.goal.taskList)] : []),
+		...(!args.settings?.disableTasks && taskSummaryBlock(args.goal.taskList) ? ["", taskSummaryBlock(args.goal.taskList)] : []),
 		"</goal_details>",
 		...(args.verificationSummary?.trim() ? [
 			"",

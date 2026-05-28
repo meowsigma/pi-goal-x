@@ -2515,7 +2515,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				title: Type.String({ description: "Human-readable task title" }),
 				verificationContract: Type.Optional(Type.String({ description: "Optional verification contract for this task — what evidence is required before marking it complete." })),
 				lightweightSubtasks: Type.Optional(Type.Boolean({ description: "If true, subtasks are lightweight (no completion enforcement). Default false (full subtasks)." })),
-				subtasks: Type.Optional(Type.Any({ description: "Optional recursive array of sub-tasks (same shape as parent). Nested up to subtaskDepth (default 1, from .pi/goal-settings.json)." })),
+				subtasks: Type.Optional(Type.Any({ description: "Optional recursive array of sub-tasks (same shape as parent). Nested up to subtaskDepth (default 1, from settings)." })),
 			}), { description: "Array of task objects with id, title, optional subtasks" }),
 			blockCompletion: Type.Optional(Type.Boolean({ description: "If true, warns when pending tasks remain during complete_goal. Default false." })),
 			changeSummary: Type.Optional(Type.String({ description: "Optional summary of the task list proposal" })),
@@ -2532,7 +2532,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// Reject if task lists are disabled via settings
 			if (loadGoalSettings(ctx.cwd).disableTasks) {
 				return {
-					content: [{ type: "text", text: "propose_task_list is disabled by .pi/goal-settings.json (disableTasks: true)." }],
+					content: [{ type: "text", text: "propose_task_list is disabled by settings (disableTasks: true)." }],
 					details: goalDetails(state.goal),
 				};
 			}
@@ -2669,7 +2669,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			reconcileFocusedGoalFromDisk(ctx);
 			if (loadGoalSettings(ctx.cwd).disableTasks) {
 				return {
-					content: [{ type: "text", text: "complete_task is disabled by .pi/goal-settings.json (disableTasks: true)." }],
+					content: [{ type: "text", text: "complete_task is disabled by settings (disableTasks: true)." }],
 					details: goalDetails(state.goal),
 				};
 			}
@@ -2774,7 +2774,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			reconcileFocusedGoalFromDisk(ctx);
 			if (loadGoalSettings(ctx.cwd).disableTasks) {
 				return {
-					content: [{ type: "text", text: "skip_task is disabled by .pi/goal-settings.json (disableTasks: true)." }],
+					content: [{ type: "text", text: "skip_task is disabled by settings (disableTasks: true)." }],
 					details: goalDetails(state.goal),
 				};
 			}

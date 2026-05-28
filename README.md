@@ -28,7 +28,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 ### Task list & sub-task system
 
 - **Structured task breakdown** — the agent can propose a task list via `propose_task_list` (standalone) or `propose_goal_draft` with `tasks` (unified). Both show a Confirm / Continue Chatting dialog. Once confirmed, tasks are displayed in prompts, the widget, serialized to disk, and included in auditor review.
-- **Recursive subtasks** — tasks can have nested sub-tasks via `subtasks?: GoalTask[]` (full recursive type). Subtask depth is controlled globally by `subtaskDepth` in `.pi/goal-settings.json` (default: 1 level). Too-deep subtrees are rejected at proposal.
+- **Recursive subtasks** — tasks can have nested sub-tasks via `subtasks?: GoalTask[]` (full recursive type). Subtask depth is controlled globally by `subtaskDepth` in `.pi/pi-goal-x-settings.json` (default: 1 level). Too-deep subtrees are rejected at proposal.
 - **Lightweight subtasks** — each task has an optional `lightweightSubtasks?: boolean` flag. When true, the parent can complete regardless of subtask status. When false/absent (full subtasks), all subtasks must be individually complete before the parent can close.
 - **Per-task completion** — `complete_task` marks individual tasks done with optional evidence/verificationSummary, and `skip_task` marks tasks as skipped with a required reason. Neither stops the turn, so the agent can continue uninterrupted.
 - **Hierarchical display** — task lists with subtasks render with indentation in prompts (`taskListBlock`, `goalPrompt`, `continuationPrompt`) and in the TUI widget (recursive count, BFS next-pending).

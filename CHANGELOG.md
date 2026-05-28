@@ -8,6 +8,23 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.13.0] — 2026-05-28
+
+### Added
+
+- **Verification contract system** — goals and individual tasks can now define a `Verification contract:` section specifying what verification evidence is required before completion, enforced at both the prompt and tool level. Key properties:
+  - **`Verification contract:` section** — when drafting a goal (via `propose_goal_draft` or `/goals-set`/`/sisyphus-set`), include a `Verification contract: <description>` section in the objective. The contract is extracted, stored on the goal record, and stripped from the visible objective text.
+  - **`complete_goal` `verificationSummary`** — the old optional `testResults` parameter is replaced with a required `verificationSummary` (plain text). If the goal has a contract, the call is rejected unless `verificationSummary` is non-empty.
+  - **Per-task contracts** — `propose_task_list` supports an optional `verificationContract` per task. `complete_task` gains an optional `verificationSummary` parameter; if the task has a contract, the summary is required.
+  - **Prompt hardening** — `goalPrompt` and `continuationPrompt` include a VERIFICATION CONTRACT section instructing the agent to provide evidence against every contract item before calling `complete_goal`/`complete_task`.
+  - **Auditor integration** — the auditor receives both the `verificationContract` and `verificationSummary` and cross-checks the agent's claims against real artifacts.
+  - **Backward compatible** — goals/tasks without a `Verification contract:` section work exactly as before.
+
+### Changed
+
+- **`complete_goal` `testResults` removed** — fully replaced by `verificationSummary`. The deprecated `AuditorTestResults` interface is deleted; `AuditorVerificationEvidence` is the only interface used.
+- **`buildGoalAuditorPrompt`** — now accepts `verificationSummary` instead of `testResults`; renders `<verification_summary>` and `<verification_contract>` blocks instead of `<test_evidence>`.
+
 ## [0.12.0] — 2026-05-27
 
 ### Added
@@ -349,6 +366,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.13.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.13.0
 [0.12.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.12.0
 [0.11.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.11.0
 [0.10.2]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.10.2

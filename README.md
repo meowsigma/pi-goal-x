@@ -10,6 +10,15 @@ The extension is designed around one rule: **the user owns intent; the agent exe
 
 All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are preserved. The following changes are specific to pi-goal-x:
 
+### Verification contract system
+
+- **Per-goal verification contracts** — when drafting a goal, include a `Verification contract:` section with plain-text requirements (e.g. "Run npm test (0 failures), grep for remaining STP references"). The contract is extracted, stored on the goal record, and enforced by the `complete_goal` tool — the call is rejected unless the agent provides a non-empty `verificationSummary` matching the contract.
+- **Per-task verification contracts** — `propose_task_list` supports an optional `verificationContract` per task. If set, `complete_task` requires a non-empty `verificationSummary`.
+- **Both prompt and tool enforcement** — prompts include a VERIFICATION CONTRACT section instructing the agent; tool validators reject calls that violate the contract.
+- **Backward compatible** — goals/tasks without a `Verification contract:` section work exactly as before. No contract = no enforcement.
+- **Auditor integration** — the independent completion auditor receives both the `verificationContract` and `verificationSummary` and cross-checks claims against real artifacts.
+- **`complete_goal` `testResults` removed** — replaced with `verificationSummary`. The old structured test results interface is gone.
+
 ### Task list system
 
 - **Structured task breakdown** — the agent can propose a task list via `propose_task_list`, which shows the user a Confirm / Continue Chatting dialog (mirrors the `propose_goal_draft` pattern). Once confirmed, tasks are displayed in prompts, the widget, serialized to disk, and included in auditor review.
@@ -30,7 +39,7 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 ### E2e test infrastructure
 
 - **Deterministic fork tests using `--mode json`**: the e2e suite spawns a real `pi --fork --mode json` session, parses structured `tool_execution_start`/`tool_execution_end` JSON events for field-level assertions — no free-text AI output parsing. Uses `--append-system-prompt` + `--tools` to force deterministic tool calls.
-- **Full coverage**: 193 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), real `pi --fork --mode json` tests (3 scenarios), propose_goal_tweak unit/integration/e2e tests (15), and task list policy/round-trip/render tests (50+).
+- **Full coverage**: 205 tests total — function-level integration tests (12), mock-pi handler tests (4), file-validity checks (6), real `pi --fork --mode json` tests (3 scenarios), propose_goal_tweak unit/integration/e2e tests (15), task list policy/round-trip/render tests (50+), and verification contract tests (14).
 
 ### Completion auditor
 
@@ -165,11 +174,11 @@ The extension exposes tools only when they make sense for the current lifecycle 
 | `get_goal` | always | Read the focused goal state; mentions other open goals when present |
 | `propose_goal_draft` | drafting only (goal creation) | Submit a concrete draft for user confirmation |
 | `propose_goal_tweak` | tweak drafting only | Submit a revision to an existing goal (shows Confirm / Continue Chatting dialog) |
-| `complete_goal` | focused active or paused goal | Mark the focused goal complete — only when every requirement is satisfied. When the auditor is disabled, supply `confirmBypassAuditor: true` after user confirmation to bypass the audit |
+| `complete_goal` | focused active or paused goal | Mark the focused goal complete — supply a `verificationSummary` covering all contract items. When the auditor is disabled, supply `confirmBypassAuditor: true` after user confirmation to bypass the audit |
 | `pause_goal` | focused active goal | Pause the focused goal because of a real blocker |
 | `abort_goal` | focused active or paused goal | Abort/archive an obsolete, impossible, unsafe, or user-cancelled focused goal |
 | `propose_task_list` | active or paused goal | Propose a structured task list for user confirmation (stops the turn) |
-| `complete_task` | active or paused goal | Mark a task complete with optional evidence (does not stop turn) |
+| `complete_task` | active or paused goal | Mark a task complete with optional `verificationSummary`. If the task has a `verificationContract`, the summary is required (does not stop turn) |
 | `skip_task` | active or paused goal | Mark a task skipped with a required reason (does not stop turn) |
 | `propose_goal_tweak` | tweak drafting only | Submit a revision to the focused goal (shows Confirm / Continue Chatting dialog) |
 | `step_complete` | hidden / legacy | Compatibility no-op; Sisyphus no longer requires a step counter |

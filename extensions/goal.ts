@@ -23,6 +23,7 @@ import {
 	saveGoalAuditorFileConfig,
 	type GoalAuditorConfig,
 } from "./goal-auditor.ts";
+import { loadGoalSettings, type GoalSettings } from "./goal-settings.ts";
 import {
 	proposalDialogFailureMessage,
 	registerQuestionnaireTools,
@@ -785,6 +786,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 							getGoal: () => goalForDisplay() ?? state.goal,
 							getOpenGoalCount: () => openGoals().length,
 							getAuditorProgress: () => auditProgress,
+							getSettings: () => loadGoalSettings(ctx.cwd),
 						});
 						return goalWidgetComponent;
 					},
@@ -812,6 +814,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						getGoal: () => goalForDisplay() ?? state.goal,
 						getOpenGoalCount: () => openGoals().length,
 						getAuditorProgress: () => auditProgress,
+						getSettings: () => loadGoalSettings(ctx.cwd),
 					});
 					return goalWidgetComponent;
 				},
@@ -977,10 +980,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		continuationQueuedFor = goalId;
+		const settings = loadGoalSettings(ctx.cwd);
 		pi.sendMessage<GoalEventDetails>(
 			{
 				customType: GOAL_EVENT_ENTRY,
-				content: continuationPrompt(state.goal),
+				content: continuationPrompt(state.goal, settings),
 				display: false,
 				details: {
 					kind: "checkpoint",
@@ -1902,25 +1906,30 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (!state.goal) throw new Error("Goal disappeared during completion validation.");
 
 			// Task gate: warn if blockCompletion is enabled and tasks remain pending
-			const taskWarning = state.goal.taskList ? taskCompletionBlockWarning(state.goal.taskList) : null;
-			const taskSummaryText = state.goal.taskList ? buildTaskSummary(state.goal.taskList) : null;
-			if (taskWarning) {
-				return {
-					content: [{ type: "text", text: taskWarning }],
-					details: goalDetails(state.goal),
-				};
+			const disableTasksSettings = loadGoalSettings(ctx.cwd).disableTasks;
+			if (!disableTasksSettings) {
+				const taskWarning = state.goal.taskList ? taskCompletionBlockWarning(state.goal.taskList) : null;
+				if (taskWarning) {
+					return {
+						content: [{ type: "text", text: taskWarning }],
+						details: goalDetails(state.goal),
+					};
+				}
 			}
 
 			// Verification contract gate: if the goal has a contract, verificationSummary must be non-empty
-			const contractGate = validateVerificationSummary({
-				verificationContract: state.goal.verificationContract,
-				verificationSummary: params.verificationSummary,
-			});
-			if (!contractGate.ok) {
-				return {
-					content: [{ type: "text", text: contractGate.message }],
-					details: goalDetails(state.goal),
-				};
+			const disableContractsSettings = loadGoalSettings(ctx.cwd).disableContracts;
+			if (!disableContractsSettings) {
+				const contractGate = validateVerificationSummary({
+					verificationContract: state.goal.verificationContract,
+					verificationSummary: params.verificationSummary,
+				});
+				if (!contractGate.ok) {
+					return {
+						content: [{ type: "text", text: contractGate.message }],
+						details: goalDetails(state.goal),
+					};
+				}
 			}
 
 			const auditTarget = mergeGoalPromptFromDisk(ctx, state.goal);
@@ -2061,6 +2070,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				completionSummary: params.completionSummary,
 				detailedSummary: detailedSummary(auditTarget),
 				verificationSummary: params.verificationSummary,
+				settings: loadGoalSettings(ctx.cwd),
 				signal: auditAbortController.signal,
 				onProgress: (progress) => {
 					auditProgress = {
@@ -2410,6 +2420,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					details: goalDetails(state.goal),
 				};
 			}
+			// Reject if task lists are disabled via settings
+			if (loadGoalSettings(ctx.cwd).disableTasks) {
+				return {
+					content: [{ type: "text", text: "propose_task_list is disabled by .pi/goal-settings.json (disableTasks: true)." }],
+					details: goalDetails(state.goal),
+				};
+			}
 			const gate = validateTaskListProposal({ goal: state.goal, tasks: params.tasks });
 			if (!gate.ok) {
 				return {
@@ -2524,6 +2541,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			reconcileFocusedGoalFromDisk(ctx);
+			if (loadGoalSettings(ctx.cwd).disableTasks) {
+				return {
+					content: [{ type: "text", text: "complete_task is disabled by .pi/goal-settings.json (disableTasks: true)." }],
+					details: goalDetails(state.goal),
+				};
+			}
 			const gate = validateTaskCompletion({ goal: state.goal, taskId: params.taskId });
 			if (!gate.ok) {
 				return {
@@ -2533,17 +2556,19 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 			if (!state.goal?.taskList) throw new Error("Task list disappeared during task completion.");
 
-			// Check verification contract for the task
+			// Check verification contract for the task (skip if contracts disabled)
 			const taskToComplete = state.goal.taskList.tasks.find((t) => t.id === params.taskId);
-			const contractGate = validateVerificationSummary({
-				verificationContract: taskToComplete?.verificationContract,
-				verificationSummary: params.verificationSummary,
-			});
-			if (!contractGate.ok) {
-				return {
-					content: [{ type: "text", text: contractGate.message }],
-					details: goalDetails(state.goal),
-				};
+			if (!loadGoalSettings(ctx.cwd).disableContracts) {
+				const contractGate = validateVerificationSummary({
+					verificationContract: taskToComplete?.verificationContract,
+					verificationSummary: params.verificationSummary,
+				});
+				if (!contractGate.ok) {
+					return {
+						content: [{ type: "text", text: contractGate.message }],
+						details: goalDetails(state.goal),
+					};
+				}
 			}
 			const now = nowIso();
 			const evidence = params.evidence?.trim().slice(0, 200) || undefined;
@@ -2606,6 +2631,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			reconcileFocusedGoalFromDisk(ctx);
+			if (loadGoalSettings(ctx.cwd).disableTasks) {
+				return {
+					content: [{ type: "text", text: "skip_task is disabled by .pi/goal-settings.json (disableTasks: true)." }],
+					details: goalDetails(state.goal),
+				};
+			}
 			const gate = validateTaskSkip({ goal: state.goal, taskId: params.taskId, reason: params.reason });
 			if (!gate.ok) {
 				return {
@@ -2921,7 +2952,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			};
 		}
 		const activeGoal = state.goal;
-		let prompt = goalPrompt(activeGoal);
+		const settings = loadGoalSettings(ctx.cwd);
+		let prompt = goalPrompt(activeGoal, settings);
 		// Inject durable auditor feedback if the latest result was a rejection
 		try {
 			const ledger = readGoalLedger(ctx);

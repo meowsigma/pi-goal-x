@@ -4,6 +4,7 @@ import {
 } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-draft.ts";
 import type { GoalRecord, TaskStatus } from "../goal-record.ts";
+import type { GoalSettings } from "../goal-settings.ts";
 
 function taskMarker(status: TaskStatus): string {
 	if (status === "complete") return "[x]";
@@ -11,7 +12,8 @@ function taskMarker(status: TaskStatus): string {
 	return "[ ]";
 }
 
-export function taskListBlock(goal: GoalRecord): string {
+export function taskListBlock(goal: GoalRecord, settings?: GoalSettings): string {
+	if (settings?.disableTasks) return "";
 	if (!goal.taskList || goal.taskList.tasks.length === 0) return "";
 	const total = goal.taskList.tasks.length;
 	const complete = goal.taskList.tasks.filter((t) => t.status === "complete").length;
@@ -41,7 +43,8 @@ export function taskListBlock(goal: GoalRecord): string {
  * Render a VERIFICATION CONTRACT section for the agent's prompts.
  * This is shown when the goal has a verificationContract defined.
  */
-export function verificationContractBlock(goal: GoalRecord): string {
+export function verificationContractBlock(goal: GoalRecord, settings?: GoalSettings): string {
+	if (settings?.disableContracts) return "";
 	if (!goal.verificationContract?.trim()) return "";
 	return [
 		"",
@@ -84,8 +87,8 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 	].join("\n");
 }
 
-export function goalPrompt(goal: GoalRecord): string {
-	const taskBlock = taskListBlock(goal);
+export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
+	const taskBlock = taskListBlock(goal, settings);
 	const taskInjection = taskBlock ? `\n${taskBlock}` : "";
 	const contractBlock = verificationContractBlock(goal);
 	const contractInjection = contractBlock ? `\n${contractBlock}` : "";
@@ -117,9 +120,9 @@ Do NOT silently invent workarounds, fake completion, or quietly redefine the obj
 Goal evolution: if the user gives requirements, feedback, or corrections that differ from the goal objective, the goal is stale. The goal objective is immutable — the agent must NOT modify it autonomously. Propose the updated objective concisely and ask the user to run /goal-tweak to revise it. Do NOT mark the goal complete with a stale objective.${sisyphusDisciplineBlock(goal) ? `\n${sisyphusDisciplineBlock(goal)}` : ""}`;
 }
 
-export function continuationPrompt(goal: GoalRecord): string {
-	const taskBlock = taskListBlock(goal);
-	const contractBlock = verificationContractBlock(goal);
+export function continuationPrompt(goal: GoalRecord, settings?: GoalSettings): string {
+	const taskBlock = taskListBlock(goal, settings);
+	const contractBlock = verificationContractBlock(goal, settings);
 	return [
 		// Phase 5 C1: structured outer marker (pi-codex-goal pattern).
 		`<pi_goal_continuation goal_id="${goal.id}" kind="checkpoint">`,

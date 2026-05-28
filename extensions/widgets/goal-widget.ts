@@ -9,6 +9,7 @@ import {
 	type GoalDisplayRecordLike,
 } from "../goal-core.ts";
 import type { GoalTaskList, TaskStatus } from "../goal-record.ts";
+import type { GoalSettings } from "../goal-settings.ts";
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
 
@@ -39,6 +40,7 @@ export interface GoalWidgetOptions {
 	getGoal: () => GoalWidgetRecord | null;
 	getOpenGoalCount?: () => number;
 	getAuditorProgress?: () => AuditorWidgetProgress | null;
+	getSettings?: () => GoalSettings;
 }
 
 function fit(value: string, width: number): string {
@@ -75,12 +77,12 @@ function displayIcon(goal: GoalWidgetRecord): { icon: string; color: GoalWidgetC
 	return goal.autoContinue ? { icon: "●", color: "accent", label: "goal running" } : { icon: "○", color: "muted", label: "goal idle" };
 }
 
-function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0): string {
+function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0, disableTasks = false): string {
 	const bits: string[] = [];
 	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
 	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
-	if (goal.taskList && goal.taskList.tasks.length > 0) {
+	if (!disableTasks && goal.taskList && goal.taskList.tasks.length > 0) {
 		const total = goal.taskList.tasks.length;
 		const done = goal.taskList.tasks.filter((t) => t.status === "complete" || t.status === "skipped").length;
 		bits.push(`${done}/${total} tasks`);
@@ -190,7 +192,7 @@ export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme:
 	return lines;
 }
 
-export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null } = {}): string[] {
+export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean } = {}): string[] {
 	// When auditor progress is active, show auditor display instead of normal goal widget
 	if (options.auditorProgress) {
 		return renderAuditorWidgetLines(options.auditorProgress, theme, width);
@@ -209,7 +211,7 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const mode = goal.sisyphus ? "Sisyphus" : "Goal";
 	const headingLeft = `${theme.fg(color, icon)} ${theme.fg(color, theme.bold(mode))} ${theme.fg("muted", label.replace(/^sisyphus |^goal /, ""))}`;
 	const otherOpenGoalCount = Math.max(0, (options.openGoalCount ?? (goal ? 1 : 0)) - 1);
-	const headingRight = theme.fg("muted", headingMeta(goal, otherOpenGoalCount));
+	const headingRight = theme.fg("muted", headingMeta(goal, otherOpenGoalCount, options.disableTasks));
 	const lines: string[] = [heading(theme, safeWidth, headingLeft, headingRight)];
 	const body: string[] = [];
 
@@ -217,7 +219,7 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const objective = truncateText(displayObjectiveTitle(goal.objective), titleWidth);
 	body.push(`${theme.fg("accent", "⟡")} ${theme.fg("text", objective)}`);
 
-	if (goal.taskList && goal.taskList.tasks.length > 0) {
+	if (!options.disableTasks && goal.taskList && goal.taskList.tasks.length > 0) {
 		const total = goal.taskList.tasks.length;
 		const done = goal.taskList.tasks.filter((t) => t.status === "complete" || t.status === "skipped").length;
 		const pending = goal.taskList.tasks.filter((t) => t.status === "pending");
@@ -254,12 +256,15 @@ export class GoalWidgetComponent implements Component {
 	private getOpenGoalCount: () => number;
 	private getAuditorProgress: () => AuditorWidgetProgress | null;
 
+	private getSettings: () => GoalSettings;
+
 	constructor(options: GoalWidgetOptions) {
 		this.theme = options.theme;
 		this.tui = options.tui;
 		this.getGoal = options.getGoal;
 		this.getOpenGoalCount = options.getOpenGoalCount ?? (() => (this.getGoal() ? 1 : 0));
 		this.getAuditorProgress = options.getAuditorProgress ?? (() => null);
+		this.getSettings = options.getSettings ?? (() => ({}));
 	}
 
 	update(): void {
@@ -267,9 +272,11 @@ export class GoalWidgetComponent implements Component {
 	}
 
 	render(width: number): string[] {
+		const settings = this.getSettings();
 		return renderGoalWidgetLines(this.getGoal(), this.theme, width, {
 			openGoalCount: this.getOpenGoalCount(),
 			auditorProgress: this.getAuditorProgress(),
+			disableTasks: settings.disableTasks,
 		});
 	}
 

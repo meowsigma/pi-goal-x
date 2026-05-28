@@ -14,6 +14,7 @@ import {
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTaskList } from "./goal-record.ts";
+import type { GoalSettings } from "./goal-settings.ts";
 
 export interface GoalAuditorConfig {
 	provider?: string;
@@ -155,6 +156,7 @@ export function buildGoalAuditorPrompt(args: {
 	completionSummary?: string | null;
 	detailedSummary: string;
 	verificationSummary?: string | null;
+	settings?: GoalSettings;
 }): string {
 	return [
 		"You are the independent completion auditor for pi-goal.",
@@ -189,7 +191,7 @@ export function buildGoalAuditorPrompt(args: {
 			args.verificationSummary.trim(),
 			"</verification_summary>",
 		] : []),
-		...(args.goal.verificationContract?.trim() ? [
+		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim() ? [
 			"",
 			"Goal verification contract (what the executor was required to verify):",
 			"<verification_contract>",
@@ -204,7 +206,7 @@ export function buildGoalAuditorPrompt(args: {
 			...(args.verificationSummary?.trim()
 				? ["3. Check the <verification_summary> against real artifacts. If the executor claims to have run tests or searched for references, verify those claims with actual file/shell evidence. The summary is a claim, not proof — cross-check it."]
 				: []),
-			...(args.goal.verificationContract?.trim()
+			...(!args.settings?.disableContracts && args.goal.verificationContract?.trim()
 				? ["4. Verify that the executor has satisfied every item in the <verification_contract>. If any item is missing or weakly addressed, disapprove."]
 				: []),
 			"5. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
@@ -288,6 +290,7 @@ export async function runGoalCompletionAuditor(args: {
 	completionSummary?: string | null;
 	detailedSummary: string;
 	verificationSummary?: string | null;
+	settings?: GoalSettings;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
 	/**

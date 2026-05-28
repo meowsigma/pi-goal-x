@@ -8,6 +8,14 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.15.1] — 2026-05-28
+
+### Fixed
+
+- **Error messages referencing old file** — four user-facing messages in goal.ts no longer mention `.pi/goal-settings.json` (now say "settings").
+- **README stale reference** — feature bullet now points at `.pi/pi-goal-x-settings.json`.
+- **Cleaned up orphaned file** — removed stale `.pi/goal-auditor.json` from disk.
+
 ## [0.15.0] — 2026-05-28
 
 ### Changed
@@ -393,6 +401,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.15.1]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.15.1
 [0.15.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.15.0
 [0.14.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.14.0
 [0.13.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.13.0

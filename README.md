@@ -223,17 +223,7 @@ Before archiving the goal, `update_goal` starts a separate pi agent in an isolat
 
 The auditor is semantic, not a paperwork checklist: it should reject scaffold-only, alpha, generated-template, proxy-metric, build-only, or weakly verified completions when the real user outcome is not satisfied.
 
-By default the auditor uses the current/default pi model. Configure it interactively with `/goal-settings` -> `auditor`, then click `provider`, `model`, or `thinking_level` and type the value directly. The settings are saved to `.pi/goal-auditor.json`. You can also edit the file or override it with environment variables:
-
-```json
-{
-  "provider": "fireworks",
-  "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
-  "thinking_level": "high"
-}
-```
-
-Environment variables `PI_GOAL_AUDITOR_PROVIDER`, `PI_GOAL_AUDITOR_MODEL`, and `PI_GOAL_AUDITOR_THINKING_LEVEL` take precedence over `/goal-settings`.
+By default the auditor uses the current/default pi model. Configure it via `.pi/goal-auditor.json`, interactively with `/goal-settings` → `auditor`, or environment variables (see [Settings files](#settings-files)).
 
 The completion result prints a full report into the conversation:
 
@@ -281,9 +271,13 @@ Before commands, tools, and lifecycle hooks act on a focused goal, the runtime r
 
 Goal paths are constrained to `.pi/goals/` and `.pi/goals/archived/`; absolute paths, traversal, NUL bytes, symlinks, and unsafe metadata paths are rejected.
 
-## Goal settings file (`.pi/goal-settings.json`)
+## Settings files
 
-Configured via `/goal-settings` or edited directly:
+Configuration is split across two files under `.pi/`.
+
+### `.pi/goal-settings.json`
+
+Configured interactively via `/goal-settings`, or edited directly:
 
 ```json
 {
@@ -297,9 +291,31 @@ Configured via `/goal-settings` or edited directly:
 |---|---:|---|
 | `disableTasks` | `false` | Suppress task list features entirely when `true` |
 | `disableContracts` | `false` | Suppress verification contract enforcement when `true` |
-| `subtaskDepth` | `1` | Maximum nesting depth for subtasks (`1` = tasks → subtasks, `2` = tasks → subtasks → sub-subtasks, etc.) |
+| `subtaskDepth` | `1` | Maximum nesting depth for subtasks (`1` = tasks → subtasks, `2` = tasks → subtasks → sub-subtasks) |
 
-Environment variables `PI_GOAL_TASKS_DISABLED`, `PI_GOAL_CONTRACTS_DISABLED` take precedence over file settings.
+**Env var overrides:** `PI_GOAL_DISABLE_TASKS=1` and `PI_GOAL_DISABLE_CONTRACTS=1` take precedence over the file. Set to any truthy string to disable.
+
+### `.pi/goal-auditor.json`
+
+Configured interactively via `/goal-settings` → `auditor`, or edited directly:
+
+```json
+{
+  "provider": "fireworks",
+  "model": "accounts/fireworks/models/deepseek-v4-flash",
+  "thinkingLevel": "high",
+  "disabled": false
+}
+```
+
+| Field | Default | Purpose |
+|---|---:|---|
+| `provider` | system default | Provider name for the auditor agent (`anthropic`, `fireworks`, `google`, `groq`, etc.) |
+| `model` | system default | Model name for the auditor agent |
+| `thinkingLevel` | system default | Thinking level: `none`, `low`, `medium`, `high` |
+| `disabled` | `false` | When `true`, skip the completion audit entirely |
+
+**Env var overrides:** `PI_GOAL_AUDITOR_PROVIDER`, `PI_GOAL_AUDITOR_MODEL`, and `PI_GOAL_AUDITOR_THINKING_LEVEL` take precedence over file config. `PI_GOAL_AUDITOR_THINKING` is also accepted as an alias for the thinking level.
 
 ## Environment variables
 

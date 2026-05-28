@@ -8,6 +8,17 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.16.0] — 2026-05-28
+
+### Added
+
+- **TUI Escape dialog during audit** — pressing Escape during a completion audit now shows a TUI confirmation dialog with two options: "Mark complete without audit" (bypasses auditor, marks goal complete immediately, agent receives structured message) and "Continue working" (skips audit, agent resumes). Replaces the old agent-mediated "Use goal_question" pattern.
+- **`showEscapeDialog()` widget** — new `extensions/widgets/goal-escape-dialog.ts` with headless fallback.
+
+### Changed
+
+- **Goal prompt updated** — no longer instructs the agent to handle Escape via goal_question; describes the automatic TUI dialog instead.
+
 ## [0.15.1] — 2026-05-28
 
 ### Fixed
@@ -401,6 +412,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.16.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.16.0
 [0.15.1]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.15.1
 [0.15.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.15.0
 [0.14.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.14.0

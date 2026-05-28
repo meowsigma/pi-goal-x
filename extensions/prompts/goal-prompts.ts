@@ -140,7 +140,7 @@ The completion auditor is independent and semantic, not a paperwork checklist. I
 
 Before marking any sub-item as complete (including ✅ checkmarks in your output), verify thoroughly against the goal's success criteria and any verification contract. Only mark items as done when you have concrete evidence — not intent or partial progress.
 
-If the user presses Escape while the audit is running, the audit is skipped and the goal remains active. Use goal_question to ask the user whether to mark the goal complete anyway, give feedback, or continue working toward the goal.
+If the user presses Escape during a completion audit, a TUI dialog appears with "Mark complete without audit" or "Continue working". You will receive a structured message with the user's choice.
 
 If you hit a real blocker that you cannot resolve with one more reasonable next step (missing credentials, contradictory spec, file/permission you cannot access, dangerous operation pending user approval, or an unclear Sisyphus-style ordered plan), the CORRECT action is to call pause_goal({reason, suggestedAction?}) with a structured, non-empty reason. pause_goal IS the channel for handing control back to the user — do not substitute a conversational "blocked, please help" summary in your final message and skip the tool call. Without pause_goal, the goal stays "active" and the UI cannot show the blocker. After pause_goal returns, you may add one short user-facing summary, but the tool call comes first.
 

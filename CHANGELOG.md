@@ -45,6 +45,20 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 - **Dialog failure fallback** — `showProposalDialog` catches errors in interactive mode and notifies the user; creation fails closed and never auto-creates a goal on dialog failure.
 
+## [0.16.1] — 2026-05-28
+
+### Added
+
+- **Escape-to-skip audit** — pressing Escape during an auditor run now aborts it and completes the goal immediately. The skip is recorded in the ledger with the reason `user_aborted` and auditor model metadata.
+- **Audit progress widget** — the TUI shows a spinner, progress bar, step labels, current tool, and output lines while the auditor runs.
+- **Audit abort detection** — the auditor detects aborts from both exceptions and `session.prompt()` returning after an abort signal, preventing stuck goals or ghost states.
+- **COMPLETED status for Sisyphus** — completed Sisyphus goals now show a `COMPLETED` status label instead of a generic complete indicator.
+- **Multi-session focus isolation** — goal focus data uses `goalFocusDetails` which includes the goal id and reason but not full balance data, preventing cross-session focus leakage.
+
+### Fixed
+
+- Fixed a merge bug where `propose_task_list` could produce a duplicate task list when called during a continuation.
+
 ## [0.16.0] — 2026-05-28
 
 ### Added

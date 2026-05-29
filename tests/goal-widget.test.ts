@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { renderGoalWidgetLines, renderAuditorWidgetLines, GoalWidgetComponent, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
 import { createMockTUI, createMockTheme } from "./tui-test-utils.ts";
 
@@ -447,4 +448,27 @@ test("GoalWidgetComponent shows completed goal status", () => {
 
 	const lines = component.render(100);
 	assert.match(lines[0], /Goal complete/);
+});
+
+test("GoalWidgetComponent safety net truncates any line exceeding width", () => {
+	const { tui } = createMockTUI();
+	// Render at a narrow width with very long content
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal({
+			objective: "x".repeat(500),
+			activePath: "/very/long/path/that/should/definitely/be/truncated/because/it/exceeds/the/available/width/by/a/lot/and/would/cause/a/crash/if/not/truncated".repeat(3),
+		}),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+
+	const lines = component.render(50);
+	for (let i = 0; i < lines.length; i++) {
+		assert.ok(
+			visibleWidth(lines[i]) <= 50,
+			`Line ${i} has visible width ${visibleWidth(lines[i])} > 50: ${JSON.stringify(lines[i].slice(0, 60))}`,
+		);
+	}
 });

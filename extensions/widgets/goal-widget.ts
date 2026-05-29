@@ -355,13 +355,19 @@ export class GoalWidgetComponent implements Component {
 
 	render(width: number): string[] {
 		const settings = this.getSettings();
-		const lines = renderGoalWidgetLines(this.getGoal(), this.theme, width, {
+		let lines = renderGoalWidgetLines(this.getGoal(), this.theme, width, {
 			openGoalCount: this.getOpenGoalCount(),
 			auditorProgress: this.getAuditorProgress(),
 			disableTasks: settings.disableTasks,
 		});
 		if (this.getDebugMode()) {
 			lines.push(...this.renderDebugPanel(width));
+		}
+		// Safety net: ensure no returned line exceeds the terminal width
+		for (let i = 0; i < lines.length; i++) {
+			if (visibleWidth(lines[i]) > width) {
+				lines[i] = truncateToWidth(lines[i], width);
+			}
 		}
 		return lines;
 	}

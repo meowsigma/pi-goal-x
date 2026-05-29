@@ -8,6 +8,43 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.0] — 2026-05-29
+
+### Added
+
+- **Hidden TUI debug mode** — Ctrl+Shift+X toggles a debug panel in the goal widget with raw goal field display, task tree summary, and legend. Ctrl+Shift+N creates/removes a test goal (writes to `.pi/goals/debug/`), Ctrl+Shift+T injects sample tasks, Ctrl+Shift+R starts a mock completion audit, and Ctrl+Shift+O opens the proposal confirmation dialog with a realistic proposal built from typed `GoalTask[]` objects through the real rendering pipeline.
+- **`addWrappedPipe` helper** — pipe-prefixed (`│   `) lines that wrap now prepend `│   ` to every continuation line so wrapped text stays inside the ASCII box.
+- **Task checkbox detection inside pipe sections** — `│   [x] t1: ...` lines are now properly detected as task checkboxes (not misinterpreted as key-value pairs) and render with per-status coloring inside the box.
+
+### Changed
+
+- **MAX_CONTEXT_LINES removal** — the 12-line truncation cap (`MAX_CONTEXT_LINES = 12`) is removed from `goal-questionnaire.ts`. The full proposal is now visible without truncation. Replaced `addContextWrapped` with `renderContextLines` that renders every line with per-line styling.
+- **Enriched confirmation dialog** — `buildDraftConfirmationText` and `buildTweakConfirmationText` now emit `─── Section Name ───` markers that `renderContextLines` converts to full-width box-drawing borders (`┌─ Section Name padding─┐`). Task checkbox items get per-status coloring (`[x]` success green, `[ ]` warning yellow) with item titles in muted. Goal structure lines (`=== Goal ===`, `Objective:`, `Success criteria:`, `Boundaries:`, `Constraints:`, `Verification contract:`, `If blocked:`) are detected and styled as accent.
+- **Pipe prefix for all objective content** — `buildDraftConfirmationText` and `buildTweakConfirmationText` now prefix every objective line with `│   ` (except lines already starting with `│`). Task checkbox lines and box-drawing borders inside the objective text now appear inside the ASCII box with consistent indentation.
+- **Debug proposal task lines** — `renderDebugTaskLines` output in the debug Ctrl+Shift+O dialog is now prefixed with `│   ` to match the box layout.
+
+## [0.17.0] — 2026-05-29
+
+### Added
+
+- **`auditorEnabled` in questionnaire results** — `runGoalQuestionnaire` accepts an optional `auditorToggleInit` parameter and returns `auditorEnabled` in the result object. The confirmation dialog shows an "Auditor enabled/disabled" toggle indicator.
+- **Per-goal `skipAuditor` field** — users can toggle the auditor off or on during goal confirmation. The choice is persisted on the goal record as `skipAuditor: true/false`. `complete_goal` skips the audit when `skipAuditor` is true on the target goal.
+- **`isAuditorEnabledByDefault`** — new helper in `goal-settings.ts` that returns `true` unless `disabled: true` in the settings file or the `PI_GOAL_SETTINGS_FILE` env var.
+- **Recursive duplicate task ID detection** — `checkDuplicateTaskIds` recursively validates all task IDs across the entire tree, preventing collisions between parent/subtask or sibling subtasks. Added to `validateTaskListProposal`.
+
+### Changed
+
+- **Task section appears first in draft context** — when both a goal objective and task list are proposed together, the task summary section appears FIRST in the context so it stays visible even when dialog context was previously capped.
+- **`findTaskInTree` for task operations** — `validateTaskCompletion` and `validateTaskSkip` now use `findTaskInTree` instead of flat array lookup, enabling subtask tree operations.
+- **Allow re-skipping already-skipped tasks** — `validateTaskSkip` no longer rejects already-skipped tasks, enabling toggle behavior.
+- **Prompt wording cleanup** — `complete_goal` prompt guidance trimmed to remove redundant phrasing.
+- **`complete_goal` status default** — `status=complete` is now the default when `status` parameter is omitted.
+- **Audit flow with per-goal toggle** — when `skipAuditor` is true on a goal, the audit is skipped during `complete_goal` and a ledger event `audit_skipped` is appended.
+
+### Fixed
+
+- **Dialog failure fallback** — `showProposalDialog` catches errors in interactive mode and notifies the user; creation fails closed and never auto-creates a goal on dialog failure.
+
 ## [0.16.0] — 2026-05-28
 
 ### Added

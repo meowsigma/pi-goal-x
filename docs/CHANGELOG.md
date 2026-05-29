@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.18.0 (2026-05-29)
+
+### Features
+
+- **Enriched confirmation dialog** — proposal dialogs now render with full-width box-drawing section headers (`┌─ Section Name ─────┐`), per-status task coloring (`[x]` green, `[ ]` yellow), and goal structure section highlighting (`Objective:`, `Success criteria:`, etc. in accent). The 12-line MAX_CONTEXT_LINES cap is removed — full proposals are always visible.
+- **Hidden TUI debug mode** — Ctrl+Shift+X toggles a debug panel in the goal widget. Ctrl+Shift+N creates/removes test goals (written to `.pi/goals/debug/`), Ctrl+Shift+T injects sample tasks, Ctrl+Shift+R starts a mock audit, Ctrl+Shift+O opens the proposal dialog with realistic data.
+
+### Fixes
+
+- **Text wrapping inside boxes** — pipe-prefixed lines (`│   content`) that wrap now maintain the `│   ` prefix on continuation lines, keeping wrapped text inside the ASCII box. Task checkbox lines embedded in objective text also get the `│   ` prefix so they appear within the box.
+
+### Tests
+
+- 310 total tests (unchanged).
+
 ## 0.17.0 (2026-05-29)
 
 ### Features

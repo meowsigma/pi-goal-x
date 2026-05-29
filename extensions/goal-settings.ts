@@ -143,6 +143,14 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
  * Save settings to the unified settings file on disk.
  * Persists only non-default values using the canonical key names.
  */
+/**
+ * Determine whether the auditor should be enabled by default based on settings.
+ * The auditor is enabled by default unless settings.disabled === true.
+ */
+export function isAuditorEnabledByDefault(settings: GoalSettings): boolean {
+	return settings.disabled !== true;
+}
+
 export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings): GoalSettings {
 	const clean: GoalSettings = {};
 	const provider = asNonEmptyString(settings.provider);

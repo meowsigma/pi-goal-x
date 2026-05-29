@@ -223,7 +223,27 @@ describe("Subagent E2E", () => {
 		assert.ok(handlerMap.has("turn_end"), "turn_end hook");
 	});
 
-	it("complete_goal rejects calls without status=complete", async () => {
+	it("complete_goal accepts calls without status (defaults to complete)", async () => {
+		const { tools, handlerMap } = createMockPiSetup();
+		const f = testFixture();
+		try {
+			const mockCtx = createMockCtx(f.cwd, f.goal, f.written);
+			const ss = handlerMap.get("session_start")!;
+			await ss({ reason: "start" }, mockCtx);
+			const updateGoal = tools.find((t) => t.name === "complete_goal")!;
+			// Without status, should default to "complete" and proceed to completion gate
+			// (we use confirmBypassAuditor here because e2e tests skip the auditor)
+			const result = await (updateGoal.execute as Function)(
+				"call-1",
+				{ verificationSummary: "Done", confirmBypassAuditor: true },
+				new AbortController().signal, undefined, mockCtx,
+			);
+			const text = result.content?.[0]?.text ?? "";
+			assert.ok(text.includes("Goal complete"), "without explicit status, completion should succeed");
+		} finally { f.cleanup(); }
+	});
+
+	it("complete_goal rejects calls with invalid status", async () => {
 		const { tools, handlerMap } = createMockPiSetup();
 		const f = testFixture();
 		try {
@@ -233,12 +253,12 @@ describe("Subagent E2E", () => {
 			const updateGoal = tools.find((t) => t.name === "complete_goal")!;
 			await assert.rejects(
 				() => (updateGoal.execute as Function)(
-					"call-1",
-					{},
+					"call-invalid",
+					{ status: "foobar", verificationSummary: "Done" },
 					new AbortController().signal, undefined, mockCtx,
 				),
 				/status=complete/,
-				"must reject with error mentioning status=complete"
+				"must reject with error mentioning status=complete when status is explicitly wrong"
 			);
 		} finally { f.cleanup(); }
 	});
@@ -260,6 +280,31 @@ describe("Subagent E2E", () => {
 			assert.ok(text.includes("Goal complete"), "completion text must say Goal complete");
 			const diskContent = readFileSync(path.join(f.cwd, f.written.activePath!), "utf8");
 			assert.ok(diskContent.includes('"status": "complete"'), "disk has complete status");
+		} finally { f.cleanup(); }
+	});
+
+	it("complete_goal with skipAuditor=true skips auditor", async () => {
+		const { tools, handlerMap } = createMockPiSetup();
+		const f = testFixture();
+		try {
+			// Create a goal with skipAuditor=true
+			const goal = createGoal({ objective: "Skip auditor test", autoContinue: true, sisyphus: false });
+			const goalWithSkip: GoalRecord = { ...goal, skipAuditor: true };
+			const written = writeActiveGoalFile({ cwd: f.cwd } as any, goalWithSkip);
+			const mockCtx = createMockCtx(f.cwd, goalWithSkip, written);
+			mockCtx.cwd = f.cwd;
+			const ss = handlerMap.get("session_start")!;
+			await ss({ reason: "start" }, mockCtx);
+			const updateGoal = tools.find((t) => t.name === "complete_goal")!;
+			// No confirmBypassAuditor needed — skipAuditor triggers immediate skip
+			const result = await (updateGoal.execute as Function)(
+				"call-skip",
+				{ status: "complete", completionSummary: "Skipping auditor." },
+				new AbortController().signal, undefined, mockCtx,
+			);
+			const text = result.content?.[0]?.text ?? "";
+			assert.ok(text.includes("Goal complete"), "completion should succeed with skipAuditor");
+			assert.ok(text.includes("per-goal auditor disabled"), "should mention per-goal auditor was skipped");
 		} finally { f.cleanup(); }
 	});
 

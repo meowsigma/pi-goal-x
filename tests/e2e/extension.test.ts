@@ -342,4 +342,49 @@ describe("Extension E2E", () => {
 			f.cleanup();
 		}
 	});
+
+	it("complete_goal with skipAuditor=true skips auditor directly", async () => {
+		const cwd = mkdtempSync(path.join(tmpdir(), "goal-e2e-skipaudit-"));
+		mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+		// Settings without disabled=true (auditor enabled by default)
+		writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({}));
+
+		const goal = createGoal({
+			objective: "Skip audit test",
+			autoContinue: true,
+			sisyphus: false,
+		});
+		const goalWithSkip: GoalRecord = { ...goal, skipAuditor: true };
+		const written = writeActiveGoalFile({ cwd } as any, goalWithSkip);
+
+		const focusEntry = goalFocusDetails(goal.id, "created");
+		const stateEntry: GoalStateEntry = { version: 3, goal: { ...goalWithSkip, activePath: written.activePath } };
+		const sessionEntries = [
+			{ type: "custom", customType: "pi-goal-focus", data: focusEntry },
+			{ type: "custom", customType: "pi-goal-state", data: stateEntry },
+		];
+		const mockCtx = createMockCtx(cwd, sessionEntries);
+
+		try {
+			apiCalls = [];
+			const ss = lifecycleHandlers.get("session_start");
+			assert.ok(ss, "session_start handler must be registered");
+			await ss({ reason: "start" }, mockCtx);
+
+			const completeGoal = getTool("complete_goal");
+			const result = await (completeGoal.execute as Function)(
+				"call-skip-audit",
+				{ status: "complete", completionSummary: "Skipping auditor." },
+				new AbortController().signal,
+				undefined,
+				mockCtx,
+			);
+			assert.ok(result, "result must be defined");
+			const text = result.content?.[0]?.text ?? "";
+			assert.ok(text.includes("Goal complete"), "completion should succeed with skipAuditor");
+			assert.ok(text.includes("per-goal auditor disabled"), "should show per-goal auditor was skipped");
+		} finally {
+			try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		}
+	});
 });

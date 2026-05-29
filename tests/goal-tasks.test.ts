@@ -280,6 +280,33 @@ test("validateTaskListProposal: over 50 tasks", () => {
 	assert.match(result.message, /cannot exceed 50/);
 });
 
+test("validateTaskListProposal: duplicate ids across nested subtasks", () => {
+	const goal = makeGoal([]);
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [{ id: "t2", title: "Subtask with same id", status: "pending" as const }],
+	}, {
+		id: "t2", title: "Task 2", status: "pending" as const,
+	}];
+	const result = validateTaskListProposal({ goal, tasks });
+	assert.equal(result.ok, false);
+	assert.match(result.message, /Duplicate task id: "t2"/);
+});
+
+test("validateTaskListProposal: duplicate ids within same subtask tree", () => {
+	const goal = makeGoal([]);
+	const tasks = [{
+		id: "t1", title: "Task 1", status: "pending" as const,
+		subtasks: [
+			{ id: "sub-a", title: "Sub A", status: "pending" as const },
+			{ id: "sub-a", title: "Sub A dup", status: "pending" as const },
+		],
+	}];
+	const result = validateTaskListProposal({ goal, tasks });
+	assert.equal(result.ok, false);
+	assert.match(result.message, /Duplicate task id: "sub-a"/);
+});
+
 // ── Subtask depth validation ────────────────────────────────────────────
 
 test("findSubtaskDepthViolation: no violation at default depth", () => {

@@ -31,6 +31,10 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 - **Recursive subtasks** — tasks can have nested sub-tasks via `subtasks?: GoalTask[]` (full recursive type). Subtask depth is controlled globally by `subtaskDepth` in `.pi/pi-goal-x-settings.json` (default: 1 level). Too-deep subtrees are rejected at proposal.
 - **Lightweight subtasks** — each task has an optional `lightweightSubtasks?: boolean` flag. When true, the parent can complete regardless of subtask status. When false/absent (full subtasks), all subtasks must be individually complete before the parent can close.
 - **Per-task completion** — `complete_task` marks individual tasks done with optional evidence/verificationSummary, and `skip_task` marks tasks as skipped with a required reason. Neither stops the turn, so the agent can continue uninterrupted.
+- **Recursive lookup** — `findTaskInTree` and `updateTaskInTree` search and update tasks at any depth. Subtask IDs are valid targets for `complete_task` and `skip_task`.
+- **Subtask gate** — parent tasks with full subtasks require all sub-items to be completed or skipped before the parent can close, enforced by recursive `checkSubtasksComplete`.
+- **Duplicate ID validation** — `validateTaskListProposal` recursively checks all task IDs across the entire tree, preventing collisions between parent/subtask or sibling subtasks.
+- **Agent workflow guidance** — prompts include a `[TASK WORKFLOW]` section directing agents to use tasks as progress trackers, completing subtasks immediately when work finishes (not batch-marking at the end).
 - **Hierarchical display** — task lists with subtasks render with indentation in prompts (`taskListBlock`, `goalPrompt`, `continuationPrompt`) and in the TUI widget (recursive count, BFS next-pending).
 - **Optional `taskList`** — goals without a task list work exactly as before. The feature is entirely opt-in.
 - **Soft `complete_goal` gate** — when `blockCompletion: true` is set, `complete_goal` surfaces a warning if pending tasks remain (prompt-level only; the agent can still complete).
@@ -48,19 +52,20 @@ All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are pr
 ### E2e test infrastructure
 
 - **Deterministic fork tests using `--mode json`**: the e2e suite spawns a real `pi --fork --mode json` session, parses structured `tool_execution_start`/`tool_execution_end` JSON events for field-level assertions — no free-text AI output parsing. Uses `--append-system-prompt` + `--tools` to force deterministic tool calls.
-- **Full coverage**: 281 tests total — function-level integration tests, mock-pi handler tests, file-validity checks, real `pi --fork --mode json` E2E tests, propose_goal_tweak unit/integration/e2e tests, task list policy/round-trip/render tests (including subtasks), and verification contract tests.
+- **Full coverage**: 310 tests total — function-level integration tests, mock-pi handler tests, file-validity checks, real `pi --fork --mode json` E2E tests, propose_goal_tweak unit/integration/e2e tests, task list policy/round-trip/render tests (including subtasks), and verification contract tests.
 
 ### Completion auditor
 
 - **Live progress widget** — when the auditor runs, the TUI shows a spinner, a progress bar (`[████░░░░] 40%`), step labels (`Inspecting files...`, `Verifying success criteria...`), the current tool being executed, and recent output lines. No more wondering if anything is happening.
+- **Per-goal auditor toggle** — during goal confirmation, press `a` to toggle the auditor on/off for that goal. The toggle uses a ●/○ indicator between the goal summary and confirm options. The default position comes from settings; the per-goal override persists within the session.
 - **Escape to skip** — press Escape during an audit to abort it and complete the goal immediately. The skip is recorded in the ledger as `audit_skipped` with reason `user_aborted` and auditor model metadata.
-- **Disable the auditor entirely** — set `disabled: true` in `.pi/pi-goal-x-settings.json` (or toggle it via `/goal-settings`). The agent can still bypass with user confirmation by passing `confirmBypassAuditor: true` to `update_goal`.
+- **Disable the auditor entirely** — set `disabled: true` in `.pi/pi-goal-x-settings.json` (or toggle it via `/goal-settings`). The agent can still bypass with user confirmation by passing `confirmBypassAuditor: true` to `complete_goal`.
 - **Skipped audits are recorded** — every skip (whether disabled or Escape-aborted) is logged to the ledger with the reason, provider, model, and thinking level for full traceability.
 - **Robust abort detection** — the auditor detects aborts both from exceptions *and* from `session.prompt()` returning after an abort signal, preventing stuck goals or ghost states.
 - **Cleaner lifecycle** — `AbortSignal` is properly wired to `session.abort()`, animation timers are cleaned up, and the unsubscribe path is always executed. No more having to kill the session.
 - **Completion report includes full auditor output** — the auditor's full report is included in the goal completion conversation message upon approval, not just a verdict.
 - **Session factory injection** — `runGoalCompletionAuditor` accepts an optional `createSession` parameter for testability, enabling mock auditor sessions in tests.
-- **Structured test evidence** — the executor can pass `testResults` (exit code, suite name, output, timestamp) via `update_goal({testResults})`. The auditor receives a `<test_evidence>` block and is instructed to check it before re-running test suites, skipping redundant re-runs.
+- **Structured test evidence** — the executor can pass `testResults` (exit code, suite name, output, timestamp) via `complete_goal({testResults})`. The auditor receives a `<test_evidence>` block and is instructed to check it before re-running test suites, skipping redundant re-runs.
 
 ### Drafting & UX
 
@@ -232,7 +237,7 @@ The completion result prints a full report into the conversation:
 - the auditor's approval report
 - full current goal details, including objective, status, usage, mode, and file path
 
-Sisyphus goals use the same completion tool as regular goals. The stricter part is the prompt/criteria standard: the agent should only call completion after the whole ordered objective is actually satisfied and likely to survive independent auditing. A paused goal can also be completed directly when the agent already has enough evidence that every requirement is satisfied; it does not need a resume just to call `update_goal`.
+Sisyphus goals use the same completion tool as regular goals. The stricter part is the prompt/criteria standard: the agent should only call completion after the whole ordered objective is actually satisfied and likely to survive independent auditing. A paused goal can also be completed directly when the agent already has enough evidence that every requirement is satisfied; it does not need a resume just to call `complete_goal`.
 
 ## Schema gates
 

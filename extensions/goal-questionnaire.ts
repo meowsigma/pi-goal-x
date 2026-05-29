@@ -26,6 +26,7 @@ export interface GoalQuestionnaireResult {
 	questions: GoalQuestionnaireQuestion[];
 	answers: GoalQuestionnaireAnswer[];
 	cancelled: boolean;
+	auditorEnabled?: boolean;
 }
 
 export type ProposalDecision = "confirm" | "continue";
@@ -82,7 +83,7 @@ export function proposalDialogFailureMessage(error: unknown): string {
  * the internal draft-confirm prompt. This keeps pi-goal self-contained and
  * avoids depending on external question/questionnaire packages.
  */
-export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: GoalQuestionnaireQuestion[]): Promise<GoalQuestionnaireResult> {
+export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: GoalQuestionnaireQuestion[], auditorToggleInit?: { defaultEnabled: boolean }): Promise<GoalQuestionnaireResult> {
 	if (!ctx.hasUI) {
 		return { questions: [], answers: [], cancelled: true };
 	}
@@ -102,6 +103,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		let inputMode = false;
 		let inputQuestionId: string | null = null;
 		let cachedLines: string[] | undefined;
+		let auditorEnabled = auditorToggleInit?.defaultEnabled ?? true;
 		const answers = new Map<string, GoalQuestionnaireAnswer>();
 		const drafts = new Map<string, string>();
 
@@ -126,7 +128,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			// Restore hardware cursor now that the dialog is closing
 			tui.setShowHardwareCursor(wasHardwareCursorShown);
 			const ordered = questions.map((q) => answers.get(q.id)).filter((a): a is GoalQuestionnaireAnswer => !!a);
-			done({ questions, answers: ordered, cancelled });
+			done({ questions, answers: ordered, cancelled, auditorEnabled: auditorToggleInit ? auditorEnabled : undefined });
 		}
 
 		function currentQuestion(): GoalQuestionnaireQuestion | undefined {
@@ -272,6 +274,13 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				return;
 			}
 
+			// Auditor toggle hotkey
+			if (matchesKey(data, "a") && auditorToggleInit) {
+				auditorEnabled = !auditorEnabled;
+				refresh();
+				return;
+			}
+
 			if (matchesKey(data, Key.enter) && q) {
 				if (q.options.length === 0 || opts[optionIndex]?.isCustom) {
 					inputMode = true;
@@ -293,7 +302,9 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			if (matchesKey(data, Key.escape)) submit(true);
 		}
 
-		function render(width: number): string[] {
+		const MAX_CONTEXT_LINES = 12; // prevent viewport jumping by capping context display
+
+			function render(width: number): string[] {
 			if (cachedLines) return cachedLines;
 			const safeWidth = Math.max(20, width);
 			const lines: string[] = [];
@@ -301,6 +312,18 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			const opts = displayOptions();
 			const add = (s: string) => lines.push(truncateToWidth(s, safeWidth, "…", true));
 			const addWrapped = (s: string) => lines.push(...wrapTextWithAnsi(s, safeWidth));
+
+			/** Wraps text and caps at MAX_CONTEXT_LINES to prevent viewport jumping. */
+			const addContextWrapped = (s: string) => {
+				const wrapped = wrapTextWithAnsi(s, safeWidth);
+				if (wrapped.length <= MAX_CONTEXT_LINES) {
+					lines.push(...wrapped);
+				} else {
+					lines.push(...wrapped.slice(0, MAX_CONTEXT_LINES));
+					const overflow = wrapped.length - MAX_CONTEXT_LINES;
+					lines.push(theme.fg("dim", `  ... ${overflow} more line${overflow === 1 ? "" : "s"} (full details after confirmation)`));
+				}
+			};
 
 			add(theme.fg("accent", "─".repeat(safeWidth)));
 			if (isMulti) {
@@ -331,7 +354,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 
 			if (inputMode && q) {
 				addWrapped(theme.fg("text", ` ${q.question}`));
-				if (q.context) addWrapped(theme.fg("muted", ` ${q.context}`));
+				if (q.context) addContextWrapped(theme.fg("muted", ` ${q.context}`));
 				lines.push("");
 				if (q.options.length > 0) {
 					renderOptions();
@@ -352,7 +375,15 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				add(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
 			} else if (q) {
 				addWrapped(theme.fg("text", ` ${q.question}`));
-				if (q.context) addWrapped(theme.fg("muted", ` ${q.context}`));
+				if (q.context) addContextWrapped(theme.fg("muted", ` ${q.context}`));
+				// Auditor toggle line between context and options
+				if (auditorToggleInit) {
+					const circle = auditorEnabled ? "●" : "○";
+					const label = auditorEnabled ? "Auditor enabled" : "Auditor disabled";
+					const color = auditorEnabled ? "success" : "warning";
+					add(theme.fg(color, ` ${circle} ${label}`) + theme.fg("dim", "  (press 'a' to toggle)"));
+					lines.push("");
+				}
 				const existing = answers.get(q.id);
 				if (existing) add(theme.fg("dim", ` Current: ${existing.wasCustom ? "(wrote) " : ""}${existing.answer}`));
 				lines.push("");
@@ -361,7 +392,10 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			}
 
 			lines.push("");
-			if (!inputMode) add(theme.fg("dim", isMulti ? " Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel" : " ↑↓ navigate • Enter select • Esc cancel"));
+			if (!inputMode) {
+				const auditorHint = auditorToggleInit ? " • a toggle auditor" : "";
+				add(theme.fg("dim", isMulti ? " Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel" + auditorHint : " ↑↓ navigate • Enter select • Esc cancel" + auditorHint));
+			}
 			add(theme.fg("accent", "─".repeat(safeWidth)));
 			cachedLines = lines;
 			return lines;
@@ -379,7 +413,8 @@ export async function showProposalDialog(
 	ctx: ExtensionContext,
 	confirmationText: string,
 	focus: GoalDraftingFocus,
-): Promise<ProposalDecision> {
+	defaultAuditorEnabled?: boolean,
+): Promise<{ decision: ProposalDecision; auditorEnabled: boolean }> {
 	const headerTitle = focus === "sisyphus" ? "Confirm Sisyphus Goal Draft" : "Confirm Goal Draft";
 	const result = await runGoalQuestionnaire(ctx, [{
 		id: "confirm",
@@ -388,11 +423,12 @@ export async function showProposalDialog(
 		options: ["Confirm — create this goal now", "Continue chatting — keep refining"],
 		recommended: 0,
 		allowCustom: false,
-	}]);
-	return proposalDecisionFromQuestionnaireResult({
+	}], defaultAuditorEnabled !== undefined ? { defaultEnabled: defaultAuditorEnabled } : undefined);
+	const decision = proposalDecisionFromQuestionnaireResult({
 		cancelled: result.cancelled,
 		answer: result.answers[0]?.answer,
 	});
+	return { decision, auditorEnabled: result.auditorEnabled ?? true };
 }
 
 export function registerQuestionnaireTools(pi: ExtensionAPI): void {

@@ -185,7 +185,7 @@ export function validateTaskCompletion(args: {
 }): PolicyValidation {
 	if (!args.goal) return { ok: false, message: "No goal is set." };
 	if (!args.goal.taskList) return { ok: false, message: "Goal has no task list." };
-	const task = args.goal.taskList.tasks.find((t) => t.id === args.taskId);
+	const task = findTaskInTree(args.goal.taskList.tasks, args.taskId);
 	if (!task) return { ok: false, message: `Task "${args.taskId}" not found.` };
 	if (task.status === "complete") return { ok: false, message: `Task "${args.taskId}" is already complete.` };
 	if (task.status === "skipped") return { ok: false, message: `Task "${args.taskId}" was already skipped.` };
@@ -199,7 +199,7 @@ export function validateTaskSkip(args: {
 }): PolicyValidation {
 	if (!args.goal) return { ok: false, message: "No goal is set." };
 	if (!args.goal.taskList) return { ok: false, message: "Goal has no task list." };
-	const task = args.goal.taskList.tasks.find((t) => t.id === args.taskId);
+	const task = findTaskInTree(args.goal.taskList.tasks, args.taskId);
 	if (!task) return { ok: false, message: `Task "${args.taskId}" not found.` };
 	if (task.status === "complete") return { ok: false, message: `Task "${args.taskId}" is already complete.` };
 	// Skipped tasks toggle via the executor; reason is only required for first-time skips.
@@ -241,6 +241,20 @@ export function findSubtaskDepthViolation(tasks: GoalTask[], maxDepth: number): 
 	return undefined;
 }
 
+function checkDuplicateTaskIds(tasks: GoalTask[], ids: Set<string>): string | undefined {
+	for (const t of tasks) {
+		const id = t.id.trim();
+		if (!id) return "All tasks must have a non-empty id.";
+		if (ids.has(id)) return `Duplicate task id: "${id}".`;
+		ids.add(id);
+		if (t.subtasks) {
+			const childErr = checkDuplicateTaskIds(t.subtasks, ids);
+			if (childErr) return childErr;
+		}
+	}
+	return undefined;
+}
+
 export function validateTaskListProposal(args: {
 	goal: GoalPolicyRecordLike | null;
 	tasks: GoalTask[];
@@ -254,6 +268,11 @@ export function validateTaskListProposal(args: {
 		if (!t.title.trim()) return { ok: false, message: `Task "${t.id}" must have a non-empty title.` };
 		if (ids.has(t.id)) return { ok: false, message: `Duplicate task id: "${t.id}".` };
 		ids.add(t.id);
+		// Recursively check subtask ids against the same global set
+		if (t.subtasks && t.subtasks.length > 0) {
+			const childErr = checkDuplicateTaskIds(t.subtasks, ids);
+			if (childErr) return { ok: false, message: childErr };
+		}
 	}
 	// Check subtask depth limit
 	const maxDepth = args.maxSubtaskDepth ?? 1;

@@ -21,6 +21,7 @@ import {
 } from "./goal-auditor.ts";
 import {
 	goalSettingsPath,
+	isAuditorEnabledByDefault,
 	loadGoalSettings,
 	loadGoalSettingsFileConfig,
 	saveGoalSettingsFileConfig,
@@ -1578,7 +1579,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				}
 			}
 			const lifecycleHint = view && (view.status === "active" || view.status === "paused")
-				? "\nLifecycle tools: if evidence proves the objective is satisfied, call complete_goal({status: \"complete\"}); if blocked, call pause_goal({reason, suggestedAction?}); if abandoned/obsolete/unsafe, call abort_goal({reason}). For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools."
+				? "\nLifecycle tools: if evidence proves the objective is satisfied, call complete_goal({verificationSummary: \"evidence\"}); if blocked, call pause_goal({reason, suggestedAction?}); if abandoned/obsolete/unsafe, call abort_goal({reason}). For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools."
 				: "";
 			const text = view
 				? `${detailedSummary(view)}${lifecycleHint}${nudge}${otherCount > 0 ? `\nOther open goals: ${otherCount} (human can run /goal-list or /goal-focus)` : ""}`
@@ -1737,20 +1738,25 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const draftSummary = buildDraftConfirmationText({
 				focus: activeIntent.focus,
 				originalTopic: activeIntent.originalTopic,
-				objective: objective + taskSummarySection,
+				// Tasks section appears FIRST in the context so it stays visible
+				// even when the dialog caps long context lines.
+				objective: taskSummarySection ? `${taskSummarySection}
+
+${objective}` : objective,
 				autoContinue: autoContinueFlag,
 			});
 
 			const headless = shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM });
 
-			let decision: "confirm" | "continue";
+			let decision: { decision: "confirm" | "continue"; auditorEnabled: boolean };
+			const auditorDefault = isAuditorEnabledByDefault(loadGoalSettings(ctx.cwd));
 			if (headless) {
 				// Headless: auto-confirm (tests and non-TUI sessions).
-				decision = "confirm";
+				decision = { decision: "confirm", auditorEnabled: auditorDefault };
 			} else {
 				// TUI: show overlay dialog.
 				try {
-					decision = await showProposalDialog(ctx, draftSummary, activeIntent.focus);
+					decision = await showProposalDialog(ctx, draftSummary, activeIntent.focus, auditorDefault);
 				} catch (err) {
 					const message = proposalDialogFailureMessage(err);
 					ctx.ui.notify(message, "error");
@@ -1761,7 +1767,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				}
 			}
 
-			if (decision === "confirm") {
+			if (decision.decision === "confirm") {
 				// Extract verification contract from objective before creation
 				const { objective: cleanedObjective, verificationContract } = extractVerificationContract(objective);
 				const config: GoalCreationConfig = {
@@ -1771,6 +1777,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				};
 				confirmationIntent = null;
 				replaceGoal(config, ctx, false, verificationContract);
+
+				// Set skipAuditor on the goal if user toggled auditor off
+				if (!decision.auditorEnabled && state.goal) {
+					state.goal = { ...state.goal, skipAuditor: true };
+					setGoal(state.goal, ctx);
+				}
 
 				// Set task list if provided
 				if (tasksToCreate && tasksToCreate.length > 0 && state.goal) {
@@ -1887,12 +1899,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 			const headless = shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM });
 
-			let decision: "confirm" | "continue";
+			let decision: { decision: "confirm" | "continue"; auditorEnabled: boolean };
 			if (headless) {
-				decision = "confirm";
+				decision = { decision: "confirm", auditorEnabled: !state.goal.skipAuditor };
 			} else {
 				try {
-					decision = await showProposalDialog(ctx, draftSummary, state.goal.sisyphus ? "sisyphus" : "goal");
+					decision = await showProposalDialog(ctx, draftSummary, state.goal.sisyphus ? "sisyphus" : "goal", !state.goal.skipAuditor);
 				} catch (err) {
 					const message = proposalDialogFailureMessage(err);
 					ctx.ui.notify(message, "error");
@@ -1903,7 +1915,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				}
 			}
 
-			if (decision === "confirm") {
+			if (decision.decision === "confirm") {
+				// Persist any auditor toggle change
+				if (state.goal) {
+					state.goal = { ...state.goal, skipAuditor: !decision.auditorEnabled };
+				}
 				// Extract verification contract from revised objective
 				const { objective: cleanedObjective, verificationContract } = extractVerificationContract(newObjective);
 				// Apply the tweak: write the new objective to disk authoritatively.
@@ -1981,7 +1997,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		description: "Mark the current active or paused pi goal complete. Only call this when the goal objective is actually achieved — no required work remains.",
 		promptSnippet: "Mark the active or paused pi goal complete — only when every requirement is satisfied.",
 		promptGuidelines: [
-			"Call complete_goal with status=complete only when the pi goal objective has actually been achieved and no required work remains.",
+			"Call complete_goal only when the pi goal objective has actually been achieved and no required work remains.",
 			"Before calling complete_goal, you MUST provide a verificationSummary that addresses every success criterion and any verification contract on the goal. Fold all verification evidence (test output, grep results, requirements coverage) into this single field.",
 			"The auditor is authoritative: completion is archived only if the auditor report ends with <approved/>. If it ends with <disapproved/> or no approval marker, complete_goal is rejected and the goal remains open.",
 			"Do NOT call complete_goal if any work remains, even if substantial progress was made. Do not use it merely because work is stopping, tests passed, or you are blocked.",
@@ -2001,7 +2017,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			reconcileFocusedGoalFromDisk(ctx);
 
 			// -- Phase 2: Status validation --
-			if (params.status !== COMPLETE_STATUS) {
+			const effectiveStatus = params.status ?? COMPLETE_STATUS;
+			if (effectiveStatus !== COMPLETE_STATUS) {
 				throw new Error("complete_goal requires status=complete when marking a goal complete.");
 			}
 
@@ -2059,7 +2076,58 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				? `${settings.provider ?? "default"}/${settings.model ?? "default"}${settings.thinkingLevel ? `:${settings.thinkingLevel}` : ""}`
 				: "default";
 
-			// Check if auditor is disabled
+			// Check if auditor is disabled per-goal (user toggled it off during goal confirmation)
+			if (auditTarget.skipAuditor) {
+				pi.sendMessage<GoalAuditEventDetails>({
+					customType: GOAL_AUDIT_ENTRY,
+					content: `Goal completed — per-goal auditor disabled.`,
+					display: true,
+					details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
+				});
+				try {
+					appendGoalEvent(ctx, {
+						type: "audit_skipped",
+						goalId: auditTarget.id,
+						reason: "disabled",
+						provider: settings.provider,
+						model: settings.model,
+						thinkingLevel: settings.thinkingLevel,
+						at: nowIso(),
+					});
+				} catch {
+					// Ledger append failure should not block completion
+				}
+				accountProgress(ctx);
+				auditProgress = null;
+				goalWidgetComponent?.invalidate();
+				state.goal = {
+					...auditTarget,
+					status: "complete",
+					stopReason: "agent",
+					updatedAt: nowIso(),
+				};
+				state.goal = writeActiveGoalFile(ctx, state.goal);
+				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+				turnStoppedFor = state.goal?.id ?? null;
+				resetGetGoalNudgeState(state.goal?.id);
+				syncGoalTools();
+				updateUI(ctx);
+				return {
+					content: [{
+						type: "text",
+						text: buildCompletionReport({
+							detailedSummary: detailedSummary(state.goal),
+							completionSummary: params.completionSummary,
+							auditSkippedReason: "per-goal auditor disabled",
+							taskSummary: state.goal?.taskList ? buildTaskSummary(state.goal.taskList) : null,
+						}),
+					}],
+					details: goalDetails(state.goal),
+					terminate: true,
+				};
+			}
+
+			// Check if auditor is disabled in settings
 			if (settings.disabled === true) {
 				if (params.confirmBypassAuditor !== true) {
 					return {
@@ -2524,7 +2592,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		promptSnippet: "Legacy no-op: Sisyphus no longer requires step_complete.",
 		promptGuidelines: [
 			"Do not call this in normal operation. Sisyphus mode shares the normal goal lifecycle and completion gate.",
-			"Complete the goal with complete_goal(status=complete) only when the full objective is actually satisfied.",
+			"Call complete_goal only when the full objective is actually satisfied.",
 		],
 		parameters: Type.Object({
 			stepIndex: Type.Integer({ minimum: 1, description: "Legacy step index. Ignored." }),
@@ -2534,7 +2602,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
 			return {
-				content: [{ type: "text", text: "step_complete is no longer required. Sisyphus is now a prompt/criteria style that uses the normal goal lifecycle. Continue working from the objective, or call complete_goal(status=complete) only when the full objective is satisfied." }],
+				content: [{ type: "text", text: "step_complete is no longer required. Sisyphus is now a prompt/criteria style that uses the normal goal lifecycle. Continue working from the objective, or call complete_goal only when the full objective is actually satisfied." }],
 				details: goalDetails(state.goal),
 			};
 		},
@@ -2648,12 +2716,16 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const gateLabel = blockCompletion ? " (blockCompletion enabled)" : "";
 			const proposalText = [`Proposed task list${gateLabel}:`, "", ...taskLines].join("\n");
 
-			const decision = await showProposalDialog(ctx, proposalText, "goal");
-			if (decision !== "confirm") {
+			const dialogResult = await showProposalDialog(ctx, proposalText, "goal", !state.goal?.skipAuditor);
+			if (dialogResult.decision !== "confirm") {
 				return {
 					content: [{ type: "text", text: "Task list proposal declined." }],
 					details: goalDetails(state.goal),
 				};
+			}
+			// Persist any auditor toggle change
+			if (state.goal) {
+				state.goal = { ...state.goal, skipAuditor: !dialogResult.auditorEnabled };
 			}
 
 			// Apply
@@ -3165,7 +3237,7 @@ promptGuidelines: [
 				// Ledger read failure should not break the prompt
 			}
 			return {
-				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call complete_goal(status=complete) or abort_goal without resuming. Do not call pause_goal again.`,
+				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call complete_goal or abort_goal without resuming. Do not call pause_goal again.`,
 			};
 		}
 		const activeGoal = state.goal;

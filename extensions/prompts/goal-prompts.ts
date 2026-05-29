@@ -114,7 +114,7 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 		"- Work patiently and sequentially. Do not rush to a shortcut just because it looks more efficient.",
 		"- Verify each meaningful action against the objective's own success criteria before moving on.",
 		"- If a step is unclear, blocked, fails, or seems wrong: call pause_goal({reason, suggestedAction?}) instead of inventing a workaround.",
-		"- Call complete_goal(status=complete) only after the full objective is actually satisfied. There is no separate step counter or step_complete requirement.",
+		"- Call complete_goal only after the full objective is actually satisfied. There is no separate step counter or step_complete requirement.",
 	].join("\n");
 }
 
@@ -132,11 +132,14 @@ Available work tools for pursuing the active goal include write, read, bash, and
 
 After goal confirmation, you may call propose_task_list once to set up an initial task list if the objective decomposes into trackable milestones. If a task list already exists, only restructure it when the user asks or the goal structurally changes — do not restructure autonomously. Do not add a task list for simple, single-step goals.
 
+[TASK WORKFLOW]
+Use tasks and subtasks as PROGRESS TRACKERS during your work — not as a post-hoc checklist to batch-mark at the end. As soon as you finish a concrete unit of work that corresponds to a task or subtask, call complete_task immediately with evidence of what you did. The system enforces that all subtasks must be completed (or skipped) before their parent task can be completed, so work from the leaves up: finish subtasks first, then mark the parent task complete. If a subtask is blocked and cannot proceed, call pause_goal rather than skipping it. This keeps the task list accurate and prevents the "all work done, now batch-mark everything" pattern.
+
 To ask the user a structured question (e.g. when the user's spec changes and you need to clarify before updating the goal), use goal_question. It opens a question dialog and returns the user's answer as tool output. Use plain conversation for simple clarifications.
 
 Task skipping restrictions: Only skip a task when the user explicitly asks you to, or when the task directly contradicts a hard constraint (e.g. an impossible requirement). Do NOT autonomously skip tasks to avoid work, or because they look optional, inconvenient, or out of scope. When in doubt, ask the user first. Calling skip_task on an already-skipped task toggles it back to pending (unskip).
 
-Keep this goal in force until it is actually achieved. Do not pause for confirmation just because a phase, chapter, file, or checklist item is finished. At each natural stopping point, compare every explicit requirement with concrete evidence from the workspace/session. If the objective is complete, call complete_goal with status=complete and provide a verificationSummary; complete_goal will launch an independent pi auditor agent and only archive if that auditor returns <approved/>. If it is not complete, choose the next concrete action and do it.
+Keep this goal in force until it is actually achieved. Do not pause for confirmation just because a phase, chapter, file, or checklist item is finished. At each natural stopping point, compare every explicit requirement with concrete evidence from the workspace/session. If the objective is complete, call complete_goal and provide a verificationSummary; complete_goal will launch an independent pi auditor agent and only archive if that auditor returns <approved/>. If it is not complete, choose the next concrete action and do it.
 
 The completion auditor is independent and semantic, not a paperwork checklist. It may inspect files and command output, and it will reject scaffold-only, alpha, template, proxy-metric, or weakly verified completions with <disapproved/>.
 
@@ -174,6 +177,9 @@ export function continuationPrompt(goal: GoalRecord, settings?: GoalSettings): s
 		"",
 		"Task skipping restrictions: Only skip a task when the user explicitly asks you to, or when the task directly contradicts a hard constraint (e.g. an impossible requirement). Do NOT autonomously skip tasks to avoid work, or because they look optional, inconvenient, or out of scope. When in doubt, ask the user first. Calling skip_task on an already-skipped task toggles it back to pending (unskip).",
 		"",
+		"[TASK WORKFLOW]",
+		"Use tasks and subtasks as PROGRESS TRACKERS during your work — not as a post-hoc checklist to batch-mark at the end. As soon as you finish a concrete unit of work that corresponds to a task or subtask, call complete_task immediately with evidence of what you did. Subtasks must be completed (or skipped) before their parent task can be completed, so work from the leaves up: finish subtasks first, then mark the parent task complete. If a subtask is blocked and cannot proceed, call pause_goal rather than skipping it.",
+		"",
 		"Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
 		"",
 		"Before deciding that the goal is achieved, perform a completion audit against the actual current state:",
@@ -186,7 +192,7 @@ export function continuationPrompt(goal: GoalRecord, settings?: GoalSettings): s
 		"- Treat uncertainty as not achieved; do more verification or continue the work.",
 		"- For content/research/book/tutorial/report/reader-outcome goals, explicitly audit semantic quality: not merely scaffold/template/alpha, substantive content reviewed, and intended reader/user task outcome supported.",
 		"",
-		"Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when your own audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call complete_goal with status \"complete\" and a verificationSummary that addresses every success criterion and any verification contract; the tool will launch an independent pi auditor agent and only archive if it returns <approved/>.",
+		"Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when your own audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call complete_goal with a verificationSummary that addresses every success criterion and any verification contract; the tool will launch an independent pi auditor agent and only archive if it returns <approved/>.",
 		"",
 		"Before marking any sub-item or task as complete (including ✅ checkmarks in your output), verify thoroughly against the relevant success criteria and any verification contract. Do NOT use completion indicators for items you have not fully verified.",
 		"",

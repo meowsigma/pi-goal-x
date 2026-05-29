@@ -8,6 +8,17 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.1] — 2026-05-29
+
+### Fixed
+
+- **TUI crash guard** — pi-tui differential render no longer throws a fatal error when a line's visible width exceeds terminal width. Both the incremental render path and the full-redraw path now truncate overflowing lines with `truncateToWidth()` instead of crashing.
+- **Widget safety net** — `GoalWidgetComponent.render()` post-processes every line and truncates any that exceeds the render width, defending against widget edge cases that could bypass per-line truncation.
+
+### Added
+
+- **Regression test** — `goal-widget.test.ts`: "GoalWidgetComponent safety net truncates any line exceeding width" asserts that rendering at width 50 with extreme-length content produces no line with `visibleWidth > 50`.
+
 ## [0.18.0] — 2026-05-29
 
 ### Added

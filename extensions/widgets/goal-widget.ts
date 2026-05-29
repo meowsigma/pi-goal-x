@@ -14,11 +14,15 @@ import type { GoalSettings } from "../goal-settings.ts";
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
 
 export interface GoalWidgetRecord extends GoalDisplayRecordLike {
+	id: string;
+	createdAt: string;
+	updatedAt: string;
 	activePath?: string | null;
 	archivedPath?: string | null;
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
 	taskList?: GoalTaskList | null;
+	verificationContract?: string;
 }
 
 export interface AuditorWidgetProgress {
@@ -41,6 +45,7 @@ export interface GoalWidgetOptions {
 	getOpenGoalCount?: () => number;
 	getAuditorProgress?: () => AuditorWidgetProgress | null;
 	getSettings?: () => GoalSettings;
+	getDebugMode?: () => boolean;
 }
 
 function fit(value: string, width: number): string {
@@ -280,8 +285,8 @@ export class GoalWidgetComponent implements Component {
 	private getGoal: () => GoalWidgetRecord | null;
 	private getOpenGoalCount: () => number;
 	private getAuditorProgress: () => AuditorWidgetProgress | null;
-
 	private getSettings: () => GoalSettings;
+	private getDebugMode: () => boolean;
 
 	constructor(options: GoalWidgetOptions) {
 		this.theme = options.theme;
@@ -290,19 +295,75 @@ export class GoalWidgetComponent implements Component {
 		this.getOpenGoalCount = options.getOpenGoalCount ?? (() => (this.getGoal() ? 1 : 0));
 		this.getAuditorProgress = options.getAuditorProgress ?? (() => null);
 		this.getSettings = options.getSettings ?? (() => ({}));
+		this.getDebugMode = options.getDebugMode ?? (() => false);
 	}
 
 	update(): void {
 		this.tui.requestRender();
 	}
 
+	/** Render debug info panel when debug mode is active */
+	private renderDebugPanel(width: number): string[] {
+		const t = this.theme;
+		const lines: string[] = [];
+		const safeWidth = Math.max(20, width);
+
+		// Divider
+		lines.push(t.fg("dim", "─".repeat(safeWidth)));
+		lines.push(t.fg("warning", "⊙ [DEBUG MODE]"));
+		lines.push("");
+
+		const goal = this.getGoal();
+		if (goal) {
+			lines.push(t.fg("dim", `  id: ${goal.id}`));
+			lines.push(t.fg("dim", `  status: ${goal.status}`));
+			lines.push(t.fg("dim", `  objective: ${truncateText(goal.objective, 80)}`));
+			lines.push(t.fg("dim", `  sisyphus: ${goal.sisyphus}`));
+			lines.push(t.fg("dim", `  autoContinue: ${goal.autoContinue}`));
+			lines.push(t.fg("dim", `  tokens: ${goal.usage.tokensUsed}`));
+			lines.push(t.fg("dim", `  activeSeconds: ${goal.usage.activeSeconds}`));
+			lines.push(t.fg("dim", `  createdAt: ${goal.createdAt}`));
+			lines.push(t.fg("dim", `  updatedAt: ${goal.updatedAt}`));
+			if (goal.pauseReason) lines.push(t.fg("dim", `  pauseReason: ${goal.pauseReason}`));
+			if (goal.pauseSuggestedAction) lines.push(t.fg("dim", `  pauseSuggestedAction: ${goal.pauseSuggestedAction}`));
+			if (goal.stopReason) lines.push(t.fg("dim", `  stopReason: ${goal.stopReason}`));
+			if (goal.activePath) lines.push(t.fg("dim", `  activePath: ${goal.activePath}`));
+			if (goal.archivedPath) lines.push(t.fg("dim", `  archivedPath: ${goal.archivedPath}`));
+			if (goal.verificationContract) lines.push(t.fg("dim", `  vContract: ${truncateText(goal.verificationContract, 60)}`));
+
+			// Task tree summary
+			if (goal.taskList && goal.taskList.tasks.length > 0) {
+				const { total, done } = countFlatTasks(goal.taskList.tasks);
+				lines.push(t.fg("dim", `  tasks: ${done}/${total}`));
+				const firstPending = findFirstPending(goal.taskList.tasks);
+				if (firstPending) lines.push(t.fg("dim", `  next: ${firstPending.id} (${truncateText(firstPending.title, 40)})`));
+			}
+		} else {
+			lines.push(t.fg("dim", "  (no goal)"));
+		}
+
+		lines.push("");
+		lines.push(t.fg("dim", "── Debug keybindings ──"));
+		lines.push(t.fg("dim", "  Ctrl+Shift+X  Toggle debug mode"));
+		lines.push(t.fg("dim", "  Ctrl+Shift+N  Create test goal"));
+		lines.push(t.fg("dim", "  Ctrl+Shift+T  Inject sample tasks"));
+		lines.push(t.fg("dim", "  Ctrl+Shift+R  Mock audit animation"));
+		lines.push(t.fg("dim", "  Ctrl+Shift+O  Open proposal dialog"));
+
+		return lines;
+	}
+
 	render(width: number): string[] {
 		const settings = this.getSettings();
-		return renderGoalWidgetLines(this.getGoal(), this.theme, width, {
+		const lines = renderGoalWidgetLines(this.getGoal(), this.theme, width, {
 			openGoalCount: this.getOpenGoalCount(),
 			auditorProgress: this.getAuditorProgress(),
 			disableTasks: settings.disableTasks,
 		});
+		if (this.getDebugMode()) {
+			lines.push(...this.renderDebugPanel(width));
+		}
+		return lines;
 	}
 
 	invalidate(): void {

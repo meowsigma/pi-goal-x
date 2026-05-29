@@ -302,8 +302,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			if (matchesKey(data, Key.escape)) submit(true);
 		}
 
-		const MAX_CONTEXT_LINES = 12; // prevent viewport jumping by capping context display
-
 			function render(width: number): string[] {
 			if (cachedLines) return cachedLines;
 			const safeWidth = Math.max(20, width);
@@ -312,16 +310,109 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			const opts = displayOptions();
 			const add = (s: string) => lines.push(truncateToWidth(s, safeWidth, "…", true));
 			const addWrapped = (s: string) => lines.push(...wrapTextWithAnsi(s, safeWidth));
+			/**
+			 * Wraps a pipe-prefixed line and prepends "│   " to continuation lines
+			 * so wrapped content stays within the ASCII box.
+			 */
+			const addWrappedPipe = (styledLine: string) => {
+				const wrapped = wrapTextWithAnsi(styledLine, safeWidth);
+				for (let i = 0; i < wrapped.length; i++) {
+					lines.push(i === 0 ? wrapped[i] : "│   " + wrapped[i]);
+				}
+			};
 
-			/** Wraps text and caps at MAX_CONTEXT_LINES to prevent viewport jumping. */
-			const addContextWrapped = (s: string) => {
-				const wrapped = wrapTextWithAnsi(s, safeWidth);
-				if (wrapped.length <= MAX_CONTEXT_LINES) {
-					lines.push(...wrapped);
-				} else {
-					lines.push(...wrapped.slice(0, MAX_CONTEXT_LINES));
-					const overflow = wrapped.length - MAX_CONTEXT_LINES;
-					lines.push(theme.fg("dim", `  ... ${overflow} more line${overflow === 1 ? "" : "s"} (full details after confirmation)`));
+			/** Render context lines with per-line styling. No truncation. */
+			const renderContextLines = (context: string): void => {
+				const rawLines = context.split("\n");
+				for (const rawLine of rawLines) {
+					const trimmed = rawLine.trim();
+					// Empty line — preserve as spacing
+					if (!trimmed) {
+						lines.push("");
+						continue;
+					}
+
+					// 1. Announcement header — "● Goal draft/tweak ready for confirmation."
+					if (/^● Goal (draft|tweak) ready for confirmation\.$/.test(trimmed)) {
+						addWrapped(theme.fg("accent", rawLine));
+						continue;
+					}
+
+					// 2. Section marker — "─── Name ───" → full-width box-drawing header
+					const sectionMatch = trimmed.match(/^───\s+(.+?)\s+───$/);
+					if (sectionMatch) {
+						const sectionName = sectionMatch[1];
+						const namePart = ` ${sectionName} `;
+						const left = "┌─";
+						const right = "─┐";
+						const fill = Math.max(0, safeWidth - 2 - visibleWidth(left + namePart + right));
+						add(theme.fg("accent", left + namePart + "─".repeat(fill) + right));
+						continue;
+					}
+
+					// 3. Lines with │ prefix come from buildDraftConfirmationText / buildTweakConfirmationText.
+					if (trimmed.startsWith("│")) {
+						const afterPipe = trimmed.slice(1).trim();
+						// 3a. Task checkbox under │ prefix — detect before key-value to avoid
+						// "[x] t1: ..." being misinterpreted as a key-value pair.
+						const pipeTaskMatch = afterPipe.match(/^(\[.\])(\s+)(.+)$/);
+						if (pipeTaskMatch) {
+							const bracket = pipeTaskMatch[1];
+							const sep = pipeTaskMatch[2];
+							const rest = pipeTaskMatch[3];
+							// Preserve inner whitespace between │ and the task marker (e.g. "   " in "│   [x]...")
+							const pipeContent = trimmed.slice(1);
+							const innerWs = pipeContent.slice(0, pipeContent.length - pipeContent.trimStart().length);
+							const linePrefix = "│" + innerWs;
+							const color = bracket === "[x]" ? "success" : "warning";
+							addWrappedPipe(linePrefix + theme.fg(color, bracket) + sep + theme.fg("muted", rest));
+							continue;
+						}
+						// 3b. Key-value content (e.g. "│   Mode: Normal goal", "│   Auto-continue: yes")
+						if (afterPipe.includes(": ")) {
+							const colonIdx = afterPipe.indexOf(": ");
+							const val = afterPipe.slice(colonIdx + 2).trim();
+							const keyPart = rawLine.slice(0, rawLine.indexOf(afterPipe) + colonIdx + 2);
+							if (val === "yes" || val === "no") {
+								addWrappedPipe(theme.fg("muted", keyPart) + theme.fg(val === "yes" ? "success" : "warning", val));
+								continue;
+							}
+							addWrappedPipe(theme.fg("muted", rawLine));
+							continue;
+						}
+						// 3c. Generic content under │ prefix (topic, goal text, etc.)
+						addWrappedPipe(theme.fg("muted", rawLine));
+						continue;
+					}
+
+					// 4. Goal objective structure lines — detected before task checkboxes
+					// because === Goal could overlap with ─── markers but we already checked those.
+					const GOAL_SECTION_RE = /^(=== (Goal|Sisyphus Goal) ===|Objective:|Success criteria:|Boundaries:|Constraints:|Verification contract:|If blocked:)/;
+					if (GOAL_SECTION_RE.test(trimmed)) {
+						addWrapped(theme.fg("accent", rawLine));
+						continue;
+					}
+
+					// 5. Actual box-drawing borders (┌ └ ├ └ ┐ ┤ ┘ ─) — NOT │ which is handled above
+					if (/^[┌├└┐┤┘─]/.test(trimmed)) {
+						addWrapped(theme.fg("dim", rawLine));
+						continue;
+					}
+
+					// 6. Task checkbox item — "[ ] ...", "[x] ...", or "[~] ..." (with optional indent)
+					const checkMatch = trimmed.match(/^(\[.\])(\s+)(.+)$/);
+					if (checkMatch) {
+						const bracket = checkMatch[1];
+						const sep = checkMatch[2];
+						const rest = checkMatch[3];
+						const indent = rawLine.slice(0, rawLine.length - trimmed.length);
+						const color = bracket === "[x]" ? "success" : "warning";
+						addWrapped(indent + theme.fg(color, bracket) + sep + theme.fg("muted", rest));
+						continue;
+					}
+
+					// 7. Default: any remaining content (fallback)
+					addWrapped(theme.fg("muted", rawLine));
 				}
 			};
 
@@ -354,7 +445,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 
 			if (inputMode && q) {
 				addWrapped(theme.fg("text", ` ${q.question}`));
-				if (q.context) addContextWrapped(theme.fg("muted", ` ${q.context}`));
+				if (q.context) renderContextLines(q.context);
 				lines.push("");
 				if (q.options.length > 0) {
 					renderOptions();
@@ -375,7 +466,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				add(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
 			} else if (q) {
 				addWrapped(theme.fg("text", ` ${q.question}`));
-				if (q.context) addContextWrapped(theme.fg("muted", ` ${q.context}`));
+				if (q.context) renderContextLines(q.context);
 				// Auditor toggle line between context and options
 				if (auditorToggleInit) {
 					const circle = auditorEnabled ? "●" : "○";

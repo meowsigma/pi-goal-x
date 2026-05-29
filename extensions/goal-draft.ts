@@ -85,19 +85,29 @@ export function buildDraftConfirmationText(args: {
 }): string {
 	const lines: string[] = [];
 	const modeLabel = args.focus === "sisyphus" ? "Sisyphus (prompt/criteria style)" : "Normal goal";
-	lines.push("Goal draft ready for confirmation.");
+	lines.push("● Goal draft ready for confirmation.");
 	lines.push("");
-	lines.push("Draft details:");
-	lines.push(`Mode: ${modeLabel}`);
-	lines.push(`Auto-continue: ${args.autoContinue ? "yes" : "no"}`);
+	lines.push("─── Draft Details ───");
+	lines.push(`│   Mode: ${modeLabel}`);
+	lines.push(`│   Auto-continue: ${args.autoContinue ? "yes" : "no"}`);
 	lines.push("");
-	lines.push("Original topic:");
+	lines.push("─── Original Topic ───");
 	lines.push("");
-	lines.push(args.originalTopic.trim());
+	for (const topicLine of args.originalTopic.trim().split("\n")) {
+		if (topicLine.trim()) lines.push(`│   ${topicLine}`);
+	}
 	lines.push("");
-	lines.push("Proposed goal:");
+	lines.push("─── Proposed Goal ───");
 	lines.push("");
-	lines.push(args.objective);
+	for (const objLine of args.objective.split("\n")) {
+		const trimmed = objLine.trim();
+		if (!trimmed) continue;
+		if (trimmed.startsWith("│")) {
+			lines.push(objLine);
+		} else {
+			lines.push(`│   ${objLine}`);
+		}
+	}
 	return lines.join("\n");
 }
 
@@ -109,22 +119,40 @@ export function buildTweakConfirmationText(args: {
 }): string {
 	const lines: string[] = [];
 	const modeLabel = args.sisyphus ? "Sisyphus (prompt/criteria style)" : "Normal goal";
-	lines.push("Goal tweak ready for confirmation.");
+	lines.push("● Goal tweak ready for confirmation.");
 	lines.push("");
-	lines.push("Draft details:");
-	lines.push(`Mode: ${modeLabel}`);
+	lines.push("─── Draft Details ───");
+	lines.push(`│   Mode: ${modeLabel}`);
 	lines.push("");
-	lines.push("Change:");
+	lines.push("─── Change ───");
 	lines.push("");
-	lines.push(args.changeSummary);
+	for (const changeLine of args.changeSummary.split("\n")) {
+		if (changeLine.trim()) lines.push(`│   ${changeLine}`);
+	}
 	lines.push("");
-	lines.push("Current objective:");
+	lines.push("─── Current Objective ───");
 	lines.push("");
-	lines.push(args.currentObjective);
+	for (const curLine of args.currentObjective.split("\n")) {
+		const trimmed = curLine.trim();
+		if (!trimmed) continue;
+		if (trimmed.startsWith("│")) {
+			lines.push(curLine);
+		} else {
+			lines.push(`│   ${curLine}`);
+		}
+	}
 	lines.push("");
-	lines.push("Proposed new objective:");
+	lines.push("─── Proposed New Objective ───");
 	lines.push("");
-	lines.push(args.newObjective);
+	for (const newLine of args.newObjective.split("\n")) {
+		const trimmed = newLine.trim();
+		if (!trimmed) continue;
+		if (trimmed.startsWith("│")) {
+			lines.push(newLine);
+		} else {
+			lines.push(`│   ${newLine}`);
+		}
+	}
 	return lines.join("\n");
 }
 

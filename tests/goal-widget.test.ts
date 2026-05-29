@@ -12,6 +12,9 @@ const theme = {
 
 function goal(overrides: Partial<GoalWidgetRecord> = {}): GoalWidgetRecord {
 	return {
+		id: "test-goal-001",
+		createdAt: "2026-01-01T00:00:00.000Z",
+		updatedAt: "2026-01-01T00:00:00.000Z",
 		objective: "=== Goal ===\nObjective: Componentize the goal widget\nSuccess criteria: tests pass",
 		status: "active",
 		autoContinue: true,

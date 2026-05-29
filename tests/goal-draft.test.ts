@@ -37,13 +37,13 @@ test("buildDraftConfirmationText previews mode, original topic, and proposed goa
 		autoContinue: true,
 	});
 
-	assert.match(summary, /^Goal draft ready for confirmation\./);
+	assert.match(summary, /^● Goal draft ready for confirmation\./);
 	assert.match(summary, /Mode: Sisyphus/);
 	assert.match(summary, /Auto-continue: yes/);
-	assert.match(summary, /Original topic:\n\nfirst line\nsecond line/);
-	assert.match(summary, /Proposed goal:/);
-	assert.match(summary, /Objective: Ship safely/);
-	assert.doesNotMatch(summary, /\*\*|---|^> /m);
+	assert.match(summary, /─── Original Topic ───\n\n│   first line\n│   second line/);
+	assert.match(summary, /─── Proposed Goal ───/);
+	assert.match(summary, /│   Objective: Ship safely/);
+	assert.doesNotMatch(summary, /^> /m);
 });
 
 test("validateGoalDraftProposal rejects missing confirmation intent but allows multiple unfinished goals", () => {
@@ -175,16 +175,16 @@ test("buildTweakConfirmationText renders normal mode with current objective, cha
 		sisyphus: false,
 	});
 
-	assert.match(text, /^Goal tweak ready for confirmation\./);
+	assert.match(text, /^● Goal tweak ready for confirmation\./);
 	assert.match(text, /Mode: Normal goal/);
-	assert.match(text, /Change:/);
+	assert.match(text, /─── Change ───/);
 	assert.match(text, /Added constraints section, updated objective from X to Y/);
-	assert.match(text, /Current objective:/);
+	assert.match(text, /─── Current Objective ───/);
 	assert.match(text, /Build feature X/);
-	assert.match(text, /Proposed new objective:/);
+	assert.match(text, /─── Proposed New Objective ───/);
 	assert.match(text, /Build feature Y/);
 	assert.match(text, /Constraints: no globals/);
-	assert.doesNotMatch(text, /\*\*|---|^> /m);
+	assert.doesNotMatch(text, /^> /m);
 });
 
 test("buildTweakConfirmationText renders sisyphus mode with correct label", () => {
@@ -210,8 +210,8 @@ test("buildTweakConfirmationText rejects empty current objective by showing empt
 		sisyphus: false,
 	});
 
-	assert.match(text, /Current objective:\n\n(\n|$)/);
-	assert.match(text, /Proposed new objective:/);
+	assert.match(text, /─── Current Objective ───/);
+	assert.match(text, /─── Proposed New Objective ───/);
 	assert.match(text, /New/);
 });
 

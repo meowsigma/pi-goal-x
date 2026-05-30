@@ -77,7 +77,8 @@ export async function showEscapeDialog(
 
 					// ── Header ────────────────────────────────────────────────
 					lines.push(accent(`┌${horizLine}┐`));
-					lines.push(line(p + theme.bold("Audit interrupted by Escape") + dim("  (continue = default)")));
+					const headerContent = p + theme.bold("Audit interrupted by Escape") + dim("  (continue = default)");
+					lines.push(line(truncateToWidth(headerContent, innerWidth, "…")));
 					const truncatedObjective = truncateToWidth(goalObjective, innerWidth - 14, "…");
 					lines.push(line(p + dim("Goal: ") + dim(truncatedObjective)));
 					lines.push(accent(`├${horizLine}┤`));

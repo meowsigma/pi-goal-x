@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { showEscapeDialog } from "../extensions/widgets/goal-escape-dialog.ts";
-import type { Component } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { createMockExtensionContext, createMockTUI, createMockTheme } from "./tui-test-utils.ts";
 import type { MockExtensionContext } from "./tui-test-utils.ts";
 
@@ -231,6 +231,51 @@ test("escape dialog component dispose restores hardware cursor", async () => {
 	component.dispose?.();
 	const lastCall = tuiState.setShowHardwareCursorCalls[tuiState.setShowHardwareCursorCalls.length - 1];
 	assert.equal(lastCall, false, "Hardware cursor restored after dispose");
+});
+
+for (const testWidth of [50, 60, 70, 80, 90, 109]) {
+	test(`escape dialog renders without overflow at width ${testWidth}`, async () => {
+		// Short objective
+		const ctx1 = createMockExtensionContext();
+		const p1 = showEscapeDialog(ctx1, "Short");
+		const rec1 = ctx1._customCalls[0];
+		const { tui } = createMockTUI();
+		const theme = createMockTheme();
+		const comp1 = rec1.factory(tui, theme, undefined, () => {}) as Component;
+		const lines = comp1.render(testWidth);
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i]) {
+				const w = visibleWidth(lines[i]);
+				assert.ok(
+					w <= testWidth,
+					`Short objective at width ${testWidth}, line ${i}: visibleWidth=${w} > ${testWidth}`,
+				);
+			}
+		}
+	});
+}
+
+test("escape dialog with extreme-length objective at various widths", async () => {
+	const { tui } = createMockTUI();
+	const theme = createMockTheme();
+
+	for (const testWidth of [50, 60, 70, 80, 90, 109]) {
+		const ctx = createMockExtensionContext();
+		const p = showEscapeDialog(ctx, "A very long objective that should definitely overflow at narrow terminal widths if there's a bug in the rendering code. ".repeat(10));
+		const rec = ctx._customCalls[0];
+		const comp = rec.factory(tui, theme, undefined, () => {}) as Component;
+
+		const lines = comp.render(testWidth);
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i]) {
+				const w = visibleWidth(lines[i]);
+				assert.ok(
+					w <= testWidth,
+					`Long objective at width ${testWidth}, line ${i}: visibleWidth=${w} > ${testWidth}`,
+				);
+			}
+		}
+	}
 });
 
 test("escape dialog renders various objective lengths without error", async () => {

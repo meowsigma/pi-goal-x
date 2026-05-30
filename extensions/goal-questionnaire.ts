@@ -314,10 +314,13 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			 * Wraps a pipe-prefixed line and prepends "│   " to continuation lines
 			 * so wrapped content stays within the ASCII box.
 			 */
+			const PIPE_PREFIX = "│   ";
+			const PIPE_WIDTH = visibleWidth(PIPE_PREFIX);
 			const addWrappedPipe = (styledLine: string) => {
-				const wrapped = wrapTextWithAnsi(styledLine, safeWidth);
+				const wrapWidth = Math.max(1, safeWidth - PIPE_WIDTH);
+				const wrapped = wrapTextWithAnsi(styledLine, wrapWidth);
 				for (let i = 0; i < wrapped.length; i++) {
-					lines.push(i === 0 ? wrapped[i] : "│   " + wrapped[i]);
+					lines.push(i === 0 ? wrapped[i] : PIPE_PREFIX + wrapped[i]);
 				}
 			};
 
@@ -488,6 +491,12 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				add(theme.fg("dim", isMulti ? " Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel" + auditorHint : " ↑↓ navigate • Enter select • Esc cancel" + auditorHint));
 			}
 			add(theme.fg("accent", "─".repeat(safeWidth)));
+			// Safety net: ensure no returned line exceeds the terminal width
+			for (let i = 0; i < lines.length; i++) {
+				if (lines[i] && visibleWidth(lines[i]) > safeWidth) {
+					lines[i] = truncateToWidth(lines[i], safeWidth);
+				}
+			}
 			cachedLines = lines;
 			return lines;
 		}

@@ -450,25 +450,76 @@ test("GoalWidgetComponent shows completed goal status", () => {
 	assert.match(lines[0], /Goal complete/);
 });
 
-test("GoalWidgetComponent safety net truncates any line exceeding width", () => {
+for (const width of [50, 70, 100, 109, 120]) {
+	test(`GoalWidgetComponent safety net at width ${width} with long content`, () => {
+		const { tui } = createMockTUI();
+		const component = new GoalWidgetComponent({
+			tui,
+			theme: createMockTheme(),
+			getGoal: () => goal({
+				objective: "x".repeat(500),
+				activePath: "/very/long/path/that/should/definitely/be/truncated/because/it/exceeds/the/available/width/by/a/lot/and/would/cause/a/crash/if/not/truncated".repeat(3),
+			}),
+			getOpenGoalCount: () => 8,
+			getSettings: () => ({}),
+		});
+
+		const lines = component.render(width);
+		for (let i = 0; i < lines.length; i++) {
+			assert.ok(
+				visibleWidth(lines[i]) <= width,
+				`Line ${i} has visible width ${visibleWidth(lines[i])} > ${width}: ${JSON.stringify(lines[i].slice(0, 80))}`,
+			);
+		}
+	});
+}
+
+test("GoalWidgetComponent with auditor progress at width 109 (crash regression)", () => {
 	const { tui } = createMockTUI();
-	// Render at a narrow width with very long content
+	const width = 109; // Matches the crash terminal width
 	const component = new GoalWidgetComponent({
 		tui,
 		theme: createMockTheme(),
 		getGoal: () => goal({
-			objective: "x".repeat(500),
-			activePath: "/very/long/path/that/should/definitely/be/truncated/because/it/exceeds/the/available/width/by/a/lot/and/would/cause/a/crash/if/not/truncated".repeat(3),
+			objective: "Achieve full end-to-end test suite pass on Linux x86_64 with 100% vendor parity — all e2e pass (no skips). The constraints should be exactly those as per the design document and the previous goals. We need to dissassemble the vendor's implementation live, stepping through, to ensure we implement this in full.".repeat(2),
+			activePath: "/Users/tom/projects/some-very-long-project-path-that-exceeds-terminal-width/when-combined-with-prefix-characters/and-wrapping-scenarios/src/extremely/nested/deeply/nested/module/that/makes/this/really/long/really/long/really/long.ts".repeat(2),
 		}),
 		getOpenGoalCount: () => 1,
 		getSettings: () => ({}),
+		getAuditorProgress: () => ({
+			phase: "thinking" as const,
+			label: "Very long auditor label that should not cause an overflow even when rendered at narrow terminal width with all the prefixes and padding",
+			percentage: 45,
+			recentOutput: [],
+			elapsedMs: 5000,
+		}),
 	});
 
-	const lines = component.render(50);
+	const lines = component.render(width);
 	for (let i = 0; i < lines.length; i++) {
 		assert.ok(
-			visibleWidth(lines[i]) <= 50,
-			`Line ${i} has visible width ${visibleWidth(lines[i])} > 50: ${JSON.stringify(lines[i].slice(0, 60))}`,
+			lines[i] === "" || visibleWidth(lines[i]) <= width,
+			`Line ${i} has visible width ${visibleWidth(lines[i])} > ${width}: ${JSON.stringify(lines[i].slice(0, 80))}`,
+		);
+	}
+});
+
+test("GoalWidgetComponent unfocused with 38 open goals at width 109", () => {
+	const { tui } = createMockTUI();
+	const width = 109;
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => undefined,
+		getOpenGoalCount: () => 38,
+		getSettings: () => ({}),
+	});
+
+	const lines = component.render(width);
+	for (let i = 0; i < lines.length; i++) {
+		assert.ok(
+			lines[i] === "" || visibleWidth(lines[i]) <= width,
+			`Line ${i} has visible width ${visibleWidth(lines[i])} > ${width}: ${JSON.stringify(lines[i].slice(0, 80))}`,
 		);
 	}
 });

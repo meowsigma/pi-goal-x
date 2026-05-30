@@ -8,6 +8,12 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.2] — 2026-05-29
+
+### Changed
+
+- **Co-proposal prompt guidance** — the drafting protocol in `goal-draft.ts` and the continuation prompt in `goal-prompts.ts` now instruct agents to include the task list in the `tasks` parameter of `propose_goal_draft` when the objective decomposes into milestones. The old guidance encouraging `propose_task_list` after goal confirmation has been removed.
+
 ## [0.18.1] — 2026-05-29
 
 ### Fixed

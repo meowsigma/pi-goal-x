@@ -112,6 +112,7 @@ import {
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { GoalWidgetComponent, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
+import { showTaskListOverlay } from "./widgets/task-list-overlay.ts";
 
 import {
 	abortGoalCommandMessage,
@@ -987,6 +988,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 			if (matchesKey(data, "escape") && state.goal?.status === "active" && state.goal.autoContinue) {
 				pauseActiveGoal(ctx);
+				return { consume: true };
+			}
+
+			// Ctrl+Shift+T — show task list overlay for all open goals
+			if (matchesKey(data, "ctrl+shift+t")) {
+				showTaskListOverlay(ctx, goalsById);
 				return { consume: true };
 			}
 

@@ -130,7 +130,11 @@ ${untrustedObjectiveBlock(goal)}
 
 Available work tools for pursuing the active goal include write, read, bash, and edit. Use those tools directly for file and shell work; do not call get_goal repeatedly to discover tools.
 
-After goal confirmation, you may call propose_task_list once to set up an initial task list if the objective decomposes into trackable milestones. If a task list already exists, only restructure it when the user asks or the goal structurally changes — do not restructure autonomously. Do not add a task list for simple, single-step goals.
+If the objective naturally decomposes into trackable milestones, you MUST include the task list in the tasks parameter of propose_goal_draft so the user can accept both goal and tasks in a single confirmation dialog. Do NOT propose the goal without tasks and then call propose_task_list separately. For simple single-step goals, no task list is required.
+
+If a task list already exists, only restructure it when the user asks or the goal structurally changes — do not restructure autonomously.
+
+After goal creation, propose_task_list is still available for user-requested task additions or structural changes.
 
 [TASK WORKFLOW]
 Use tasks and subtasks as PROGRESS TRACKERS during your work — not as a post-hoc checklist to batch-mark at the end. As soon as you finish a concrete unit of work that corresponds to a task or subtask, call complete_task immediately with evidence of what you did. The system enforces that all subtasks must be completed (or skipped) before their parent task can be completed, so work from the leaves up: finish subtasks first, then mark the parent task complete. If a subtask is blocked and cannot proceed, call pause_goal rather than skipping it. This keeps the task list accurate and prevents the "all work done, now batch-mark everything" pattern.

@@ -8,6 +8,22 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.3] — 2026-05-30
+
+### Fixed
+
+- **`addWrappedPipe` overflow in questionnaire** — `addWrappedPipe` in `goal-questionnaire.ts` was wrapping content at the full terminal width then prepending `│   ` (4 visible chars) to continuation lines, causing a terminal-width overflow crash (visibleWidth > safeWidth). Fixed by wrapping at `safeWidth - pipeWidth` so continuation lines with the pipe prefix stay within bounds.
+
+- **Escape dialog header overflow** — the header text `"Audit interrupted by Escape  (continue = default)"` (53 visible chars) was not truncated to `innerWidth` at narrow terminal widths, causing overflow. Fixed by adding `truncateToWidth()` to the header line.
+
+### Added
+
+- **Overflow regression tests** (`tests/overflow-regression.test.ts`) — 20 new tests covering the `addWrappedPipe` fix at every width 20-120, with styled ANSI content, CJK wide characters, mixed content, single long words, exact wrap boundaries, whitespace handling, minimum width, and the exact crash scenario reproduction. Also covers `truncateToWidth` safety net at every width 1-120, with ANSI codes, and CJK chars.
+
+- **Escape dialog overflow regression tests** (`tests/goal-escape-dialog.test.ts`) — parameterized tests at widths 50/60/70/80/90/109 asserting no rendered line exceeds the terminal width.
+
+- **Widget overflow regression tests** (`tests/goal-widget.test.ts`) — parameterized widget safety net tests at widths 50/70/100/109/120, auditor progress crash regression, and unfocused widget with 38 open goals at width 109.
+
 ## [0.18.2] — 2026-05-29
 
 ### Changed

@@ -100,6 +100,8 @@ describe("Extension E2E", () => {
 	const registeredTools: ToolDefinition[] = [];
 	const lifecycleHandlers = new Map<string, Function>();
 	let apiCalls: Array<{ type: string; data?: unknown }> = [];
+	// Track active tools like real SDK — starts with base work tools
+	let activeToolNames: string[] = ["read", "bash", "edit", "write"];
 
 	const mockPi = {
 		registerTool: (def: ToolDefinition) => { registeredTools.push(def); },
@@ -110,8 +112,8 @@ describe("Extension E2E", () => {
 		},
 		registerMessageRenderer: () => {},
 		sendMessage: () => {},
-		getActiveTools: () => new Map(),
-		setActiveTools: () => {},
+		getActiveTools: () => [...activeToolNames],
+		setActiveTools: (names: string[]) => { activeToolNames = [...names]; },
 		hasUI: false,
 	};
 

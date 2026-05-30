@@ -445,7 +445,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	function syncGoalTools(): void {
 		try {
-			const active = new Set(pi.getActiveTools());
+			const initialTools = pi.getActiveTools();
+			if (!Array.isArray(initialTools)) {
+				console.error("[pi-goal] syncGoalTools: pi.getActiveTools() did not return an array, got", typeof initialTools);
+				return;
+			}
+			const active = new Set(initialTools);
 			for (const name of goalExecutionWorkTools) active.add(name);
 			active.delete(QUESTION_TOOL_NAME);
 			active.delete(QUESTIONNAIRE_TOOL_NAME);
@@ -468,7 +473,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (!state.goal || state.goal.status === "complete") {
 				active.delete(PROPOSE_TWEAK_TOOL_NAME);
 			}
-	
+
 			// Keep the commit tool available and let its validator enforce that a
 			// drafting flow is active. This avoids fragile hidden-tool drift after
 			// question turns, compaction, or active-tool resync.
@@ -484,7 +489,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				active.add(QUESTIONNAIRE_TOOL_NAME);
 			}
 			pi.setActiveTools(Array.from(active));
-		} catch {}
+		} catch (err) {
+			console.error("[pi-goal] syncGoalTools error:", err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	function stopAuditAnimation(): void {

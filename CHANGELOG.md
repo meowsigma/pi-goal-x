@@ -8,21 +8,33 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
-## [0.18.3] — 2026-05-30
-
-### Fixed
-
-- **`addWrappedPipe` overflow in questionnaire** — `addWrappedPipe` in `goal-questionnaire.ts` was wrapping content at the full terminal width then prepending `│   ` (4 visible chars) to continuation lines, causing a terminal-width overflow crash (visibleWidth > safeWidth). Fixed by wrapping at `safeWidth - pipeWidth` so continuation lines with the pipe prefix stay within bounds.
-
-- **Escape dialog header overflow** — the header text `"Audit interrupted by Escape  (continue = default)"` (53 visible chars) was not truncated to `innerWidth` at narrow terminal widths, causing overflow. Fixed by adding `truncateToWidth()` to the header line.
+## [0.18.3] — 2026-05-31
 
 ### Added
+
+- **Task list overlay (`Ctrl+Shift+T`)** — a scrollable modal overlay showing all tasks for open goals, triggered by `Ctrl+Shift+T`. Includes status icons (✓ complete, ◌ pending, — skipped), tree branch lines for subtasks, scroll indicators (▴/▾), keyboard navigation (↑↓/jk/PgUp/PgDn/Home/End), and Esc/Enter to dismiss. All styling uses TUI theme colors. (`extensions/widgets/task-list-overlay.ts`)
+
+- **Default to current goal, 'a' toggle** — the overlay now defaults to showing only the focused goal's tasks. Pressing `a` toggles between "current goal" and "all open goals" views. Footer shows context-sensitive hint ("show all" / "show current"). Scroll position resets on toggle. (`extensions/widgets/task-list-overlay.ts`)
+
+- **Text wrapping for long titles** — `wrapTextWithAnsi` replaced truncation in the overlay. Task titles and goal headers wrap at word boundaries with continuation-line indentation. Goal status labels overflow to their own dim line when the title is long. (`extensions/widgets/task-list-overlay.ts`)
+
+- **Lifecycle tool visibility tests** — comprehensive test suite in `tests/goal-tool-names.test.ts` (94 new tests) covering all status × phase combinations for goal lifecycle tools (pause, complete, abort, propose_goal_tweak, propose_task_list, complete_task, skip_task). `tests/goal-tool-visibility.test.ts` (391 new tests) covers lifecycle event-driven tool visibility. (`tests/goal-tool-names.test.ts`, `tests/goal-tool-visibility.test.ts`)
 
 - **Overflow regression tests** (`tests/overflow-regression.test.ts`) — 20 new tests covering the `addWrappedPipe` fix at every width 20-120, with styled ANSI content, CJK wide characters, mixed content, single long words, exact wrap boundaries, whitespace handling, minimum width, and the exact crash scenario reproduction. Also covers `truncateToWidth` safety net at every width 1-120, with ANSI codes, and CJK chars.
 
 - **Escape dialog overflow regression tests** (`tests/goal-escape-dialog.test.ts`) — parameterized tests at widths 50/60/70/80/90/109 asserting no rendered line exceeds the terminal width.
 
 - **Widget overflow regression tests** (`tests/goal-widget.test.ts`) — parameterized widget safety net tests at widths 50/70/100/109/120, auditor progress crash regression, and unfocused widget with 38 open goals at width 109.
+
+### Fixed
+
+- **`syncGoalTools` bare `try-catch`** — the catch block in `syncGoalTools` was silently swallowing errors from `getActiveTools()` and subsequent `addTool`/`removeTool` calls. Replaced with a logging catch and added a defensive `Array.isArray` guard on the `getActiveTools()` return value so type mismatches (e.g., `Map` instead of `string[]`) don't corrupt tool state.
+
+- **e2e mock tool tracking** — `getActiveTools()` in the e2e mock was returning a `Map` instead of `string[]`, and `setActiveTools` was a no-op, preventing `syncGoalTools` from properly tracking lifecycle tool visibility. Fixed to return `string[]` and update internal state.
+
+- **`addWrappedPipe` overflow in questionnaire** — `addWrappedPipe` in `goal-questionnaire.ts` was wrapping content at the full terminal width then prepending `│   ` (4 visible chars) to continuation lines, causing a terminal-width overflow crash (visibleWidth > safeWidth). Fixed by wrapping at `safeWidth - pipeWidth` so continuation lines with the pipe prefix stay within bounds.
+
+- **Escape dialog header overflow** — the header text `"Audit interrupted by Escape  (continue = default)"` (53 visible chars) was not truncated to `innerWidth` at narrow terminal widths, causing overflow. Fixed by adding `truncateToWidth()` to the header line.
 
 ## [0.18.2] — 2026-05-29
 
@@ -496,6 +508,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 <!-- Version links for navigation -->
 
+[0.18.3]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.18.3
 [0.16.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.16.0
 [0.15.1]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.15.1
 [0.15.0]: https://github.com/tmonk/pi-goal-x/releases/tag/v0.15.0

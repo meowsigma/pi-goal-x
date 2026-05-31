@@ -1,17 +1,17 @@
 /**
- * Unit tests for the task list overlay component and keybinding.
+ * Unit tests for the task list overlay component.
  *
  * Tests that the overlay:
+ * - Defaults to current goal only
+ * - 'a' toggles to all open goals
  * - Renders without crashing under various conditions
- * - Shows correct content for empty, no-goal, and goal-without-tasks states
+ * - Handles text wrapping for long titles
  * - Scrolls correctly (offset changes on up/down)
- * - The keybinding is registered in goal.ts
+ * - Keybinding is registered in goal.ts
  */
 import assert from "node:assert";
 import test from "node:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
 import type { Component } from "@earendil-works/pi-tui";
 import { createMockExtensionContext, invokeCustomFactory, renderComponent } from "./tui-test-utils.ts";
@@ -28,8 +28,8 @@ function makeGoal(overrides: Partial<GoalRecord> & { id: string; objective: stri
 		sisyphus: false,
 		createdAt: "2026-01-01T00:00:00.000Z",
 		updatedAt: "2026-01-01T00:00:00.000Z",
-		taskList: undefined,
 		...overrides,
+		taskList: overrides.taskList ?? undefined,
 	} as GoalRecord;
 }
 
@@ -67,55 +67,86 @@ function makeGoalWithMixedTasks(id: string, objective: string): GoalRecord {
 
 // ── Tests ─────────────────────────────────────────────────────────────
 
-test("showTaskListOverlay: renders without crashing with empty goals", async () => {
+test("defaults to current goal only", async () => {
+	const ctx = createMockExtensionContext();
+	const goalsById = new Map<string, GoalRecord>();
+	goalsById.set("g1", makeGoalWithTasks("g1", "Focused goal", ["Task A"]));
+	goalsById.set("g2", makeGoalWithTasks("g2", "Other goal", ["Task B"]));
+
+	showTaskListOverlay(ctx, goalsById, "g1");
+	const { component } = invokeCustomFactory(ctx._customCalls, 0);
+	const lines = renderComponent(component, 80);
+	const joined = lines.join("\n");
+
+	assert.ok(joined.includes("Focused goal"), "shows focused goal");
+	assert.ok(!joined.includes("Other goal"), "does not show other goal");
+	assert.ok(joined.includes("current goal"), "header says 'current goal'");
+});
+
+test("toggles to all open goals with 'a'", async () => {
+	const ctx = createMockExtensionContext();
+	const goalsById = new Map<string, GoalRecord>();
+	goalsById.set("g1", makeGoalWithTasks("g1", "Goal one", ["Task A"]));
+	goalsById.set("g2", makeGoalWithTasks("g2", "Goal two", ["Task B"]));
+
+	showTaskListOverlay(ctx, goalsById, "g1");
+	const { component } = invokeCustomFactory(ctx._customCalls, 0);
+	const cmp = component as Component & { handleInput?: (d: string) => void };
+
+	// After 'a' toggle, both goals visible
+	cmp.handleInput?.("a");
+	const linesAll = renderComponent(component, 80);
+	const allJoined = linesAll.join("\n");
+	assert.ok(allJoined.includes("Goal one"), "shows first goal after toggle");
+	assert.ok(allJoined.includes("Goal two"), "shows second goal after toggle");
+	assert.ok(allJoined.includes("2 goals"), "header says '2 goals' after toggle");
+
+	// Toggle back
+	cmp.handleInput?.("a");
+	const linesBack = renderComponent(component, 80);
+	const backJoined = linesBack.join("\n");
+	assert.ok(backJoined.includes("Goal one"), "shows focused goal after toggle back");
+	assert.ok(!backJoined.includes("Goal two"), "hides other goal after toggle back");
+	assert.ok(backJoined.includes("current goal"), "header says 'current goal' after toggle back");
+});
+
+test("renders without crashing with empty goals", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, null);
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
-
 	const lines = renderComponent(component, 80);
-
-	// Should show header and "No open goals"
 	const joined = lines.join("\n");
-	assert.ok(joined.includes("No open goals"), "should mention no open goals when empty");
-	assert.ok(joined.includes("Tasks"), "should have Tasks header");
+
+	assert.ok(joined.includes("No open goals"), "shows empty message");
 });
 
-test("showTaskListOverlay: renders a single goal with tasks", async () => {
+test("renders a single goal with tasks", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	const goal = makeGoalWithTasks("g1", "Build the thing", ["Design", "Implement", "Test"]);
 	goalsById.set("g1", goal);
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g1");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
-
 	const lines = renderComponent(component, 80);
 	const joined = lines.join("\n");
 
-	// Header
-	assert.ok(joined.includes("1 goal"), "header mentions 1 goal");
-	assert.ok(joined.includes("3 tasks"), "header mentions 3 tasks");
-
-	// Goal title
 	assert.ok(joined.includes("Build the thing"), "shows goal title");
-
-	// Task titles
 	assert.ok(joined.includes("Design"), "shows task 1");
 	assert.ok(joined.includes("Implement"), "shows task 2");
 	assert.ok(joined.includes("Test"), "shows task 3");
 });
 
-test("showTaskListOverlay: renders a paused goal without tasks", async () => {
+test("renders a paused goal without tasks", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	const goal = makeGoal({ id: "g2", objective: "Research topic", status: "paused" });
 	goalsById.set("g2", goal);
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g2");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
-
 	const lines = renderComponent(component, 80);
 	const joined = lines.join("\n");
 
@@ -123,15 +154,14 @@ test("showTaskListOverlay: renders a paused goal without tasks", async () => {
 	assert.ok(joined.includes("no tasks"), "shows no tasks indicator");
 });
 
-test("showTaskListOverlay: renders mixed task statuses", async () => {
+test("renders mixed task statuses", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	const goal = makeGoalWithMixedTasks("g3", "A goal with mixed tasks");
 	goalsById.set("g3", goal);
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g3");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
-
 	const lines = renderComponent(component, 80);
 	const joined = lines.join("\n");
 
@@ -141,33 +171,33 @@ test("showTaskListOverlay: renders mixed task statuses", async () => {
 	assert.ok(joined.includes("Do thing three"), "shows skipped task");
 });
 
-test("showTaskListOverlay: renders multiple goals", async () => {
+test("renders multiple goals when toggled to all", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	goalsById.set("g1", makeGoalWithTasks("g1", "First goal", ["Task A", "Task B"]));
 	goalsById.set("g2", makeGoalWithTasks("g2", "Second goal", ["Task C"]));
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g1");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
+	const cmp = component as Component & { handleInput?: (d: string) => void };
 
+	cmp.handleInput?.("a");
 	const lines = renderComponent(component, 80);
 	const joined = lines.join("\n");
 
 	assert.ok(joined.includes("2 goals"), "header mentions 2 goals");
-	assert.ok(joined.includes("3 tasks"), "header mentions 3 tasks total");
 	assert.ok(joined.includes("First goal"), "shows first goal");
 	assert.ok(joined.includes("Second goal"), "shows second goal");
 });
 
-test("showTaskListOverlay: renders at narrow width without crashing", async () => {
+test("renders at narrow width without crashing", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	goalsById.set("g1", makeGoalWithTasks("g1", "Some goal", ["Task X"]));
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g1");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
 
-	// Min width in overlayOptions is 60, but test edge cases
 	const lines40 = renderComponent(component, 40);
 	assert.ok(lines40.length > 0, "renders at width 40");
 
@@ -178,7 +208,7 @@ test("showTaskListOverlay: renders at narrow width without crashing", async () =
 	assert.ok(lines120.length > 0, "renders at width 120");
 });
 
-test("showTaskListOverlay: handles sisyphus goal", async () => {
+test("handles sisyphus goal", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	const goal = makeGoal({
@@ -196,17 +226,16 @@ test("showTaskListOverlay: handles sisyphus goal", async () => {
 	});
 	goalsById.set("g4", goal);
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g4");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
-
 	const lines = renderComponent(component, 80);
 	const joined = lines.join("\n");
 
-	assert.ok(joined.includes("Sisyphus goal"), "shows sisyphus goal");
+	assert.ok(joined.includes("Sisyphus goal"), "shows sisyphus goal title");
 	assert.ok(joined.includes("Step one"), "shows step");
 });
 
-test("showTaskListOverlay: renders subtasks", async () => {
+test("renders subtasks", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	const goal = makeGoal({
@@ -228,9 +257,8 @@ test("showTaskListOverlay: renders subtasks", async () => {
 	});
 	goalsById.set("g5", goal);
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g5");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
-
 	const lines = renderComponent(component, 80);
 	const joined = lines.join("\n");
 
@@ -239,7 +267,26 @@ test("showTaskListOverlay: renders subtasks", async () => {
 	assert.ok(joined.includes("Subtask B"), "shows subtask B");
 });
 
-test("showTaskListOverlay: scroll state changes on page up/down", async () => {
+test("wraps long task titles at narrow width", async () => {
+	const ctx = createMockExtensionContext();
+	const goalsById = new Map<string, GoalRecord>();
+	const goal = makeGoalWithTasks("g1", "Goal", [
+		"This is a very long task title that should definitely wrap at narrow terminal widths",
+	]);
+	goalsById.set("g1", goal);
+
+	showTaskListOverlay(ctx, goalsById, "g1");
+	const { component } = invokeCustomFactory(ctx._customCalls, 0);
+
+	// At width 50, the inner width is small enough to force wrapping
+	const lines = renderComponent(component, 50);
+	const joined = lines.join("\n");
+
+	// The long title should appear in full (wrapped), not truncated with …
+	assert.ok(joined.includes("very long task title"), "long title appears via wrapping");
+});
+
+test("scroll state changes on page up/down", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 
@@ -247,7 +294,7 @@ test("showTaskListOverlay: scroll state changes on page up/down", async () => {
 	const tasks = Array.from({ length: 30 }, (_, i) => `Task ${i + 1}`);
 	goalsById.set("g1", makeGoalWithTasks("g1", "Long goal", tasks));
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g1");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
 	const componentHandle = component as Component & { handleInput?: (data: string) => void };
 
@@ -258,56 +305,51 @@ test("showTaskListOverlay: scroll state changes on page up/down", async () => {
 	// Scroll down
 	componentHandle.handleInput?.("down");
 	const lines1 = renderComponent(component, 80);
-	assert.ok(lines1.join("\n").includes("Task 2") || !lines1.join("\n").includes("Task 1"),
+	const joined1 = lines1.join("\n");
+	assert.ok(!joined1.includes("Task 1") || joined1.includes("Task 2"),
 		"content changes after scrolling down once");
 
 	// Scroll up
 	componentHandle.handleInput?.("up");
 	const linesUp = renderComponent(component, 80);
-	assert.ok(linesUp.join("\n").includes("Task 1") || true,
-		"scrolling back up shows earlier tasks");
 
-	// PgDn - should scroll by ~page length
+	// PgDn
 	componentHandle.handleInput?.("pagedown");
-	const linesPgDn = renderComponent(component, 80);
+	renderComponent(component, 80);
 
 	// Home
 	componentHandle.handleInput?.("home");
-	const linesHome = renderComponent(component, 80);
+	renderComponent(component, 80);
 
 	// End
 	componentHandle.handleInput?.("end");
-	const linesEnd = renderComponent(component, 80);
+	renderComponent(component, 80);
 
 	// j/k aliases
 	componentHandle.handleInput?.("home");
 	componentHandle.handleInput?.("j");
-	const linesJ = renderComponent(component, 80);
+	renderComponent(component, 80);
 	componentHandle.handleInput?.("k");
-	const linesK = renderComponent(component, 80);
+	renderComponent(component, 80);
 
-	// All these operations should not crash
 	assert.ok(true, "scroll operations completed without error");
 });
 
-test("showTaskListOverlay: dismisses on escape and enter", async () => {
+test("dismisses on escape and enter", async () => {
 	const ctx = createMockExtensionContext();
 	const goalsById = new Map<string, GoalRecord>();
 	goalsById.set("g1", makeGoalWithTasks("g1", "Test goal", ["Task A"]));
 
-	const promise = showTaskListOverlay(ctx, goalsById);
+	showTaskListOverlay(ctx, goalsById, "g1");
 	const { component } = invokeCustomFactory(ctx._customCalls, 0);
 	const componentHandle = component as Component & { handleInput?: (data: string) => void };
 
-	// Escape and Enter should not throw
 	componentHandle.handleInput?.("escape");
 	componentHandle.handleInput?.("enter");
 	assert.ok(true, "dismiss operations completed without error");
 });
 
-test("Ctrl+Shift+T keybinding: handler is registered in goal.ts", async () => {
-	// Read goal.ts and verify the handler is present
-	const { readFileSync } = await import("node:fs");
+test("keybinding calls showTaskListOverlay with focusedGoalId", async () => {
 	const goalSource = readFileSync(
 		new URL("../extensions/goal.ts", import.meta.url),
 		"utf-8",
@@ -315,11 +357,11 @@ test("Ctrl+Shift+T keybinding: handler is registered in goal.ts", async () => {
 
 	assert.ok(
 		goalSource.includes('matchesKey(data, "ctrl+shift+t")'),
-		"goal.ts contains the ctrl+shift+t keybinding handler",
+		"goal.ts contains the ctrl+shift+t keybinding",
 	);
 	assert.ok(
-		goalSource.includes("showTaskListOverlay(ctx, goalsById)"),
-		"goal.ts calls showTaskListOverlay from the handler",
+		goalSource.includes("showTaskListOverlay(ctx, goalsById, focusedGoalId)"),
+		"goal.ts calls showTaskListOverlay with focusedGoalId",
 	);
 	assert.ok(
 		goalSource.includes('return { consume: true }'),

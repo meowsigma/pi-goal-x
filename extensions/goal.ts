@@ -993,7 +993,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 			// Ctrl+Shift+T — show task list overlay for all open goals
 			if (matchesKey(data, "ctrl+shift+t")) {
-				showTaskListOverlay(ctx, goalsById);
+				showTaskListOverlay(ctx, goalsById, focusedGoalId);
 				return { consume: true };
 			}
 

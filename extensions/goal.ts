@@ -904,7 +904,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 		clearStoppedRuntimeState();
 		runningGoalId = null;
-		syncGoalTools();
 		updateUI(ctx);
 	}
 

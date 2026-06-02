@@ -8,6 +8,22 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.5] — 2026-06-02
+
+### Fixed
+
+- **`syncGoalTools` error during extension loading:** Removed `syncGoalTools()` call from
+  `loadState()` (called by `session_start` and `session_tree` handlers) to prevent
+  "Extension runtime not initialized" error when the runtime hasn't finished binding yet.
+  The first tool sync now happens in `before_agent_start`, which fires after the runtime
+  is fully initialized.
+
+### Changed
+
+- **Tests updated for new lifecycle flow:** Four tests in `goal-tool-visibility.test.ts`
+  updated to invoke `before_agent_start` after `session_start`, matching the new lifecycle
+  ordering where `session_start` loads state but does not sync tools.
+
 ## [0.18.4] — 2026-05-31
 
 ### Added

@@ -119,7 +119,7 @@ describe("Tool visibility integration", () => {
 	});
 
 	// ── After session_start with active goal ─────────────────────────────
-	it("active goal exposes all lifecycle tools after session_start", async () => {
+	it("active goal exposes all lifecycle tools after before_agent_start", async () => {
 		const f = testFixture();
 		try {
 			const ss = lifecycleHandlers.get("session_start");
@@ -131,16 +131,27 @@ describe("Tool visibility integration", () => {
 
 			await ss({ reason: "start" }, f.mockCtx);
 
-			// After session_start, an active goal should have all lifecycle tools
+			// session_start loads state but does NOT call syncGoalTools.
+			// Tool sync happens in before_agent_start, which we call next.
+			// After session_start alone, only base work tools are present.
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(bas, "before_agent_start handler must be registered");
+			await bas({
+				systemPrompt: "",
+				prompt: "test",
+				systemPromptOptions: {},
+			}, f.mockCtx);
+
+			// After before_agent_start, an active goal should have all lifecycle tools
 			for (const tool of ALL_LIFECYCLE_TOOLS) {
 				assert.ok(activeToolNames.includes(tool),
-					`active goal should have tool "${tool}" after session_start. Active tools: ${JSON.stringify(activeToolNames)}`);
+					`active goal should have tool "${tool}" after before_agent_start. Active tools: ${JSON.stringify(activeToolNames)}`);
 			}
 
 			// Base work tools should also be present
 			for (const tool of BASE_WORK_TOOLS) {
 				assert.ok(activeToolNames.includes(tool),
-					`active goal should have work tool "${tool}" after session_start`);
+					`active goal should have work tool "${tool}" after before_agent_start`);
 			}
 
 			// create_goal should NOT be available
@@ -206,6 +217,16 @@ describe("Tool visibility integration", () => {
 			assert.ok(ss);
 			await ss({ reason: "start" }, emptyCtx);
 
+			// session_start loads state but does NOT call syncGoalTools.
+			// Tool sync happens in before_agent_start.
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(bas);
+			await bas({
+				systemPrompt: "",
+				prompt: "test",
+				systemPromptOptions: {},
+			}, emptyCtx);
+
 			// Only get_goal should be available
 			for (const tool of NO_GOAL_TOOLS) {
 				assert.ok(activeToolNames.includes(tool),
@@ -251,6 +272,16 @@ describe("Tool visibility integration", () => {
 			const ss = lifecycleHandlers.get("session_start");
 			assert.ok(ss);
 			await ss({ reason: "start" }, completedCtx);
+
+			// session_start loads state but does NOT call syncGoalTools.
+			// Tool sync happens in before_agent_start.
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(bas);
+			await bas({
+				systemPrompt: "",
+				prompt: "test",
+				systemPromptOptions: {},
+			}, completedCtx);
 
 			// Only get_goal should be available for completed goals
 			for (const tool of ["get_goal"]) {
@@ -303,6 +334,16 @@ describe("Tool visibility integration", () => {
 			const ss = lifecycleHandlers.get("session_start");
 			assert.ok(ss);
 			await ss({ reason: "start" }, pausedCtx);
+
+			// session_start loads state but does NOT call syncGoalTools.
+			// Tool sync happens in before_agent_start.
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(bas);
+			await bas({
+				systemPrompt: "",
+				prompt: "test",
+				systemPromptOptions: {},
+			}, pausedCtx);
 
 			// Paused lifecycle tools should be present
 			for (const tool of PAUSED_LIFECYCLE_TOOLS) {

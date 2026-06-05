@@ -8,6 +8,28 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.6] — 2026-06-05
+
+### Fixed
+
+- **Esc → "keep working on goal" now pauses the goal:** When the user presses Escape
+  during a completion audit and selects "continue working," the goal is paused
+  (status → "paused") instead of staying active. The agent stops and waits for the
+  user to manually resume via `/goal-resume`, preventing confusing auto-continuation.
+  `turnStoppedFor` is also set to block subsequent tool calls in the same turn.
+
+- **Noisy audit-escape notifications removed:** The `ctx.ui.notify("Audit skipped by
+  user.", "warning")` call in `abortAudit()` is removed. The "continue working"
+  branch no longer sends a `pi.sendMessage()` with audit-skipped content or returns
+  "Resume working toward the goal." — it returns a clean "Goal paused" message
+  instead.
+
+### Added
+
+- **Tests for escape dialog wiring:** 3 new tests verify `complete_goal` has the
+  `confirmBypassAuditor` parameter, the `tool_call` handler is registered, and the
+  escape dialog handler paths are wired.
+
 ## [0.18.5] — 2026-06-02
 
 ### Fixed

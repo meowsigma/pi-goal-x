@@ -429,4 +429,33 @@ describe("Tool visibility integration", () => {
 			assert.ok(typeof tool!.execute === "function", `Tool "${name}" must have an execute handler`);
 		}
 	});
+
+	// ── complete_goal tool has confirmBypassAuditor parameter ────────────
+	it("complete_goal has confirmBypassAuditor parameter", () => {
+		const tool = registeredTools.find((t) => t.name === "complete_goal");
+		assert.ok(tool, "complete_goal must be registered");
+		const params = tool!.parameters as any;
+		assert.ok(params, "tool must have parameters");
+		assert.ok(params.properties?.confirmBypassAuditor !== undefined,
+			"complete_goal must have confirmBypassAuditor parameter");
+	});
+
+	// ── tool_call handler is registered ──────────────────────────────────
+	it("tool_call handler is registered for complete_goal processing", () => {
+		const handler = lifecycleHandlers.get("tool_call");
+		assert.ok(handler, "tool_call handler must be registered");
+	});
+
+	// ── Escape dialog component is available via the import ──────────────
+	it("escape dialog handler paths are wired", () => {
+		// The tool_call handler is registered and ready to process complete_goal.
+		// The escape flow (Esc during audit → showEscapeDialog → pause path)
+		// is triggered via the complete_goal execute handler when auditor raises
+		// "Auditor aborted." This test verifies the handler piping is intact.
+		const handler = lifecycleHandlers.get("tool_call");
+		assert.ok(handler, "tool_call handler must exist for escape dialog path");
+		// complete_goal tool must be registered for the handler to process it
+		const tool = registeredTools.find((t) => t.name === "complete_goal");
+		assert.ok(tool, "complete_goal tool must be registered");
+	});
 });

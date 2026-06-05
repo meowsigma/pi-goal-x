@@ -510,7 +510,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		stopAuditAnimation();
 		auditProgress = null;
 		goalWidgetComponent?.invalidate();
-		ctx.ui.notify("Audit skipped by user.", "warning");
 		if (state.goal) {
 			try {
 				appendGoalEvent(ctx, {
@@ -2628,28 +2627,12 @@ ${objective}` : objective,
 						details: goalDetails(state.goal),
 					};
 				} else {
-					// ── Continue working ────────────────────────────────────
-					pi.sendMessage<GoalAuditEventDetails>({
-						customType: GOAL_AUDIT_ENTRY,
-						content: [
-							`Goal audit skipped — user chose to continue working.`,
-							`Goal remains ${statusLabel(auditTarget)}.`,
-						].join("\n"),
-						display: true,
-						details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
-					});
-					syncGoalTools();
-					updateUI(ctx);
+					// ── Continue working → pause the goal ──────────────
+					pauseActiveGoal(ctx);
+					turnStoppedFor = state.goal?.id ?? null;
 					return {
-						content: [{
-							type: "text",
-							text: [
-								"User chose to continue working (bypassed audit via Escape).",
-								"",
-								"Resume working toward the goal.",
-							].join("\n"),
-						}],
-						details: goalDetails(state.goal),
+						content: [{ type: "text", text: "Goal paused — user chose to continue working after skipping audit." }],
+						details: state.goal ? goalDetails(state.goal) : undefined,
 					};
 				}
 			}

@@ -458,4 +458,315 @@ describe("Tool visibility integration", () => {
 		const tool = registeredTools.find((t) => t.name === "complete_goal");
 		assert.ok(tool, "complete_goal tool must be registered");
 	});
+
+	// ── Active goal WITH task list exposes all lifecycle tools ──────────
+	it("active goal with task list exposes all lifecycle tools", async () => {
+		const f = testFixture();
+		try {
+			// Create a goal with a task list (mimics propose_goal_draft + task list flow)
+			const now = new Date().toISOString();
+			const goalWithTasks = createGoal({
+				objective: "Test goal with task list",
+				autoContinue: true,
+				sisyphus: false,
+			}, Date.UTC(2026, 6, 7, 12, 0, 0));
+
+			// Write the goal file with embedded task list
+			const goalData = {
+				...goalWithTasks,
+				taskList: {
+					tasks: [
+						{ id: "fix-nameerror", title: "Fix the NameError crash", status: "pending" as const },
+						{ id: "polish-accordions", title: "Polish accordion display", status: "pending" as const },
+						{ id: "verify-clean-run", title: "Verify clean run", status: "pending" as const },
+					],
+					blockCompletion: false,
+					proposedAt: now,
+				},
+				updatedAt: now,
+			};
+			const written = writeActiveGoalFile({ cwd: f.cwd } as any, goalData);
+
+			const focusEntry = goalFocusDetails(goalWithTasks.id, "created");
+			const stateEntry: GoalStateEntry = {
+				version: 3,
+				goal: {
+					...goalWithTasks,
+					activePath: written.activePath,
+					taskList: goalData.taskList,
+					updatedAt: now,
+				},
+			};
+			const sessionEntries = [
+				{ type: "custom", customType: "pi-goal-focus", data: focusEntry },
+				{ type: "custom", customType: "pi-goal-state", data: stateEntry },
+			];
+			const taskCtx = createMockCtx(f.cwd, sessionEntries);
+
+			activeToolNames = [...BASE_WORK_TOOLS];
+			apiCalls = [];
+
+			// Fire session_start -- loads the goal with tasks from disk
+			const ss = lifecycleHandlers.get("session_start");
+			assert.ok(ss);
+			await ss({ reason: "start" }, taskCtx);
+
+			// Fire before_agent_start -- triggers syncGoalTools
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(bas);
+			await bas({
+				systemPrompt: "",
+				prompt: "test with tasks",
+				systemPromptOptions: {},
+			}, taskCtx);
+
+			// ALL lifecycle tools must be present
+			for (const tool of ALL_LIFECYCLE_TOOLS) {
+				assert.ok(activeToolNames.includes(tool),
+					`active goal WITH task list should have tool "${tool}". Active: ${JSON.stringify(activeToolNames)}`);
+			}
+
+			// Base work tools must also be present
+			for (const tool of BASE_WORK_TOOLS) {
+				assert.ok(activeToolNames.includes(tool),
+					`active goal WITH task list should have work tool "${tool}"`);
+			}
+
+			// propose_goal_draft should be available
+			assert.ok(activeToolNames.includes("propose_goal_draft"),
+				"propose_goal_draft must be in active tool set");
+
+			// create_goal should NOT be available
+			assert.equal(activeToolNames.includes("create_goal"), false,
+				"create_goal must not be in active tool set");
+
+			// goal_question and goal_questionnaire should be available for active goals
+			assert.ok(activeToolNames.includes("goal_question"),
+				"goal_question must be available for active goals");
+			assert.ok(activeToolNames.includes("goal_questionnaire"),
+				"goal_questionnaire must be available for active goals");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	// ── Goal with tasks survives multiple before_agent_start cycles ──────
+	it("active goal with task list shows correct tools across multiple turns", async () => {
+		const f = testFixture();
+		try {
+			const now = new Date().toISOString();
+			const goalWithTasks = createGoal({
+				objective: "Multi-turn test",
+				autoContinue: true,
+				sisyphus: false,
+			}, Date.UTC(2026, 6, 7, 13, 0, 0));
+
+			const goalData = {
+				...goalWithTasks,
+				taskList: {
+					tasks: [{ id: "t1", title: "Task 1", status: "pending" as const }],
+					blockCompletion: false,
+					proposedAt: now,
+				},
+				updatedAt: now,
+			};
+			const written = writeActiveGoalFile({ cwd: f.cwd } as any, goalData);
+
+			const focusEntry = goalFocusDetails(goalWithTasks.id, "created");
+			const stateEntry: GoalStateEntry = {
+				version: 3,
+				goal: {
+					...goalWithTasks,
+					activePath: written.activePath,
+					taskList: goalData.taskList,
+					updatedAt: now,
+				},
+			};
+			const sessionEntries = [
+				{ type: "custom", customType: "pi-goal-focus", data: focusEntry },
+				{ type: "custom", customType: "pi-goal-state", data: stateEntry },
+			];
+			const multiCtx = createMockCtx(f.cwd, sessionEntries);
+
+			// Fire session_start
+			const ss = lifecycleHandlers.get("session_start");
+			assert.ok(ss);
+			await ss({ reason: "start" }, multiCtx);
+
+			// Simulate turn_start firing before each before_agent_start
+			const ts = lifecycleHandlers.get("turn_start");
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(ts, "turn_start handler must be registered");
+			assert.ok(bas);
+
+			for (let i = 0; i < 3; i++) {
+				// turn_start fires at the start of each new agent turn
+				activeToolNames = [...BASE_WORK_TOOLS];
+				apiCalls = [];
+				await ts({}, multiCtx);
+
+				// Verify syncGoalTools was called (tools should be active)
+				for (const tool of ALL_LIFECYCLE_TOOLS) {
+					assert.ok(activeToolNames.includes(tool),
+						`turn ${i} (after turn_start): active goal should have tool "${tool}"`);
+				}
+
+				// before_agent_start fires and should keep tools stable
+				await bas({
+					systemPrompt: "",
+					prompt: `multi-turn-${i}`,
+					systemPromptOptions: {},
+				}, multiCtx);
+
+				for (const tool of ALL_LIFECYCLE_TOOLS) {
+					assert.ok(activeToolNames.includes(tool),
+						`turn ${i} (after before_agent_start): active goal should have tool "${tool}"`);
+				}
+			}
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	// ── Progressive task completion keeps tools stable ───────────────────
+	it("complete_task tool executes and stays active after marking tasks done", async () => {
+		const f = testFixture();
+		try {
+			// Set up a goal WITH a task list
+			const now = new Date().toISOString();
+			const goalWithTasks = createGoal({
+				objective: "Tasks: complete them",
+				autoContinue: true,
+				sisyphus: false,
+			}, Date.UTC(2026, 6, 7, 14, 0, 0));
+
+			const goalData = {
+				...goalWithTasks,
+				taskList: {
+					tasks: [
+						{ id: "t1", title: "Task one", status: "pending" as const },
+						{ id: "t2", title: "Task two", status: "pending" as const },
+					],
+					blockCompletion: false,
+					proposedAt: now,
+				},
+				updatedAt: now,
+			};
+			const written = writeActiveGoalFile({ cwd: f.cwd } as any, goalData);
+
+			const focusEntry = goalFocusDetails(goalWithTasks.id, "created");
+			const stateEntry: GoalStateEntry = {
+				version: 3,
+				goal: {
+					...goalWithTasks,
+					activePath: written.activePath,
+					taskList: goalData.taskList,
+					updatedAt: now,
+				},
+			};
+			const sessionEntries = [
+				{ type: "custom", customType: "pi-goal-focus", data: focusEntry },
+				{ type: "custom", customType: "pi-goal-state", data: stateEntry },
+			];
+			const taskCtx = createMockCtx(f.cwd, sessionEntries);
+
+			// Fire session_start
+			const ss = lifecycleHandlers.get("session_start");
+			assert.ok(ss);
+			await ss({ reason: "start" }, taskCtx);
+
+			// Fire before_agent_start to sync tools
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(bas);
+			await bas({
+				systemPrompt: "",
+				prompt: "start working",
+				systemPromptOptions: {},
+			}, taskCtx);
+
+			// Verify complete_task is in the active set
+			assert.ok(activeToolNames.includes("complete_task"),
+				"complete_task must be active before task completion");
+
+			// Call complete_task tool execute handler
+			const completeTaskTool = registeredTools.find((t) => t.name === "complete_task");
+			assert.ok(completeTaskTool, "complete_task tool must be registered");
+
+			const result1 = await (completeTaskTool.execute as Function)(
+				"call-task-1",
+				{ taskId: "t1", evidence: "Done" },
+				new AbortController().signal,
+				undefined,
+				taskCtx,
+			);
+			assert.ok(result1, "complete_task result must be defined");
+			const text1 = result1.content?.[0]?.text ?? "";
+			assert.ok(text1.includes("t1 complete") || text1.includes("1/2"),
+				`complete_task should report t1 complete. Got: ${text1}`);
+
+			// After executing complete_task, all lifecycle tools should still be present
+			for (const tool of ALL_LIFECYCLE_TOOLS) {
+				assert.ok(activeToolNames.includes(tool),
+					`after completing t1, should still have tool "${tool}". Active: ${JSON.stringify(activeToolNames)}`);
+			}
+
+			// Complete the second task
+			const result2 = await (completeTaskTool.execute as Function)(
+				"call-task-2",
+				{ taskId: "t2", evidence: "Done too" },
+				new AbortController().signal,
+				undefined,
+				taskCtx,
+			);
+			assert.ok(result2, "complete_task result must be defined");
+
+			// Tools should still be present after all tasks complete
+			for (const tool of ALL_LIFECYCLE_TOOLS) {
+				assert.ok(activeToolNames.includes(tool),
+					`after all tasks complete, should still have tool "${tool}". Active: ${JSON.stringify(activeToolNames)}`);
+			}
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	// ── Tool resilience: turn_start sync after external tool removal ──────
+	it("turn_start re-syncs active tools after external removal", async () => {
+		const f = testFixture();
+		try {
+			const ss = lifecycleHandlers.get("session_start");
+			assert.ok(ss);
+			await ss({ reason: "start" }, f.mockCtx);
+
+			const bas = lifecycleHandlers.get("before_agent_start");
+			assert.ok(bas);
+			await bas({
+				systemPrompt: "",
+				prompt: "test",
+				systemPromptOptions: {},
+			}, f.mockCtx);
+
+			// Tools should be present after before_agent_start
+			for (const tool of ALL_LIFECYCLE_TOOLS) {
+				assert.ok(activeToolNames.includes(tool),
+					`tool "${tool}" should be present after before_agent_start`);
+			}
+
+			// Simulate external tool removal (e.g., another extension removed tools)
+			activeToolNames = [...BASE_WORK_TOOLS];
+
+			// turn_start fires and calls syncGoalTools, which should restore them
+			const ts = lifecycleHandlers.get("turn_start");
+			assert.ok(ts);
+			await ts({}, f.mockCtx);
+
+			// All lifecycle tools must be restored by syncGoalTools
+			for (const tool of ALL_LIFECYCLE_TOOLS) {
+				assert.ok(activeToolNames.includes(tool),
+					`tool "${tool}" should be restored by turn_start sync`);
+			}
+		} finally {
+			f.cleanup();
+		}
+	});
 });

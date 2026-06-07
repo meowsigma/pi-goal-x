@@ -3309,6 +3309,7 @@ promptGuidelines: [
 		// Per-turn flag resets (#4 + C9 fix).
 		goalWorkToolCalledThisTurn = false;
 		turnStoppedFor = null;
+		syncGoalTools();
 		beginAccounting();
 		updateUI(ctx);
 	});
@@ -3340,9 +3341,6 @@ promptGuidelines: [
 		if (isMeaningfulProgressToolCall(event.toolName, asRecord(event)?.args)) {
 			if (state.goal?.id) activeGetGoalTurnsByGoalId.delete(state.goal.id);
 			goalWorkToolCalledThisTurn = true;
-		} else if (state.goal?.status === "active" && state.goal.autoContinue && event.toolName !== "get_goal") {
-			// A non-progress tool should not create an infinite retry chain.
-			turnStoppedFor = state.goal.id;
 		}
 		return;
 	});

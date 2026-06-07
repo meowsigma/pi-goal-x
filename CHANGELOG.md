@@ -8,6 +8,33 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.7] — 2026-06-07
+
+### Fixed
+
+- **Lifecycle tools now reliably visible for active goals with task lists:** Two root
+  causes were identified and fixed:
+
+  1. **`turn_start` did not sync tools** — The `turn_start` handler reset per-turn flags
+     but never called `syncGoalTools()`. Tools were only synced later in
+     `before_agent_start`, creating a gap where the system prompt could be built with
+     stale tools. Added `syncGoalTools()` to `turn_start`.
+
+  2. **Non-progress research tools blocked lifecycle tools** — The `tool_call` handler
+     set `turnStoppedFor` for any non-progress tool call (e.g., `web_search`,
+     `code_search`, `fetch_content`). This blocked ALL subsequent tool calls including
+     `complete_task` and `complete_goal`. The `goalWorkToolCalledThisTurn` flag already
+     prevents infinite continuation chains; `turnStoppedFor` is only needed for
+     post-stop commands (pause/abort/complete). Removed the problematic `else` branch.
+
+### Added
+
+- **4 new tests for lifecycle tool reliability:**
+  - `active goal with task list exposes all lifecycle tools`
+  - `active goal with task list shows correct tools across multiple turns`
+  - `complete_task tool executes and stays active after marking tasks done`
+  - `turn_start re-syncs active tools after external removal`
+
 ## [0.18.6] — 2026-06-05
 
 ### Fixed

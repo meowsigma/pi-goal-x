@@ -1,97 +1,26 @@
 # pi-goal-x
 
-> **Fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal)** — this repository extends the upstream with quality-of-life features for the completion auditor, lifecycle reliability improvements, mid-flight objective updates, deferred archival, and drafting UX refinements. Upstream changes can be merged from the original repository.
-
 `pi-goal-x` is a long-running goal extension for [pi](https://github.com/earendil-works/pi-coding-agent). It gives the agent a durable objective, a visible lifecycle, and schema-gated tools for drafting, executing, pausing, resuming, and completing work.
 
 The extension is designed around one rule: **the user owns intent; the agent executes only after the goal is explicit and confirmed**.
 
-## What's different from upstream
+## Features
 
-All core features of [@capyup/pi-goal](https://github.com/capyup/pi-goal) are preserved. The following changes are specific to pi-goal-x:
+- **Two goal styles** — Regular goals for open-ended research and implementation. Sisyphus goals for patient ordered execution, one step at a time.
+- **Simple goal creation** — Use `/goals` to discuss and confirm a draft. Use `/goals-set` to skip discussion and start immediately.
+- **Full lifecycle** — Pause blocked goals, resume when unblocked, abort obsolete work, complete when done. Auto-continue keeps the agent working across turns until completion, interruption, or the empty-turn guard.
+- **Multiple open goals** — Keep several goals in `.pi/goals/`. Each session focuses one at a time; switch with `/goal-focus`.
+- **Above-editor status widget** — See the current goal, status, file path, and progress at a glance while the agent works.
+- **Structured task lists with subtasks** — Break goals into trackable tasks. Agents can mark individual tasks or subtasks complete without stopping the turn. Subtask IDs are validated for uniqueness and depth.
+- **Verification contracts** — Attach plain-text requirements to a goal or task (e.g. "Run npm test, zero failures"). The agent must provide matching evidence before `complete_goal` or `complete_task` will succeed.
+- **Independent completion auditor** — When a goal is marked complete, a separate pi agent inspects the workspace, verifies every success criterion, and approves or rejects before the goal is archived. You can press Escape during an audit to abort it. Configure the auditor model via `/goal-settings`.
+- **Schema-gated tools** — Agents see only the tools relevant to the current lifecycle phase: drafting, active, paused, or tweaking. Lifecycle tools like `pause_goal`, `complete_task`, and `abort_goal` appear and disappear automatically.
+- **Immutable objective** — The agent cannot silently change your goal. Objective updates require a `/goal-tweak` drafting flow with explicit user confirmation.
+- **Built-in questionnaire tools** — During drafting, agents can ask structured questions through `goal_question` and `goal_questionnaire` without depending on external packages.
+- **Disk-backed state** — Active and archived goals persist in `.pi/goals/`. Goal state survives session compaction, workspace switches, and context churn.
+- **Configurable settings** — Tune the auditor model, disable the task system or contracts, and set subtask depth through `/goal-settings` or `.pi/pi-goal-x-settings.json`.
 
-### Verification contract system
-
-- **Per-goal verification contracts** — when drafting a goal, include a `Verification contract:` section with plain-text requirements (e.g. "Run npm test (0 failures), grep for remaining STP references"). The contract is extracted, stored on the goal record, and enforced by the `complete_goal` tool — the call is rejected unless the agent provides a non-empty `verificationSummary` matching the contract.
-- **Per-task verification contracts** — `propose_task_list` supports an optional `verificationContract` per task. If set, `complete_task` requires a non-empty `verificationSummary`.
-- **Both prompt and tool enforcement** — prompts include a VERIFICATION CONTRACT section instructing the agent; tool validators reject calls that violate the contract.
-- **Backward compatible** — goals/tasks without a `Verification contract:` section work exactly as before. No contract = no enforcement.
-- **Auditor integration** — the independent completion auditor receives both the `verificationContract` and `verificationSummary` and cross-checks claims against real artifacts.
-- **`complete_goal` `testResults` removed** — replaced with `verificationSummary`. The old structured test results interface is gone.
-
-### Unified goal + task acceptance
-
-- **Single-dialog confirmation** — `propose_goal_draft` now accepts an optional `tasks` array parameter. The confirmation dialog shows the goal objective AND the proposed task list together in a single rich TUI view with box-drawing panel (`┌─ TASKS ───┐`), section headers, and hierarchical indentation for subtasks.
-- **Atomic creation** — one confirmation (single enter press) creates the goal AND its task list together. No need for separate `propose_goal_draft` + `propose_task_list` calls.
-- **Backward compatible** — existing separate `propose_task_list` flow continues to work unchanged. Goals without tasks work as before.
-
-### Task list & sub-task system
-
-- **Structured task breakdown** — the agent can propose a task list via `propose_task_list` (standalone) or `propose_goal_draft` with `tasks` (unified). Both show a Confirm / Continue Chatting dialog. Once confirmed, tasks are displayed in prompts, the widget, serialized to disk, and included in auditor review.
-- **Recursive subtasks** — tasks can have nested sub-tasks via `subtasks?: GoalTask[]` (full recursive type). Subtask depth is controlled globally by `subtaskDepth` in `.pi/pi-goal-x-settings.json` (default: 1 level). Too-deep subtrees are rejected at proposal.
-- **Lightweight subtasks** — each task has an optional `lightweightSubtasks?: boolean` flag. When true, the parent can complete regardless of subtask status. When false/absent (full subtasks), all subtasks must be individually complete before the parent can close.
-- **Per-task completion** — `complete_task` marks individual tasks done with optional evidence/verificationSummary, and `skip_task` marks tasks as skipped with a required reason. Neither stops the turn, so the agent can continue uninterrupted.
-- **Recursive lookup** — `findTaskInTree` and `updateTaskInTree` search and update tasks at any depth. Subtask IDs are valid targets for `complete_task` and `skip_task`.
-- **Subtask gate** — parent tasks with full subtasks require all sub-items to be completed or skipped before the parent can close, enforced by recursive `checkSubtasksComplete`.
-- **Duplicate ID validation** — `validateTaskListProposal` recursively checks all task IDs across the entire tree, preventing collisions between parent/subtask or sibling subtasks.
-- **Agent workflow guidance** — prompts include a `[TASK WORKFLOW]` section directing agents to use tasks as progress trackers, completing subtasks immediately when work finishes (not batch-marking at the end).
-- **Hierarchical display** — task lists with subtasks render with indentation in prompts (`taskListBlock`, `goalPrompt`, `continuationPrompt`) and in the TUI widget (recursive count, BFS next-pending).
-- **Optional `taskList`** — goals without a task list work exactly as before. The feature is entirely opt-in.
-- **Soft `complete_goal` gate** — when `blockCompletion: true` is set, `complete_goal` surfaces a warning if pending tasks remain (prompt-level only; the agent can still complete).
-
-### Goal objective is immutable
-
-- The goal objective is immutable — the agent **must not** modify it autonomously. Objective changes are only possible through `propose_goal_tweak`, which presents the user with a Confirm / Continue Chatting dialog matching the `propose_goal_draft` confirmation pattern. This prevents the agent from silently changing the goal contract.
-- **`propose_goal_tweak`** is the sole mechanism for updating the objective, available exclusively during a `/goal-tweak` drafting flow. If the user's requirements change, they must run `/goal-tweak` to initiate the revision flow.
-
-### Deferred archival
-
-- **No more premature archiving**: previously, `update_goal` archived the goal file inline within the tool handler before the agent could see the audit result (or skip notification). Archival is now deferred until `turn_end` — after the agent has received the audit/skip result in the conversation. The goal remains visible in the active pool through the entire completion flow.
-- **Cleaner lifecycle**: completed goals are archived by the `turn_end` lifecycle hook, not by the tool handler. The `accountProgress` guard skips disk reconciliation for completed goals.
-
-### E2e test infrastructure
-
-- **Deterministic fork tests using `--mode json`**: the e2e suite spawns a real `pi --fork --mode json` session, parses structured `tool_execution_start`/`tool_execution_end` JSON events for field-level assertions — no free-text AI output parsing. Uses `--append-system-prompt` + `--tools` to force deterministic tool calls.
-- **Full coverage**: 310 tests total — function-level integration tests, mock-pi handler tests, file-validity checks, real `pi --fork --mode json` E2E tests, propose_goal_tweak unit/integration/e2e tests, task list policy/round-trip/render tests (including subtasks), and verification contract tests.
-
-### Completion auditor
-
-- **Live progress widget** — when the auditor runs, the TUI shows a spinner, a progress bar (`[████░░░░] 40%`), step labels (`Inspecting files...`, `Verifying success criteria...`), the current tool being executed, and recent output lines. No more wondering if anything is happening.
-- **Per-goal auditor toggle** — during goal confirmation, press `a` to toggle the auditor on/off for that goal. The toggle uses a ●/○ indicator between the goal summary and confirm options. The default position comes from settings; the per-goal override persists within the session.
-- **Escape to skip** — press Escape during an audit to abort it and complete the goal immediately. The skip is recorded in the ledger as `audit_skipped` with reason `user_aborted` and auditor model metadata.
-- **Disable the auditor entirely** — set `disabled: true` in `.pi/pi-goal-x-settings.json` (or toggle it via `/goal-settings`). The agent can still bypass with user confirmation by passing `confirmBypassAuditor: true` to `complete_goal`.
-- **Skipped audits are recorded** — every skip (whether disabled or Escape-aborted) is logged to the ledger with the reason, provider, model, and thinking level for full traceability.
-- **Robust abort detection** — the auditor detects aborts both from exceptions *and* from `session.prompt()` returning after an abort signal, preventing stuck goals or ghost states.
-- **Cleaner lifecycle** — `AbortSignal` is properly wired to `session.abort()`, animation timers are cleaned up, and the unsubscribe path is always executed. No more having to kill the session.
-- **Completion report includes full auditor output** — the auditor's full report is included in the goal completion conversation message upon approval, not just a verdict.
-- **Session factory injection** — `runGoalCompletionAuditor` accepts an optional `createSession` parameter for testability, enabling mock auditor sessions in tests.
-- **Structured test evidence** — the executor can pass `testResults` (exit code, suite name, output, timestamp) via `complete_goal({testResults})`. The auditor receives a `<test_evidence>` block and is instructed to check it before re-running test suites, skipping redundant re-runs.
-
-### Drafting & UX
-
-- **Normalized proposal-refinement language** — consistent terminology ("keep refining through normal proposal cycles") across all drafting prompts and tools.
-- **`PI_GOAL_AUTO_CONFIRM=0` opt-out** — explicitly set the env var to `0` to disable auto-confirm even in headless contexts (useful for benchmarking).
-
-### Testing
-
-- **Comprehensive abort/skip coverage** — unit tests for `audit_skipped` ledger events, disabled auditor config, Esc-to-skip widget behaviour, post-prompt abort detection, and the `confirmBypassAuditor` parameter.
-
-## What it provides
-
-- **Two goal styles**: regular goals for open-ended work, and Sisyphus goals for patient ordered execution.
-- **Intent-before-run flow**: `/goals` and `/sisyphus` start a discussion where the agent can clarify, research, and grill before any work begins.
-- **Direct set flow**: `/goals-set` and `/sisyphus-set` immediately create and start a goal from the supplied objective.
-- **Confirm-before-commit for discussions**: the agent must call `propose_goal_draft`; the user confirms or keeps chatting.
-- **Full goal visibility**: after confirmation, the final objective is printed back into the conversation in full.
-- **Multiple open goals**: `.pi/goals/` may hold several active goal files at once; each pi session focuses exactly one goal at a time.
-- **Session-local focus**: the focused goal id is stored as a branch-local session entry, not in goal markdown metadata.
-- **Auto-continue loop**: confirmed goals can continue across turns until completion, pause, abort, user interruption, or the empty-turn guard.
-- **Schema gates**: unsafe lifecycle transitions are rejected by tool validators, not just prompts.
-- **Sisyphus as a light variant**: Sisyphus shares the normal lifecycle/tools and differs only in prompt style and completion standard.
-- **Pause/resume/abort/clear lifecycle**: goals can be paused by the user, paused by the agent when blocked, resumed, completed from pause, aborted, or archived.
-- **Disk-backed state**: active and archived goals are stored under `.pi/goals/`.
-- **Lightweight built-in questionnaire tools**: `goal_question` and `goal_questionnaire` let the agent ask structured drafting questions without depending on another package.
-- **Above-editor status widget**: pi shows the current goal, status, progress, and active file path while work is running.
+> **Fork of [@capyup/pi-goal](https://github.com/capyup/pi-goal)** — pi-goal-x preserves all upstream features and adds: verification contracts (per-goal and per-task), unified goal+task acceptance in a single confirmation dialog, recursive task lists with subtasks, an immutable objective enforced by tools, deferred archival with cleaner lifecycle hooks, an improved completion auditor with configurable model and progress widget, drafting UX refinements, and lifecycle reliability fixes.
 
 ## Install
 
@@ -128,7 +57,7 @@ Flow:
 3. pi shows a full plain-text confirmation report.
 4. If confirmed, the full finalized goal is printed into the conversation and written to `.pi/goals/`.
 5. The new goal becomes this session's focus. Existing open goals remain in `.pi/goals/` and can be selected later with `/goal-focus`.
-6. The agent works only on the focused goal until it calls `update_goal(status="complete")`, pauses, aborts, produces an empty/non-progress turn, or the user interrupts.
+6. The agent works only on the focused goal until it calls `complete_goal`, pauses, aborts, produces an empty/non-progress turn, or the user interrupts.
 
 ### Sisyphus goal
 
@@ -212,7 +141,7 @@ While goal confirmation or tweak drafting is active, old goal execution is suspe
 
 ## Completion behavior
 
-Completion is also explicit and is checked by an independent pi auditor agent. The executor calls `update_goal` with its completion claim:
+Completion is also explicit and is checked by an independent pi auditor agent. The executor calls `complete_goal` with its completion claim:
 
 ```json
 {
@@ -221,7 +150,7 @@ Completion is also explicit and is checked by an independent pi auditor agent. T
 }
 ```
 
-Before archiving the goal, `update_goal` starts a separate pi agent in an isolated in-memory session. The auditor receives the objective, the executor's completion claim, and current goal metadata, then can inspect the workspace with read-only-oriented tools (`read`, `grep`, `find`, `ls`, and `bash`). It must end its report with exactly one marker:
+Before archiving the goal, `complete_goal` starts a separate pi agent in an isolated in-memory session. The auditor receives the objective, the executor's completion claim, and current goal metadata, then can inspect the workspace with read-only-oriented tools (`read`, `grep`, `find`, `ls`, and `bash`). It must end its report with exactly one marker:
 
 - `<approved/>` archives the goal as complete.
 - `<disapproved/>`, no marker, an error, or an abort rejects completion and leaves the goal open.

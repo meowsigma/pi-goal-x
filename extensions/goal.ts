@@ -429,8 +429,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	//   after their successful execute. Once set, pi.on("tool_call") blocks all
 	//   subsequent in-turn tool calls except POST_STOP_ALLOWED_TOOLS. This is the
 	//   schema fix for "agent keeps writing files after pause_goal".
+	// turnSeq: lightweight generation counter, incremented at each turn start.
+	//   Used to scope turnStoppedFor so stale markers from prior turns or sessions
+	//   cannot poison a resumed active goal.
+	// checkpointGoalId: remembers the incoming goal id from queued continuations.
+	//   When set but the goal is no longer active/autoContinue, work tools are blocked.
 	let goalWorkToolCalledThisTurn = false;
-	let turnStoppedFor: string | null = null;
+	let turnSeq = 0;
+	let turnStoppedFor: { goalId: string; turnSeq: number } | null = null;
+	let checkpointGoalId: string | null = null;
 
 	// #5 post-compaction resync: when a compaction just happened, the next agent
 	// turn gets an extra reminder block. Set in session_compact, consumed
@@ -574,6 +581,28 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	function clearActiveAccounting(): void {
 		accounting.activeGoalId = null;
 		accounting.lastAccountedAt = null;
+	}
+
+	function advanceTurnSeq(): void {
+		turnSeq += 1;
+		if (turnStoppedFor?.turnSeq !== turnSeq) turnStoppedFor = null;
+	}
+
+	function currentTurnStoppedGoalId(): string | null {
+		if (!turnStoppedFor) return null;
+		if (turnStoppedFor.turnSeq !== turnSeq) {
+			turnStoppedFor = null;
+			return null;
+		}
+		return turnStoppedFor.goalId;
+	}
+
+	function isActionableContinuationGoal(goalId: string | null | undefined): goalId is string {
+		return !!goalId && state.goal?.id === goalId && state.goal.status === "active" && state.goal.autoContinue;
+	}
+
+	function isStaleCheckpointBlockedToolCall(toolName: string): boolean {
+		return !POST_STOP_ALLOWED_TOOL_SET.has(toolName);
 	}
 
 	function clearStoppedRuntimeState(): void {
@@ -1285,7 +1314,7 @@ Verification contract:
 		continuationTimer = null;
 		continuationScheduledFor = null;
 		syncGoalTools();
-		if (!state.goal || state.goal.id !== goalId || state.goal.status !== "active" || !state.goal.autoContinue) {
+		if (!isActionableContinuationGoal(goalId)) {
 			if (continuationQueuedFor === goalId) continuationQueuedFor = null;
 			return;
 		}
@@ -3307,8 +3336,8 @@ promptGuidelines: [
 
 	pi.on("turn_start", async (_event, ctx) => {
 		// Per-turn flag resets (#4 + C9 fix).
+		advanceTurnSeq();
 		goalWorkToolCalledThisTurn = false;
-		turnStoppedFor = null;
 		syncGoalTools();
 		beginAccounting();
 		updateUI(ctx);
@@ -3316,15 +3345,27 @@ promptGuidelines: [
 
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
 	pi.on("tool_call", async (event, ctx) => {
+		const stoppedGoalId = currentTurnStoppedGoalId();
 		// Post-stop in-turn block (C9 0ad8 fix): after pause_goal / abort_goal /
 		// complete_goal / propose_goal_tweak fires in this turn, block all subsequent tool calls except
 		// read-only inspection. Forces the agent to yield the turn instead of "fixing"
 		// the situation by creating extra files etc.
-		if (turnStoppedFor !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
+		if (stoppedGoalId !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
 			return {
 				block: true,
-				reason: `The goal was already stopped earlier in this turn (goalId=${turnStoppedFor}). ` +
+				reason: `The goal was already stopped earlier in this turn (goalId=${stoppedGoalId}). ` +
 					`Do not call more tools; end the turn with a brief summary and yield to the user.`,
+			};
+		}
+		// Stale checkpoint guard: if the turn was triggered by a queued continuation
+		// for a goal that is no longer active/autoContinue, block work tools.
+		if (checkpointGoalId !== null && !isActionableContinuationGoal(checkpointGoalId) && isStaleCheckpointBlockedToolCall(event.toolName)) {
+			// Block the tool call with a stale-checkpoint message.
+			return {
+				block: true,
+				reason: `Cannot call ${event.toolName}: the goal checkpoint that triggered this turn is no longer active. ` +
+					`Goal ${checkpointGoalId} has been paused, cleared, or replaced. ` +
+					`End the turn with a brief summary and yield to the user.`,
 			};
 		}
 		// Phase 5 soft gate relaxation: active-goal question block and repeated get_goal
@@ -3448,11 +3489,13 @@ promptGuidelines: [
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		advanceTurnSeq();
 		syncGoalTools();
 		const currentSystemPrompt = () => ctx.getSystemPrompt?.() || event.systemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 
 		if (confirmationIntent !== null) {
+			checkpointGoalId = null;
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
@@ -3460,6 +3503,7 @@ promptGuidelines: [
 		}
 
 		if (tweakDraftingFor !== null) {
+			checkpointGoalId = null;
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
@@ -3470,8 +3514,12 @@ promptGuidelines: [
 		// matches the active goal, abort the whole turn instead of letting the
 		// model act on a stale instruction.
 		if (incomingGoalId !== null) {
+			// Reconcile from disk to pick up any external state changes before
+			// evaluating whether the checkpoint is actionable.
+			reconcileFocusedGoalFromDisk(ctx);
+			checkpointGoalId = incomingGoalId;
 			clearContinuationState();
-			if (!state.goal || state.goal.id !== incomingGoalId || (state.goal.status !== "active") || !state.goal.autoContinue) {
+			if (!isActionableContinuationGoal(incomingGoalId)) {
 				try {
 					ctx.abort?.();
 				} catch {}
@@ -3480,10 +3528,12 @@ promptGuidelines: [
 					systemPrompt: `${currentSystemPrompt()}\n\n${staleContinuationPrompt(incomingGoalId, state.goal)}`,
 				};
 			}
+			checkpointGoalId = null;
 		} else {
 			// A user-driven turn — clear any queued continuation so we don't
 			// double-fire after the user's own message returns. Also reset the
 			// autoContinue nudge state so the user always gets a fresh chain.
+			checkpointGoalId = null;
 			clearContinuationState();
 			resetGetGoalNudgeState(state.goal?.id);
 		}

@@ -8,6 +8,16 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.8] — 2026-06-10
+
+### Changed
+
+- **README restructured for user-facing clarity:** Merged "What's different from upstream" and
+  "What it provides" into a single 13-item headline Features section placed at the top of the
+  document. The fork context is condensed to a one-paragraph note below Features. Stale
+  `update_goal` references replaced with `complete_goal`. The rest of the document (Install,
+  Quick start, Commands, etc.) is preserved unchanged.
+
 ## [0.18.7] — 2026-06-07
 
 ### Fixed

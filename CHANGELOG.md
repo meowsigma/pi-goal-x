@@ -8,6 +8,25 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.9] — 2026-06-10
+
+### Fixed
+
+- **turnSeq scoping for turnStoppedFor:** Added a per-turn generation counter so stale
+  turn-stop markers from prior turns or session resumes cannot accidentally block an
+  active goal's tool calls. A new `advanceTurnSeq()` function increments the counter at
+  the start of each turn; `currentTurnStoppedGoalId()` returns the stopped goal only if
+  its sequence matches the current turn.
+
+- **Stale continuation checkpoint guards:** Added `checkpointGoalId` tracking and
+  `isActionableContinuationGoal()` to prevent work tools from executing when a queued
+  continuation fires for a goal that has been paused, cleared, or replaced. The
+  `before_agent_start` handler now reconciles from disk and aborts the turn for stale
+  checkpoints. The `tool_call` handler also blocks work tools mid-turn when a stale
+  checkpoint is detected.
+
+  These changes incorporate selected improvements from PR #1 by codewithkenzo.
+
 ## [0.18.8] — 2026-06-10
 
 ### Changed

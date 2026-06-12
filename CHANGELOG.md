@@ -8,6 +8,18 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.10] — 2026-06-12
+
+### Fixed
+
+- **syncGoalTools deferred from top-level to session_start:** Removed the top-level
+  `syncGoalTools()` call that fired during extension loading, before the runtime was
+  initialized. This was the cause of the "Extension runtime not initialized. Action
+  methods cannot be called during extension loading" error. `syncGoalTools()` is now
+  called inside the `session_start` handler, after `loadState()`. Added an e2e test
+  that verifies no `getActiveTools()` calls occur during extension registration and
+  that the call only fires after `session_start`.
+
 ## [0.18.9] — 2026-06-10
 
 ### Fixed

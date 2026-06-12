@@ -128,6 +128,73 @@ describe("Extension E2E", () => {
 	}
 
 	// ── 1: Deferred archival ───────────────────────────────────────────────
+	// ── 0: syncGoalTools deferred from load time ──────────────────────────
+	it("e2e: syncGoalTools is not called during extension loading, only after session_start", async () => {
+		// Create an isolated mock pi that throws "Extension runtime not initialized"
+		// on getActiveTools — simulating real SDK behavior during loading.
+		let getActiveToolsCallCount = 0;
+		const isolatedHandlers = new Map<string, Function>();
+		const isolatedToolDefs: ToolDefinition[] = [];
+
+		const isolatedMockPi = {
+			registerTool: (def: ToolDefinition) => { isolatedToolDefs.push(def); },
+			registerCommand: () => {},
+			on: (event: string, handler: Function) => { isolatedHandlers.set(event, handler); },
+			appendEntry: () => {},
+			registerMessageRenderer: () => {},
+			sendMessage: () => {},
+			getActiveTools: () => {
+				getActiveToolsCallCount++;
+				throw new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
+			},
+			setActiveTools: () => {},
+			hasUI: false,
+		};
+
+		// Load extension — with the fix, this should NOT trigger getActiveTools
+		piGoalExtension(isolatedMockPi as any);
+		const loadTimeCalls = getActiveToolsCallCount;
+
+		// Verify: no getActiveTools call during extension loading
+		assert.equal(loadTimeCalls, 0,
+			`syncGoalTools must not call getActiveTools during extension loading. ` +
+			`Called ${loadTimeCalls} time(s). The top-level syncGoalTools() should be removed.`);
+
+		// Now fire session_start — after this, syncGoalTools should have run
+		const ss = isolatedHandlers.get("session_start");
+		assert.ok(ss, "session_start handler must be registered");
+
+		// Create a minimal context for session_start that doesn't need filesystem
+		const minimalCtx = {
+			cwd: "/tmp",
+			hasUI: false,
+			sessionManager: {
+				getBranch: () => [],
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+				getRoot: () => "/tmp",
+				append: () => {},
+				appendModelChange: () => {},
+				appendThinkingLevelChange: () => {},
+				appendCompetingWriteCheck: () => {},
+				buildSessionContext: () => ({ messages: [], sessionId: "test", model: null, thinkingLevel: "medium" }),
+			},
+			getSystemPrompt: () => "",
+			isIdle: () => true,
+			hasPendingMessages: () => false,
+			abort: () => {},
+		} as unknown as ExtensionContext;
+
+		// After session_start fires, getActiveTools should be called (syncGoalTools runs)
+		// We expect it to throw, but that's caught by the try/catch in syncGoalTools
+		await ss({ reason: "start" }, minimalCtx);
+
+		const afterSessionStart = getActiveToolsCallCount;
+		assert.ok(afterSessionStart > loadTimeCalls,
+			`syncGoalTools should call getActiveTools during session_start. ` +
+			`Before: ${loadTimeCalls}, After: ${afterSessionStart}`);
+	});
+
 	it("e2e: complete without sync produces deferred archival state", async () => {
 		const f = testFixture();
 		try {

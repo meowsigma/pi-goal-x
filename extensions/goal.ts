@@ -849,7 +849,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		if (legacyGoal && legacyGoal.status !== "complete") {
 			legacyGoal = sanitizeGoalPaths(ctx, mergeGoalPromptFromDisk(ctx, legacyGoal));
 		}
-		focusedGoalId = resolveSessionFocus({ pool: goalsById, focusEntry, legacyGoal });
+		const settings = loadGoalSettings(ctx.cwd);
+		focusedGoalId = resolveSessionFocus({ pool: goalsById, focusEntry, legacyGoal, autoSelectSingleGoal: settings.autoSelectSingleGoal });
 		if (!focusEntry && focusedGoalId) {
 			try {
 				appendFocusEntry(focusedGoalId, legacyGoal?.id === focusedGoalId ? "migrated" : "selected");
@@ -1581,6 +1582,7 @@ Verification contract:
 		if (key === "disabled") return config.disabled === true ? "true" : "false";
 		if (key === "disableTasks") return config.disableTasks === true ? "true" : "false";
 		if (key === "disableContracts") return config.disableContracts === true ? "true" : "false";
+		if (key === "autoSelectSingleGoal") return config.autoSelectSingleGoal === true ? "true" : "false";
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
 		return config[key] ?? "(default)";
 	}
@@ -1602,7 +1604,7 @@ Verification contract:
 			ctx.ui.notify(`Settings file: ${goalSettingsPath(ctx.cwd)}`, "info");
 			return;
 		}
-		const editorKeys = ["disabled", "provider", "model", "thinking_level", "subtaskDepth"] as const;
+		const editorKeys = ["disabled", "provider", "model", "thinking_level", "subtaskDepth", "autoSelectSingleGoal"] as const;
 		while (true) {
 			const config = loadGoalSettingsFileConfig(ctx.cwd);
 			const options = settingsLines(config).map((line) => `  ${line}`);
@@ -1620,6 +1622,12 @@ Verification contract:
 			const key = editorKey as keyof GoalSettings;
 			if (key === "disabled") {
 				const next = { ...config, disabled: !config.disabled };
+				saveGoalSettingsFileConfig(ctx.cwd, next);
+				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
+				continue;
+			}
+			if (key === "autoSelectSingleGoal") {
+				const next = { ...config, autoSelectSingleGoal: config.autoSelectSingleGoal !== true };
 				saveGoalSettingsFileConfig(ctx.cwd, next);
 				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
 				continue;

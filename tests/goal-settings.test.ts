@@ -59,6 +59,13 @@ test("parseGoalSettings: string true/false values accepted", () => {
 	});
 });
 
+test("parseGoalSettings: autoSelectSingleGoal accepted as bool or string", () => {
+	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: true }), { autoSelectSingleGoal: true });
+	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "true" }), { autoSelectSingleGoal: true });
+	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: false }), {});
+	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "false" }), {});
+});
+
 test("parseGoalSettings: unknown keys rejected", () => {
 	assert.throws(
 		() => parseGoalSettings({ disableTasks: true, disableContracts: false, foo: "bar" }),
@@ -152,6 +159,7 @@ test("loadGoalSettings: no file, no env vars -> defaults false", () => {
 		const result = loadGoalSettings(dir, {});
 		assert.equal(result.disableTasks, false);
 		assert.equal(result.disableContracts, false);
+		assert.equal(result.autoSelectSingleGoal, false, "autoSelectSingleGoal defaults to false");
 	});
 });
 

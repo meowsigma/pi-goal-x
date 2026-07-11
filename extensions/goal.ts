@@ -146,7 +146,6 @@ const GOAL_EVENT_ENTRY = "pi-goal-event";
 const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 const COMPLETE_STATUS = "complete";
 const CONTINUATION_IDLE_RETRY_MS = 50;
-const STATUS_REFRESH_MS = 1000;
 /**
  * Tools that count as "real work" toward the active goal. If a non-tool-use
  * turn ends without any of these having been called, we DO NOT queue the next
@@ -410,8 +409,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	let continuationTimer: ReturnType<typeof setTimeout> | null = null;
 	let runningGoalId: string | null = null;
 	let terminalInputUnsubscribe: (() => void) | null = null;
-	let statusRefreshTimer: ReturnType<typeof setInterval> | null = null;
-	let statusRefreshCtx: ExtensionContext | null = null;
 	let auditProgress: AuditorWidgetProgress | null = null;
 	let auditAnimationTimer: ReturnType<typeof setInterval> | null = null;
 	let auditAbortController: AbortController | null = null;
@@ -525,37 +522,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				// Ledger append failure should not block skip
 			}
 		}
-	}
-
-	function stopStatusRefresh(): void {
-		if (statusRefreshTimer) {
-			clearInterval(statusRefreshTimer);
-			statusRefreshTimer = null;
-		}
-		statusRefreshCtx = null;
-	}
-
-	function syncStatusRefresh(ctx: ExtensionContext): void {
-		if (!ctx.hasUI || state.goal?.status !== "active") {
-			stopStatusRefresh();
-			return;
-		}
-		statusRefreshCtx = ctx;
-		if (statusRefreshTimer) return;
-		statusRefreshTimer = setInterval(() => {
-			if (!statusRefreshCtx || state.goal?.status !== "active") {
-				stopStatusRefresh();
-				return;
-			}
-			const displayGoal = goalForDisplay();
-			if (displayGoal) {
-				const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
-				statusRefreshCtx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
-			}
-			// Live-tick the above-editor widget so duration/tokens update.
-			goalWidgetComponent?.update();
-		}, STATUS_REFRESH_MS);
-		statusRefreshTimer.unref?.();
 	}
 
 	function clearContinuationTimer(): void {
@@ -774,7 +740,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	 * Live above-editor widget for the active goal. Inspired by rpiv-todo's
 	 * TodoOverlay: register the widget once with a factory, read live state
 	 * via the closure at render time, and call `tui.requestRender()` on every
-	 * state change so the overlay refreshes without re-registration.
+	 * state change so the overlay refreshes without re-registration. Normal pi
+	 * renders still read current values through the closure; do not request
+	 * periodic renders just to tick elapsed time because terminal redraws pull
+	 * users out of scrollback while they review long goals and earlier context.
 	 *
 	 * Layout (sisyphus, running):
 	 *   ◆ Sisyphus  [▰▰▰▱▱] 3/5
@@ -805,7 +774,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const totalOpen = openGoals().length;
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);
-			stopStatusRefresh();
 			return;
 		}
 		if (!state.goal) {
@@ -831,7 +799,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			} else {
 				goalWidgetComponent?.update();
 			}
-			stopStatusRefresh();
 			return;
 		}
 
@@ -859,12 +826,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			widgetRegistered = true;
 		} else {
 			goalWidgetComponent?.update();
-		}
-
-		if (state.goal.status === "complete") {
-			stopStatusRefresh();
-		} else {
-			syncStatusRefresh(ctx);
 		}
 	}
 
@@ -3585,7 +3546,6 @@ promptGuidelines: [
 	pi.on("session_shutdown", async (_event, ctx) => {
 		accountProgress(ctx);
 		clearContinuationTimer();
-		stopStatusRefresh();
 		terminalInputUnsubscribe?.();
 		terminalInputUnsubscribe = null;
 		if (state.goal) persist(ctx);

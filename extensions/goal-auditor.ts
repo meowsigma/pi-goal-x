@@ -242,6 +242,30 @@ function resolveAuditorModel(ctx: ExtensionContext, config: GoalSettings): { mod
 	return { model: undefined, error: `Configured auditor model is ambiguous or unavailable: ${config.model}` };
 }
 
+/**
+ * Options that reuse the parent session's auth + registered providers for the nested auditor.
+ *
+ * Pi 0.81+ `createAgentSession` accepts `modelRuntime` (and ignores `modelRegistry`).
+ * ExtensionContext still exposes `modelRegistry`, which wraps the live ModelRuntime.
+ * Sharing that runtime keeps extension providers such as `pi-cursor-sdk`'s `cursor`
+ * provider (and its auth) available. Without this, the auditor builds a fresh runtime
+ * with an empty resource loader, so Cursor models fail with "No API key found for cursor"
+ * even when `~/.pi/agent/auth.json` has a Cursor key.
+ *
+ * Older SDKs still accept `modelRegistry`; pass both for compatibility.
+ */
+export function resolveAuditorSessionModelOptions(ctx: ExtensionContext): {
+	modelRegistry: ExtensionContext["modelRegistry"];
+	modelRuntime?: unknown;
+} {
+	const registry = ctx.modelRegistry as ExtensionContext["modelRegistry"] & { runtime?: unknown };
+	const runtime = registry?.runtime;
+	if (runtime) {
+		return { modelRegistry: ctx.modelRegistry, modelRuntime: runtime };
+	}
+	return { modelRegistry: ctx.modelRegistry };
+}
+
 function modelLabel(model: Model<any> | undefined): string | undefined {
 	return model ? `${model.provider}/${model.id}` : undefined;
 }
@@ -318,13 +342,13 @@ export async function runGoalCompletionAuditor(args: {
 			cwd: args.ctx.cwd,
 			model,
 			thinkingLevel,
-			modelRegistry: args.ctx.modelRegistry,
+			...resolveAuditorSessionModelOptions(args.ctx),
 			resourceLoader: makeAuditorResourceLoader(),
 			sessionManager: SessionManager.inMemory(args.ctx.cwd),
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
 			tools: ["read", "grep", "find", "ls", "bash", REPORT_AUDITOR_PROGRESS_TOOL_NAME],
 			customTools: [reportProgressTool],
-		});
+		} as Parameters<typeof createAgentSession>[0]);
 		const unsubscribe = session.subscribe((event) => {
 			if (event.type === "tool_execution_start") {
 				progress.currentTool = event.toolName;

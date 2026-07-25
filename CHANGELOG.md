@@ -8,6 +8,19 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.18.9] — 2026-07-25
+
+### Fixed
+
+- **Completion auditor lost Cursor / extension-provider auth on pi 0.81+:** Nested
+  `createAgentSession` for the independent auditor still passed `modelRegistry`, but
+  pi 0.81+ only accepts `modelRuntime`. Combined with the auditor's empty resource
+  loader (no `pi-cursor-sdk`), that built a fresh runtime without the registered
+  `cursor` provider and failed with `No API key found for cursor` even when
+  `auth.json` had a Cursor API key. The auditor now reuses the parent session's
+  ModelRuntime (via `modelRegistry.runtime`) while still passing `modelRegistry`
+  for older SDKs.
+
 ## [0.18.8] — 2026-06-10
 
 ### Changed

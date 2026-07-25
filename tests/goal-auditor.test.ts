@@ -7,6 +7,7 @@ import test from "node:test";
 import {
 	buildGoalAuditorPrompt,
 	parseAuditorDecision,
+	resolveAuditorSessionModelOptions,
 	runGoalCompletionAuditor,
 } from "../extensions/goal-auditor.ts";
 import {
@@ -37,6 +38,48 @@ test("parseAuditorDecision requires explicit approval and lets disapproval win",
 	assert.deepEqual(parseAuditorDecision("Nope\n<disapproved/>"), { approved: false, disapproved: true });
 	assert.deepEqual(parseAuditorDecision("confused <approved/> <disapproved/>"), { approved: false, disapproved: true });
 	assert.deepEqual(parseAuditorDecision("no marker"), { approved: false, disapproved: false });
+});
+
+test("resolveAuditorSessionModelOptions shares parent ModelRuntime when available", () => {
+	const runtime = { id: "parent-runtime" };
+	const modelRegistry = { runtime, find: () => undefined };
+	const withRuntime = resolveAuditorSessionModelOptions({ modelRegistry } as any);
+	assert.equal(withRuntime.modelRuntime, runtime);
+	assert.equal(withRuntime.modelRegistry, modelRegistry);
+
+	const legacyRegistry = { find: () => undefined };
+	const legacy = resolveAuditorSessionModelOptions({ modelRegistry: legacyRegistry } as any);
+	assert.equal(legacy.modelRuntime, undefined);
+	assert.equal(legacy.modelRegistry, legacyRegistry);
+});
+
+test("runGoalCompletionAuditor passes parent modelRuntime into createSession", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
+	try {
+		const runtime = { id: "parent-runtime" };
+		const modelRegistry = { runtime, find: () => undefined, getAvailable: () => [] };
+		let captured: Record<string, unknown> | undefined;
+		const mockSession = {
+			abort: () => {},
+			subscribe: () => () => {},
+			prompt: async () => {},
+		};
+
+		await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined, modelRegistry } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			createSession: async (opts: any) => {
+				captured = opts;
+				return { session: mockSession } as any;
+			},
+		});
+
+		assert.equal(captured?.modelRuntime, runtime);
+		assert.equal(captured?.modelRegistry, modelRegistry);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 test("parseGoalSettings supports provider/model and thinking_level aliases", () => {

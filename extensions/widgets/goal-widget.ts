@@ -179,7 +179,7 @@ export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme:
 			? truncateText(progress.currentToolArgs, Math.max(10, safeWidth - 24))
 			: "";
 		const toolDuration = progress.currentToolStartedAt
-			? ` ${theme.fg("dim", formatDuration(Date.now() - progress.currentToolStartedAt))}`
+			? ` ${theme.fg("dim", formatDuration(Math.floor((Date.now() - progress.currentToolStartedAt) / 1000)))}`
 			: "";
 		lines.push(branchLine(
 			theme,

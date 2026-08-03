@@ -64,7 +64,11 @@ test("resolveSessionFocus prefers valid branch focus, then legacy goal, then sin
 	assert.equal(diskWinsPool.get("g1")?.usage.tokensUsed, 50);
 
 	const singlePool = goalPoolFromGoals([goal("only")]);
-	assert.equal(resolveSessionFocus({ pool: singlePool }), "only");
+	// Default (autoSelectSingleGoal unset/false): no auto-focus — sessions start unfocused.
+	assert.equal(resolveSessionFocus({ pool: singlePool }), null);
+	assert.equal(resolveSessionFocus({ pool: singlePool, autoSelectSingleGoal: false }), null);
+	// Opt-in: auto-focus the single open goal when explicitly enabled.
+	assert.equal(resolveSessionFocus({ pool: singlePool, autoSelectSingleGoal: true }), "only");
 });
 
 test("goal list and selector labels expose focus without storing it in goals", () => {

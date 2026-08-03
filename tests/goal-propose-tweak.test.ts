@@ -227,13 +227,36 @@ describe("propose_goal_tweak", () => {
 
 	// ── Prompt guidelines ───────────────────────────────────────────────────
 
-	it("prompt guidelines mention confirmation dialog", () => {
+	it("has optional tasks parameter matching propose_goal_draft's schema", () => {
+		const tool = getTool(registeredTools, "propose_goal_tweak");
+		const params = tool.parameters as any;
+		assert.ok(params.properties?.tasks, "must have tasks parameter");
+		assert.equal(params.required?.includes("tasks") ?? false, false,
+			"tasks must be optional (not in required array)");
+		const tasksSchema = params.properties.tasks;
+		assert.ok(tasksSchema, "tasks schema must be defined");
+		// Check it's an array type
+		assert.match(JSON.stringify(tasksSchema), /"type":"array"/i, "tasks must be an array type");
+		// Check items schema includes id, title, verificationContract, lightweightSubtasks
+		const itemsStr = JSON.stringify(tasksSchema);
+		assert.ok(itemsStr.includes("id"), "tasks items must have id field");
+		assert.ok(itemsStr.includes("title"), "tasks items must have title field");
+		assert.ok(itemsStr.includes("verificationContract"), "tasks items must have verificationContract field");
+		assert.ok(itemsStr.includes("lightweightSubtasks"), "tasks items must have lightweightSubtasks field");
+		assert.ok(itemsStr.includes("subtasks"), "tasks items must have subtasks field");
+	});
+
+	it("prompt guidelines mention confirmation dialog and tasks parameter", () => {
 		const tool = getTool(registeredTools, "propose_goal_tweak");
 		const joined = tool.promptGuidelines?.join(" ") ?? "";
 		assert.ok(joined.includes("Confirm") && joined.includes("Continue Chatting"),
 			"guidelines must mention Confirm / Continue Chatting");
 		assert.ok(joined.includes("propose_goal_tweak"),
 			"guidelines must reference the tool name");
+		assert.ok(joined.includes("tasks (optional)") || joined.includes("tasks parameter"),
+			"guidelines must mention the tasks parameter");
+		assert.ok(joined.includes("inherit") || joined.includes("inherited"),
+			"guidelines must mention inheritance behavior");
 	});
 
 	it("renders call with truncated changeSummary", () => {

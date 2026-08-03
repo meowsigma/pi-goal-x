@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { buildCompletionReport, validateGoalUpdate } from "../extensions/goal-policy.ts";
+import { buildCompletionReport, findSubtaskDepthViolation, validateGoalUpdate, validateTaskListProposal } from "../extensions/goal-policy.ts";
 import { createGoal } from "../extensions/goal-record.ts";
 import {
 	archiveGoalFile,
@@ -182,6 +182,151 @@ test("propose_goal_tweak path: writeActiveGoalFile with new objective (simulated
 		cleanup(ctx);
 	}
 });
+
+test("propose_goal_tweak path: taskList persisted when tasks parameter provided", () => {
+	const ctx = tempCtx();
+	try {
+		const goal = makeGoal({
+			objective: "Goal with inherited tasks",
+		});
+		const active = writeActiveGoalFile(ctx, goal);
+
+		const newTasks = [
+			{ id: "t1", title: "Task one", status: "pending" as const },
+			{ id: "t2", title: "Task two", status: "pending" as const, verificationContract: "Must verify" },
+		];
+
+		// Simulate propose_goal_tweak confirm path with tasks parameter
+		const tweaked = writeActiveGoalFile(ctx, {
+			...active,
+			objective: "Updated objective with new tasks",
+			updatedAt: new Date().toISOString(),
+			taskList: {
+				tasks: newTasks,
+				blockCompletion: false,
+				proposedAt: new Date().toISOString(),
+			},
+		});
+
+		assert.ok(tweaked.taskList, "taskList must be set on tweaked goal");
+		assert.equal(tweaked.taskList.tasks.length, 2, "must have 2 tasks");
+		assert.equal(tweaked.taskList.tasks[0].id, "t1");
+		assert.equal(tweaked.taskList.tasks[1].verificationContract, "Must verify");
+		assert.equal(tweaked.objective, "Updated objective with new tasks");
+
+		// Verify disk has the task list JSON
+		const diskContent = readFileSync(path.join(ctx.cwd, tweaked.activePath ?? "missing"), "utf8");
+		assert.ok(diskContent.includes("Task one"), "disk must contain task title");
+		assert.ok(diskContent.includes("Must verify"), "disk must contain verification contract");
+	} finally {
+		cleanup(ctx);
+	}
+});
+
+test("propose_goal_tweak path: original taskList inherited when tasks omitted", () => {
+	const ctx = tempCtx();
+	try {
+		const originalTasks = [
+			{ id: "orig1", title: "Original task", status: "pending" as const },
+		];
+
+		// Write goal WITH task list
+		const goal = makeGoal({
+			objective: "Goal with original task list",
+			taskList: {
+				tasks: originalTasks,
+				blockCompletion: false,
+				proposedAt: new Date().toISOString(),
+			},
+		});
+		const active = writeActiveGoalFile(ctx, goal);
+		assert.ok(active.taskList, "original must have taskList");
+
+		// Simulate propose_goal_tweak confirm path WITHOUT tasks parameter:
+		// the handler inherits the current goal's taskList
+		const updatedObjective = "Objective tweaked, tasks inherited unchanged";
+		const withInherited = writeActiveGoalFile(ctx, {
+			...active,
+			objective: updatedObjective,
+			updatedAt: new Date().toISOString(),
+			taskList: active.taskList, // This is what the handler does
+		});
+
+		assert.ok(withInherited.taskList, "inherited taskList must be present");
+		assert.equal(withInherited.taskList.tasks.length, 1);
+		assert.equal(withInherited.taskList.tasks[0].id, "orig1");
+		assert.equal(withInherited.taskList.tasks[0].title, "Original task");
+		assert.equal(withInherited.objective, updatedObjective);
+
+		// Verify disk has both the new objective and the original task
+		const diskContent = readFileSync(path.join(ctx.cwd, withInherited.activePath ?? "missing"), "utf8");
+		assert.ok(diskContent.includes(updatedObjective), "disk must have new objective");
+		assert.ok(diskContent.includes("Original task"), "disk must have original task from inheritance");
+	} finally {
+		cleanup(ctx);
+	}
+});
+
+test("propose_goal_tweak path: taskList cleared when tasks omitted and goal has no taskList", () => {
+	const ctx = tempCtx();
+	try {
+		// Goal WITHOUT task list
+		const goal = makeGoal({ objective: "Goal without task list" });
+		const active = writeActiveGoalFile(ctx, goal);
+		assert.equal(active.taskList, undefined, "original must have no taskList");
+
+		// Simulate handler: no tasks param and no inherited taskList
+		const tweaked = writeActiveGoalFile(ctx, {
+			...active,
+			objective: "Still no tasks",
+			updatedAt: new Date().toISOString(),
+			taskList: undefined, // Handler does not set taskList
+		});
+
+		assert.equal(tweaked.taskList, undefined, "must still have no taskList");
+	} finally {
+		cleanup(ctx);
+	}
+});
+
+test("propose_goal_tweak path: task validation rejects deep subtasks", () => {
+	const ctx = tempCtx();
+	try {
+		const goal = makeGoal({ objective: "Test validation" });
+		const active = writeActiveGoalFile(ctx, goal);
+
+		// Tasks with subtask depth > 1 (default max) — this is what the
+		// handler's findSubtaskDepthViolation call would catch at confirm time.
+		// We verify the goal can be written but that validateTaskListProposal
+		const deepTasks = [{
+			id: "t1", title: "Parent", status: "pending" as const,
+			subtasks: [{
+				id: "t1a", title: "Child", status: "pending" as const,
+				subtasks: [
+					{ id: "t1ai", title: "Grandchild", status: "pending" as const },
+				],
+			}],
+		}];
+
+		// Simulate the handler calling findSubtaskDepthViolation
+		const depthViolation = findSubtaskDepthViolation(deepTasks, 1);
+		assert.ok(depthViolation, "must reject tasks with subtask depth > 1");
+		assert.ok(depthViolation.includes("subtask nesting depth"),
+			`must mention depth violation. Got: ${depthViolation}`);
+
+		// Also verify that validateTaskListProposal rejects it
+		const proposalResult = validateTaskListProposal({ goal: tweakedRecord(active), tasks: deepTasks });
+		assert.equal(proposalResult.ok, false, "must reject deep subtasks");
+		assert.ok(proposalResult.message.includes("depth"),
+			`must mention depth. Got: ${proposalResult.message}`);
+	} finally {
+		cleanup(ctx);
+	}
+});
+
+function tweakedRecord(g: GoalRecord): GoalRecord {
+	return { ...g, status: "active" as const, autoContinue: true };
+}
 
 // ─── prompt evolution instruction ────────────────────────────────────────────
 

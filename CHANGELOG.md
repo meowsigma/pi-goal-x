@@ -43,6 +43,60 @@ with the `0.x` prefix indicating pre-1.0 development.
   methods cannot be called during extension loading" error logged on every session start.
   No behavior change — `before_agent_start` already re-syncs before every real turn. (PR #8)
 
+## [0.19.0] — 2026-06-14
+
+### Added
+
+- **propose_goal_tweak: tasks parameter, inheritance, and box-drawn task display:**
+  `propose_goal_tweak` now accepts an optional `tasks` parameter (same schema as
+  `propose_goal_draft`). When omitted, the current goal's task list is inherited
+  automatically. The confirmation dialog displays the task list in a box-drawn
+  format (`┌─ TASKS ──┐`) matching `propose_goal_draft`. The drafting prompt
+  surfaces the current task list and instructs the agent to edit inherited content
+  directly rather than rewriting from scratch. Task validation (subtask depth)
+  is applied. Tasks are persisted on the goal record when confirmed. (6 tests,
+  390 total pass.)
+
+### Refactored
+
+- **DRY shared confirmation rendering:** Extracted `formatModeLabel`,
+  `formatPrefixedLines`, `formatSection`, and `renderConfirmationTasks` helpers
+  from the duplicated inline rendering in `buildDraftConfirmationText` and
+  `buildTweakConfirmationText`. `goal.ts` now imports `renderConfirmationTasks`
+  from `goal-draft.ts` instead of defining its own local copy. `buildDraftConfirmationText`
+  shrank 44% (16→9 lines), `buildTweakConfirmationText` shrank 70% (56→17 lines).
+
+## [0.18.10] — 2026-06-12
+
+### Fixed
+
+- **syncGoalTools deferred from top-level to session_start:** Removed the top-level
+  `syncGoalTools()` call that fired during extension loading, before the runtime was
+  initialized. This was the cause of the "Extension runtime not initialized. Action
+  methods cannot be called during extension loading" error. `syncGoalTools()` is now
+  called inside the `session_start` handler, after `loadState()`. Added an e2e test
+  that verifies no `getActiveTools()` calls occur during extension registration and
+  that the call only fires after `session_start`.
+
+## [0.18.9] — 2026-06-10
+
+### Fixed
+
+- **turnSeq scoping for turnStoppedFor:** Added a per-turn generation counter so stale
+  turn-stop markers from prior turns or session resumes cannot accidentally block an
+  active goal's tool calls. A new `advanceTurnSeq()` function increments the counter at
+  the start of each turn; `currentTurnStoppedGoalId()` returns the stopped goal only if
+  its sequence matches the current turn.
+
+- **Stale continuation checkpoint guards:** Added `checkpointGoalId` tracking and
+  `isActionableContinuationGoal()` to prevent work tools from executing when a queued
+  continuation fires for a goal that has been paused, cleared, or replaced. The
+  `before_agent_start` handler now reconciles from disk and aborts the turn for stale
+  checkpoints. The `tool_call` handler also blocks work tools mid-turn when a stale
+  checkpoint is detected.
+
+  These changes incorporate selected improvements from PR #1 by codewithkenzo.
+
 ## [0.18.8] — 2026-06-10
 
 ### Changed

@@ -721,7 +721,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				if (next) state.goal = next.status === "complete" ? archiveGoalFile(ctx, next) : writeActiveGoalFile(ctx, next);
 			}
 		}
-		pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
 		syncGoalTools();
 		if (ctx) updateUI(ctx);
 	}
@@ -730,7 +729,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		if (!state.goal || state.goal.status === "complete") return;
 		if (syncGoalPromptFromDisk(ctx)) {
 			state.goal = { ...state.goal, updatedAt: nowIso() };
-			pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
 		}
 		syncGoalTools();
 		updateUI(ctx);
@@ -2207,10 +2205,9 @@ ${objective}` : objective,
 				// minimal state update manually:
 				//   1) write the new record to disk authoritatively
 				//   2) update in-memory `goal` to the canonical post-write record
-				//   3) append the state entry and re-sync tools
+				//   3) re-sync tools
 				//   4) clear the tweak drafting gate so propose_goal_tweak can't be re-used
 				state.goal = writeActiveGoalFile(ctx, next);
-				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
 				tweakDraftingFor = null;
 				// Reset autoContinue counter — plan changed, agent gets a fresh chain.
 				resetGetGoalNudgeState(state.goal.id);
@@ -2374,7 +2371,6 @@ ${objective}` : objective,
 					updatedAt: nowIso(),
 				};
 				state.goal = writeActiveGoalFile(ctx, state.goal);
-				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
 				turnStoppedFor = state.goal?.id ?? null;
 				resetGetGoalNudgeState(state.goal?.id);
 				syncGoalTools();
@@ -2441,7 +2437,6 @@ ${objective}` : objective,
 					updatedAt: nowIso(),
 				};
 				state.goal = writeActiveGoalFile(ctx, state.goal);
-				pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
 				turnStoppedFor = state.goal?.id ?? null;
 				resetGetGoalNudgeState(state.goal?.id);
 				syncGoalTools();
@@ -2571,7 +2566,6 @@ ${objective}` : objective,
 						updatedAt: nowIso(),
 					};
 					state.goal = writeActiveGoalFile(ctx, state.goal);
-					pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
 					turnStoppedFor = state.goal?.id ?? null;
 					resetGetGoalNudgeState(state.goal?.id);
 					syncGoalTools();
@@ -2672,7 +2666,6 @@ ${objective}` : objective,
 				updatedAt: nowIso(),
 			};
 			state.goal = writeActiveGoalFile(ctx, state.goal);
-			pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
 			turnStoppedFor = state.goal?.id ?? null;
 			resetGetGoalNudgeState(state.goal?.id);
 			syncGoalTools();

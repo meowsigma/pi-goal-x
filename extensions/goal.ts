@@ -13,6 +13,7 @@ import {
 	buildTweakConfirmationText,
 	extractVerificationContract,
 	goalDraftingPrompt,
+	renderConfirmationTasks,
 	validateGoalDraftProposal,
 	type GoalDraftingFocus,
 } from "./goal-draft.ts";
@@ -426,8 +427,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	//   after their successful execute. Once set, pi.on("tool_call") blocks all
 	//   subsequent in-turn tool calls except POST_STOP_ALLOWED_TOOLS. This is the
 	//   schema fix for "agent keeps writing files after pause_goal".
+	// turnSeq: lightweight generation counter, incremented at each turn start.
+	//   Used to scope turnStoppedFor so stale markers from prior turns or sessions
+	//   cannot poison a resumed active goal.
+	// checkpointGoalId: remembers the incoming goal id from queued continuations.
+	//   When set but the goal is no longer active/autoContinue, work tools are blocked.
 	let goalWorkToolCalledThisTurn = false;
-	let turnStoppedFor: string | null = null;
+	let turnSeq = 0;
+	let turnStoppedFor: { goalId: string; turnSeq: number } | null = null;
+	let checkpointGoalId: string | null = null;
 
 	// #5 post-compaction resync: when a compaction just happened, the next agent
 	// turn gets an extra reminder block. Set in session_compact, consumed
@@ -540,6 +548,28 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	function clearActiveAccounting(): void {
 		accounting.activeGoalId = null;
 		accounting.lastAccountedAt = null;
+	}
+
+	function advanceTurnSeq(): void {
+		turnSeq += 1;
+		if (turnStoppedFor?.turnSeq !== turnSeq) turnStoppedFor = null;
+	}
+
+	function currentTurnStoppedGoalId(): string | null {
+		if (!turnStoppedFor) return null;
+		if (turnStoppedFor.turnSeq !== turnSeq) {
+			turnStoppedFor = null;
+			return null;
+		}
+		return turnStoppedFor.goalId;
+	}
+
+	function isActionableContinuationGoal(goalId: string | null | undefined): goalId is string {
+		return !!goalId && state.goal?.id === goalId && state.goal.status === "active" && state.goal.autoContinue;
+	}
+
+	function isStaleCheckpointBlockedToolCall(toolName: string): boolean {
+		return !POST_STOP_ALLOWED_TOOL_SET.has(toolName);
 	}
 
 	function clearStoppedRuntimeState(): void {
@@ -1245,7 +1275,7 @@ Verification contract:
 		continuationTimer = null;
 		continuationScheduledFor = null;
 		syncGoalTools();
-		if (!state.goal || state.goal.id !== goalId || state.goal.status !== "active" || !state.goal.autoContinue) {
+		if (!isActionableContinuationGoal(goalId)) {
 			if (continuationQueuedFor === goalId) continuationQueuedFor = null;
 			return;
 		}
@@ -1266,16 +1296,18 @@ Verification contract:
 		}
 		continuationQueuedFor = goalId;
 		const settings = loadGoalSettings(ctx.cwd);
+		const goal = state.goal;
+		if (!goal) return;
 		pi.sendMessage<GoalEventDetails>(
 			{
 				customType: GOAL_EVENT_ENTRY,
-				content: continuationPrompt(state.goal, settings),
+				content: continuationPrompt(goal, settings),
 				display: false,
 				details: {
 					kind: "checkpoint",
-					goalId: state.goal.id,
-					status: state.goal.status,
-					objective: state.goal.objective,
+					goalId: goal.id,
+					status: goal.status,
+					objective: goal.objective,
 					timestamp: Date.now(),
 				},
 			},
@@ -1964,20 +1996,6 @@ Verification contract:
 			const autoContinueFlag = params.autoContinue ?? true;
 			const sisyphusFlag = validation.expectedSisyphus;
 			// Build confirmation text: goal + optional task list
-			function renderConfirmationTasks(tasks: GoalTask[], indent: number): string[] {
-				const prefix = "  ".repeat(indent);
-				const lines: string[] = [];
-				for (const t of tasks) {
-					const lw = t.lightweightSubtasks ? " (lightweight)" : "";
-					const contract = t.verificationContract ? ` contract: ${t.verificationContract}` : "";
-					lines.push(`${prefix}[ ] ${t.id}: ${t.title}${lw}${contract}`);
-					if (t.subtasks && t.subtasks.length > 0) {
-						lines.push(...renderConfirmationTasks(t.subtasks, indent + 1));
-					}
-				}
-				return lines;
-			}
-
 			let taskSummarySection = "";
 			let tasksToCreate: GoalTask[] | undefined;
 			if (params.tasks && params.tasks.length > 0) {
@@ -2124,10 +2142,25 @@ ${objective}` : objective,
 			"The user will see a full plain-text report plus a [Confirm] / [Continue Chatting] choice. Confirm applies the tweak; Continue Chatting returns control to you to ask follow-up questions.",
 			"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT re-propose the same content immediately; iterate based on their feedback first.",
 			"Do NOT use write/edit/bash to modify the active goal file directly. propose_goal_tweak is the only sanctioned channel.",
+			"tasks (optional): an array of task objects to REPLACE the current goal's task list. When omitted,",
+			"  the existing task list is inherited as-is. When provided, the full task list is replaced with",
+			"  the new tasks — add/remove/change tasks by passing the complete updated list.",
+			"  Each task has: {id, title, verificationContract?, lightweightSubtasks?, subtasks?}.",
+			"  Subtasks use the same shape recursively. The task list is displayed in the confirmation",
+			"  dialog alongside the objective diff, matching propose_goal_draft's rendering format.",
+			"Start from the current goal's objective text and task list (the inheritance defaults), then",
+			"  edit/rewrite them directly rather than composing a goal from scratch.",
 		],
 		parameters: Type.Object({
 			newObjective: Type.String({ description: "The complete revised objective text. For Sisyphus goals, preserve the Sisyphus style unless the user explicitly changes it." }),
-			changeSummary: Type.String({ description: "One-sentence description of what was changed (used in confirmation dialog and tweak log)." }),
+			changeSummary: Type.String({ description: "One-sentence description of what was changed (used in confirmation dialog, activity log, and tweak log)." }),
+			tasks: Type.Optional(Type.Array(Type.Object({
+				id: Type.String({ description: "Short stable slug e.g. 'task-1'" }),
+				title: Type.String({ description: "Human-readable task title" }),
+				verificationContract: Type.Optional(Type.String({ description: "Optional verification contract for this task." })),
+				lightweightSubtasks: Type.Optional(Type.Boolean({ description: "If true, subtasks are lightweight (no completion enforcement). Default false." })),
+				subtasks: Type.Optional(Type.Any({ description: "Optional recursive array of sub-tasks (same shape as parent)." })),
+			}), { description: "Optional task list to replace the current goal's tasks. When omitted the existing task list is inherited. Each task supports recursive subtasks." })),
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -2149,6 +2182,41 @@ ${objective}` : objective,
 			const changeSummary = params.changeSummary.trim();
 			if (!changeSummary) throw new Error("propose_goal_tweak requires a non-empty changeSummary.");
 
+			// Resolve tasks: inherit from current goal if not provided, or normalize/validate the passed tasks.
+			let tweakTasks: GoalTask[] | undefined;
+			if (params.tasks && Array.isArray(params.tasks) && params.tasks.length > 0) {
+				tweakTasks = params.tasks.map((t: Record<string, unknown>) => {
+					const task: GoalTask = {
+						id: t.id as string,
+						title: t.title as string,
+						status: "pending",
+						verificationContract: t.verificationContract as string | undefined,
+						lightweightSubtasks: t.lightweightSubtasks === true ? true : undefined,
+					};
+					const rawSubtasks = t.subtasks;
+					if (Array.isArray(rawSubtasks) && rawSubtasks.length > 0) {
+						task.subtasks = rawSubtasks
+							.map((s: Record<string, unknown>) => normalizeTaskItem(s))
+							.filter((s: GoalTask | undefined): s is GoalTask => !!s);
+					}
+					return task;
+				});
+				// Validate task list
+				if (tweakTasks.length > 50) {
+					return { content: [{ type: "text", text: "Task list cannot exceed 50 tasks." }], details: goalDetails(state.goal) };
+				}
+				const settings = loadGoalSettings(ctx.cwd);
+				const depthViolation = findSubtaskDepthViolation(tweakTasks, settings.subtaskDepth ?? 1);
+				if (depthViolation) {
+					return { content: [{ type: "text", text: depthViolation }], details: goalDetails(state.goal) };
+				}
+			} else {
+				// Inherit current task list when no tasks parameter provided
+				if (state.goal.taskList && state.goal.taskList.tasks.length > 0) {
+					tweakTasks = state.goal.taskList.tasks;
+				}
+			}
+
 			// Auto-start the tweak drafting flow if not already active.
 			if (tweakDraftingFor !== state.goal.id) {
 				await startGoalTweakDrafting(changeSummary, ctx);
@@ -2168,6 +2236,7 @@ ${objective}` : objective,
 				newObjective,
 				changeSummary,
 				sisyphus: !!state.goal.sisyphus,
+				tasks: tweakTasks,
 			});
 
 			const headless = shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM });
@@ -2204,6 +2273,9 @@ ${objective}` : objective,
 					// Clear any prior agent pause reason — the user has redefined the work.
 					pauseReason: undefined,
 					pauseSuggestedAction: undefined,
+					taskList: tweakTasks && tweakTasks.length > 0
+						? { tasks: tweakTasks, blockCompletion: false, proposedAt: nowIso() }
+						: undefined,
 				};
 				// IMPORTANT: bypass setGoal() / persist() here. persist() calls
 				// syncGoalPromptFromDisk() which would RE-READ the stale objective
@@ -2220,7 +2292,7 @@ ${objective}` : objective,
 				// Reset autoContinue counter — plan changed, agent gets a fresh chain.
 				resetGetGoalNudgeState(state.goal.id);
 				// Mark turn-stopped so subsequent in-turn tool calls are blocked.
-				turnStoppedFor = state.goal.id;
+				turnStoppedFor = { goalId: state.goal.id, turnSeq };
 				syncGoalTools();
 				updateUI(ctx);
 				ctx.ui.notify(`Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
@@ -2234,6 +2306,20 @@ ${objective}` : objective,
 					});
 				} catch {
 					// Ledger append failure should not crash tweak
+				}
+				// Append ledger event for task list change if tasks were provided
+				if (params.tasks && Array.isArray(params.tasks) && params.tasks.length > 0) {
+					try {
+						appendGoalEvent(ctx, {
+							type: "task_list_set",
+							goalId: state.goal.id,
+							taskCount: params.tasks.length,
+							blockCompletion: false,
+							at: state.goal.updatedAt,
+						});
+					} catch {
+						// Ledger append failure should not crash tweak
+					}
 				}
 				return {
 					content: [{
@@ -2379,7 +2465,7 @@ ${objective}` : objective,
 					updatedAt: nowIso(),
 				};
 				state.goal = writeActiveGoalFile(ctx, state.goal);
-				turnStoppedFor = state.goal?.id ?? null;
+				turnStoppedFor = state.goal ? { goalId: state.goal.id, turnSeq } : null;
 				resetGetGoalNudgeState(state.goal?.id);
 				syncGoalTools();
 				updateUI(ctx);
@@ -2445,7 +2531,7 @@ ${objective}` : objective,
 					updatedAt: nowIso(),
 				};
 				state.goal = writeActiveGoalFile(ctx, state.goal);
-				turnStoppedFor = state.goal?.id ?? null;
+				turnStoppedFor = state.goal ? { goalId: state.goal.id, turnSeq } : null;
 				resetGetGoalNudgeState(state.goal?.id);
 				syncGoalTools();
 				updateUI(ctx);
@@ -2574,7 +2660,7 @@ ${objective}` : objective,
 						updatedAt: nowIso(),
 					};
 					state.goal = writeActiveGoalFile(ctx, state.goal);
-					turnStoppedFor = state.goal?.id ?? null;
+					turnStoppedFor = state.goal ? { goalId: state.goal.id, turnSeq } : null;
 					resetGetGoalNudgeState(state.goal?.id);
 					syncGoalTools();
 					updateUI(ctx);
@@ -2592,7 +2678,7 @@ ${objective}` : objective,
 				} else {
 					// ── Continue working → pause the goal ──────────────
 					pauseActiveGoal(ctx);
-					turnStoppedFor = state.goal?.id ?? null;
+					turnStoppedFor = state.goal ? { goalId: state.goal.id, turnSeq } : null;
 					return {
 						content: [{ type: "text", text: "Goal paused — user chose to continue working after skipping audit." }],
 						details: state.goal ? goalDetails(state.goal) : undefined,
@@ -2674,7 +2760,7 @@ ${objective}` : objective,
 				updatedAt: nowIso(),
 			};
 			state.goal = writeActiveGoalFile(ctx, state.goal);
-			turnStoppedFor = state.goal?.id ?? null;
+			turnStoppedFor = state.goal ? { goalId: state.goal.id, turnSeq } : null;
 			resetGetGoalNudgeState(state.goal?.id);
 			syncGoalTools();
 			updateUI(ctx);
@@ -2741,7 +2827,7 @@ ${objective}` : objective,
 			resetGetGoalNudgeState(next.id);
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
 			// This is the schema-level closure of "agent kept writing files after pause_goal".
-			turnStoppedFor = state.goal.id;
+			turnStoppedFor = { goalId: state.goal.id, turnSeq };
 
 			const suggestionLine = suggested ? `\nSuggested: ${truncateText(suggested, 160)}` : "";
 			ctx.ui.notify(
@@ -2801,7 +2887,7 @@ ${objective}` : objective,
 			const archived = archiveCurrentGoal(ctx, "agent");
 			resetGetGoalNudgeState(abortedGoalId);
 			setGoal(null, ctx, true, "aborted");
-			turnStoppedFor = abortedGoalId;
+			turnStoppedFor = { goalId: abortedGoalId, turnSeq };
 
 			const archiveLine = archived?.archivedPath ? `\nArchive: ${archived.archivedPath}` : "";
 			ctx.ui.notify(
@@ -2990,7 +3076,7 @@ ${objective}` : objective,
 			}
 			state.goal = { ...state.goal, taskList, updatedAt: now };
 			setGoal(state.goal, ctx);
-			turnStoppedFor = state.goal.id;
+			turnStoppedFor = { goalId: state.goal.id, turnSeq };
 			resetGetGoalNudgeState(state.goal.id);
 			syncGoalTools();
 			updateUI(ctx);
@@ -3267,8 +3353,8 @@ promptGuidelines: [
 
 	pi.on("turn_start", async (_event, ctx) => {
 		// Per-turn flag resets (#4 + C9 fix).
+		advanceTurnSeq();
 		goalWorkToolCalledThisTurn = false;
-		turnStoppedFor = null;
 		syncGoalTools();
 		beginAccounting();
 		updateUI(ctx);
@@ -3276,15 +3362,27 @@ promptGuidelines: [
 
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
 	pi.on("tool_call", async (event, ctx) => {
+		const stoppedGoalId = currentTurnStoppedGoalId();
 		// Post-stop in-turn block (C9 0ad8 fix): after pause_goal / abort_goal /
 		// complete_goal / propose_goal_tweak fires in this turn, block all subsequent tool calls except
 		// read-only inspection. Forces the agent to yield the turn instead of "fixing"
 		// the situation by creating extra files etc.
-		if (turnStoppedFor !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
+		if (stoppedGoalId !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
 			return {
 				block: true,
-				reason: `The goal was already stopped earlier in this turn (goalId=${turnStoppedFor}). ` +
+				reason: `The goal was already stopped earlier in this turn (goalId=${stoppedGoalId}). ` +
 					`Do not call more tools; end the turn with a brief summary and yield to the user.`,
+			};
+		}
+		// Stale checkpoint guard: if the turn was triggered by a queued continuation
+		// for a goal that is no longer active/autoContinue, block work tools.
+		if (checkpointGoalId !== null && !isActionableContinuationGoal(checkpointGoalId) && isStaleCheckpointBlockedToolCall(event.toolName)) {
+			// Block the tool call with a stale-checkpoint message.
+			return {
+				block: true,
+				reason: `Cannot call ${event.toolName}: the goal checkpoint that triggered this turn is no longer active. ` +
+					`Goal ${checkpointGoalId} has been paused, cleared, or replaced. ` +
+					`End the turn with a brief summary and yield to the user.`,
 			};
 		}
 		// Phase 5 soft gate relaxation: active-goal question block and repeated get_goal
@@ -3369,6 +3467,7 @@ promptGuidelines: [
 	pi.on("session_start", async (event, ctx) => {
 		syncGoalTools();
 		loadState(ctx);
+		syncGoalTools();
 		syncTerminalInputPause(ctx);
 		if (event.reason === "resume" && !state.goal && openGoals().length > 1 && ctx.hasUI) {
 			await focusGoalCommand(ctx);
@@ -3409,11 +3508,13 @@ promptGuidelines: [
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		advanceTurnSeq();
 		syncGoalTools();
 		const currentSystemPrompt = () => ctx.getSystemPrompt?.() || event.systemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 
 		if (confirmationIntent !== null) {
+			checkpointGoalId = null;
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
@@ -3421,6 +3522,7 @@ promptGuidelines: [
 		}
 
 		if (tweakDraftingFor !== null) {
+			checkpointGoalId = null;
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
@@ -3431,8 +3533,12 @@ promptGuidelines: [
 		// matches the active goal, abort the whole turn instead of letting the
 		// model act on a stale instruction.
 		if (incomingGoalId !== null) {
+			// Reconcile from disk to pick up any external state changes before
+			// evaluating whether the checkpoint is actionable.
+			reconcileFocusedGoalFromDisk(ctx);
+			checkpointGoalId = incomingGoalId;
 			clearContinuationState();
-			if (!state.goal || state.goal.id !== incomingGoalId || (state.goal.status !== "active") || !state.goal.autoContinue) {
+			if (!isActionableContinuationGoal(incomingGoalId)) {
 				try {
 					ctx.abort?.();
 				} catch {}
@@ -3441,10 +3547,12 @@ promptGuidelines: [
 					systemPrompt: `${currentSystemPrompt()}\n\n${staleContinuationPrompt(incomingGoalId, state.goal)}`,
 				};
 			}
+			checkpointGoalId = null;
 		} else {
 			// A user-driven turn — clear any queued continuation so we don't
 			// double-fire after the user's own message returns. Also reset the
 			// autoContinue nudge state so the user always gets a fresh chain.
+			checkpointGoalId = null;
 			clearContinuationState();
 			resetGetGoalNudgeState(state.goal?.id);
 		}

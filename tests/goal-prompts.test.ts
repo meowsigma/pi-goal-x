@@ -266,3 +266,43 @@ test("continuationPrompt includes subtask rendering", () => {
 	assert.match(prompt, /\[ \] t1/);
 	assert.match(prompt, /\[ \] t1a/);
 });
+
+test("goalTweakDraftingPrompt includes task list block when goal has tasks", () => {
+	const g = goal({ id: "goal-tweak-tasks" });
+	g.taskList = {
+		tasks: [
+			{ id: "t1", title: "Existing task", status: "pending" },
+			{ id: "t2", title: "Complete task", status: "complete", evidence: "done" },
+		],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const prompt = goalTweakDraftingPrompt(g, "update scope");
+
+	assert.match(prompt, /\[GOAL TWEAK DRAFTING goalId=goal-tweak-tasks sisyphus=true\]/);
+	assert.match(prompt, /\[TASK LIST/);
+	assert.match(prompt, /\[ \] t1: Existing task/);
+	assert.match(prompt, /\[x\] t2: Complete task/);
+	assert.match(prompt, /1\/2 tasks complete/);
+});
+
+test("goalTweakDraftingPrompt includes editing instructions and tasks parameter docs", () => {
+	const g = goal({ id: "goal-editing" });
+	const prompt = goalTweakDraftingPrompt(g, "");
+
+	// Editing from existing goal instructions
+	assert.match(prompt, /Start from the EXISTING goal/i);
+	assert.match(prompt, /editing the current goal/i);
+	// Tasks parameter in propose_goal_tweak instructions
+	assert.match(prompt, /tasks \(optional\)/);
+	assert.match(prompt, /inherited as-is/);
+	assert.match(prompt, /REPLACE the current goal's task list/i);
+});
+
+test("goalTweakDraftingPrompt omits task list block when goal has no tasks", () => {
+	const g = goal({ id: "goal-no-tasks" });
+	const prompt = goalTweakDraftingPrompt(g, "tweak");
+
+	assert.match(prompt, /\[GOAL TWEAK DRAFTING goalId=goal-no-tasks.*\]/);
+	assert.doesNotMatch(prompt, /\[TASK LIST/);
+});

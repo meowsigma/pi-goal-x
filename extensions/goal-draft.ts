@@ -1,3 +1,5 @@
+import type { GoalTask } from "./goal-record.ts";
+
 export type GoalDraftingFocus = "goal" | "sisyphus";
 
 export interface GoalConfirmationIntentLike {
@@ -21,6 +23,45 @@ export type DraftProposalValidation =
 export type ToolGateDecision =
 	| { block: false }
 	| { block: true; reason: string };
+
+// ── Shared formatting helpers ──────────────────────────────────────────────
+
+function formatModeLabel(sisyphus: boolean): string {
+	return sisyphus ? "Sisyphus (prompt/criteria style)" : "Normal goal";
+}
+
+function formatPrefixedLines(content: string): string[] {
+	const lines: string[] = [];
+	for (const rawLine of content.split("\n")) {
+		const trimmed = rawLine.trim();
+		if (!trimmed) continue;
+		if (trimmed.startsWith("│")) {
+			lines.push(rawLine);
+		} else {
+			lines.push(`│   ${rawLine}`);
+		}
+	}
+	return lines;
+}
+
+function formatSection(title: string, content: string): string[] {
+	const body = formatPrefixedLines(content);
+	return ["", `─── ${title} ───`, "", ...body];
+}
+
+export function renderConfirmationTasks(tasks: GoalTask[], indent: number): string[] {
+	const prefix = "  ".repeat(indent);
+	const lines: string[] = [];
+	for (const t of tasks) {
+		const lw = t.lightweightSubtasks ? " (lightweight)" : "";
+		const contract = t.verificationContract ? ` contract: ${t.verificationContract}` : "";
+		lines.push(`${prefix}[ ] ${t.id}: ${t.title}${lw}${contract}`);
+		if (t.subtasks && t.subtasks.length > 0) {
+			lines.push(...renderConfirmationTasks(t.subtasks, indent + 1));
+		}
+	}
+	return lines;
+}
 
 export function promptSafeObjective(objective: string): string {
 	return objective.replace(/<\/?untrusted_objective>/gi, (tag) => tag.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
@@ -84,30 +125,13 @@ export function buildDraftConfirmationText(args: {
 	autoContinue: boolean;
 }): string {
 	const lines: string[] = [];
-	const modeLabel = args.focus === "sisyphus" ? "Sisyphus (prompt/criteria style)" : "Normal goal";
 	lines.push("● Goal draft ready for confirmation.");
 	lines.push("");
 	lines.push("─── Draft Details ───");
-	lines.push(`│   Mode: ${modeLabel}`);
+	lines.push(`│   Mode: ${formatModeLabel(args.focus === "sisyphus")}`);
 	lines.push(`│   Auto-continue: ${args.autoContinue ? "yes" : "no"}`);
-	lines.push("");
-	lines.push("─── Original Topic ───");
-	lines.push("");
-	for (const topicLine of args.originalTopic.trim().split("\n")) {
-		if (topicLine.trim()) lines.push(`│   ${topicLine}`);
-	}
-	lines.push("");
-	lines.push("─── Proposed Goal ───");
-	lines.push("");
-	for (const objLine of args.objective.split("\n")) {
-		const trimmed = objLine.trim();
-		if (!trimmed) continue;
-		if (trimmed.startsWith("│")) {
-			lines.push(objLine);
-		} else {
-			lines.push(`│   ${objLine}`);
-		}
-	}
+	lines.push(...formatSection("Original Topic", args.originalTopic.trim()));
+	lines.push(...formatSection("Proposed Goal", args.objective));
 	return lines.join("\n");
 }
 
@@ -116,42 +140,22 @@ export function buildTweakConfirmationText(args: {
 	newObjective: string;
 	changeSummary: string;
 	sisyphus: boolean;
+	tasks?: GoalTask[];
 }): string {
 	const lines: string[] = [];
-	const modeLabel = args.sisyphus ? "Sisyphus (prompt/criteria style)" : "Normal goal";
 	lines.push("● Goal tweak ready for confirmation.");
 	lines.push("");
 	lines.push("─── Draft Details ───");
-	lines.push(`│   Mode: ${modeLabel}`);
-	lines.push("");
-	lines.push("─── Change ───");
-	lines.push("");
-	for (const changeLine of args.changeSummary.split("\n")) {
-		if (changeLine.trim()) lines.push(`│   ${changeLine}`);
-	}
-	lines.push("");
-	lines.push("─── Current Objective ───");
-	lines.push("");
-	for (const curLine of args.currentObjective.split("\n")) {
-		const trimmed = curLine.trim();
-		if (!trimmed) continue;
-		if (trimmed.startsWith("│")) {
-			lines.push(curLine);
-		} else {
-			lines.push(`│   ${curLine}`);
-		}
-	}
-	lines.push("");
-	lines.push("─── Proposed New Objective ───");
-	lines.push("");
-	for (const newLine of args.newObjective.split("\n")) {
-		const trimmed = newLine.trim();
-		if (!trimmed) continue;
-		if (trimmed.startsWith("│")) {
-			lines.push(newLine);
-		} else {
-			lines.push(`│   ${newLine}`);
-		}
+	lines.push(`│   Mode: ${formatModeLabel(args.sisyphus)}`);
+	lines.push(...formatSection("Change", args.changeSummary));
+	lines.push(...formatSection("Current Objective", args.currentObjective));
+	lines.push(...formatSection("Proposed New Objective", args.newObjective));
+	if (args.tasks && args.tasks.length > 0) {
+		const taskLines = renderConfirmationTasks(args.tasks, 0);
+		lines.push("");
+		lines.push(`┌─ TASKS ─────────────────────────────────────┐`);
+		for (const tl of taskLines) lines.push(tl);
+		lines.push(`└──────────────────────────────────────────────┘`);
 	}
 	return lines.join("\n");
 }

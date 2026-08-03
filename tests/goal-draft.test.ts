@@ -221,3 +221,54 @@ test("promptSafeObjective escapes only untrusted objective tags", () => {
 		"&lt;untrusted_objective&gt;x&lt;/untrusted_objective&gt;<keep>",
 	);
 });
+
+test("buildTweakConfirmationText renders tasks section when tasks are provided", () => {
+	const text = buildTweakConfirmationText({
+		currentObjective: "=== Goal ===\nObjective: Old objective",
+		newObjective: "=== Goal ===\nObjective: New objective",
+		changeSummary: "Updated objective",
+		sisyphus: false,
+		tasks: [
+			{ id: "t1", title: "Task one", status: "pending" },
+			{ id: "t2", title: "Task two", status: "pending", verificationContract: "Must pass" },
+			{
+				id: "t3", title: "Task three", status: "pending",
+				subtasks: [
+					{ id: "t3a", title: "Subtask A", status: "pending" },
+				],
+			},
+		],
+	});
+
+	assert.match(text, /┌─ TASKS ─────────────────────────────────────┐/);
+	assert.match(text, /\[ \] t1: Task one/);
+	assert.match(text, /\[ \] t2: Task two/);
+	assert.match(text, /contract: Must pass/);
+	assert.match(text, /\[ \] t3: Task three/);
+	assert.match(text, /  \[ \] t3a: Subtask A/);
+	assert.match(text, /└──────────────────────────────────────────────┘/);
+});
+
+test("buildTweakConfirmationText does not render tasks section when tasks are omitted", () => {
+	const text = buildTweakConfirmationText({
+		currentObjective: "=== Goal ===\nObjective: Old",
+		newObjective: "=== Goal ===\nObjective: New",
+		changeSummary: "Updated",
+		sisyphus: false,
+	});
+
+	assert.doesNotMatch(text, /┌─ TASKS ─────────────────────────────────────┐/);
+	assert.match(text, /─── Proposed New Objective ───/);
+});
+
+test("buildTweakConfirmationText does not render tasks section when tasks array is empty", () => {
+	const text = buildTweakConfirmationText({
+		currentObjective: "=== Goal ===\nObjective: Old",
+		newObjective: "=== Goal ===\nObjective: New",
+		changeSummary: "Updated",
+		sisyphus: false,
+		tasks: [],
+	});
+
+	assert.doesNotMatch(text, /┌─ TASKS ─────────────────────────────────────┐/);
+});

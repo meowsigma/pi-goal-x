@@ -8,6 +8,41 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.19.0] — 2026-08-03
+
+### Added
+
+- **`autoSelectSingleGoal` setting (opt-in single-open auto-focus):** Sessions now start
+  unfocused by default so goals stay session-scoped when multiple sessions share the same
+  `.pi/goals/` directory (e.g. an Obsidian vault). Set `autoSelectSingleGoal: true` in
+  `.pi/pi-goal-x-settings.json` (or via `/goal-settings`) to restore the previous behavior
+  where a single open goal is auto-focused when no focus entry exists. (PR #4)
+
+### Fixed
+
+- **Terminal scrollback preserved while goals are active:** Removed the private 1-second
+  status-refresh timer that forced TUI redraws (`ui.setStatus` + widget update), which
+  pulled users out of terminal scrollback while reviewing long goals. The widget still
+  catches up on natural renders. (PR #5)
+
+- **Completion auditor lost Cursor / extension-provider auth on pi 0.81+:** Nested
+  `createAgentSession` for the independent auditor still passed `modelRegistry`, but pi
+  0.81+ only accepts `modelRuntime`. Combined with the auditor's empty resource loader
+  (no `pi-cursor-sdk`), that built a fresh runtime without the registered `cursor` provider
+  and failed with `No API key found for cursor` even when `auth.json` had a Cursor API key.
+  The auditor now reuses the parent session's ModelRuntime (via `modelRegistry.runtime`)
+  while still passing `modelRegistry` for older SDKs. (PR #6)
+
+- **Goal state no longer appended to the session on every persistence event:** Full goal
+  snapshots were duplicated into the session JSONL on every update, which could bloat a
+  multi-day session to hundreds of MB and exhaust the heap. Goal files under `.pi/goals/`
+  remain authoritative; legacy snapshot reads are kept for migration. (PR #7)
+
+- **`syncGoalTools()` deferred out of top-level extension load:** It now runs in
+  `session_start`, eliminating the spurious "Extension runtime not initialized. Action
+  methods cannot be called during extension loading" error logged on every session start.
+  No behavior change — `before_agent_start` already re-syncs before every real turn. (PR #8)
+
 ## [0.18.8] — 2026-06-10
 
 ### Changed

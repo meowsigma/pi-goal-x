@@ -3221,8 +3221,6 @@ promptGuidelines: [
 		},
 	}));
 
-	syncGoalTools();
-
 	pi.on("context", async (event): Promise<{ messages: typeof event.messages } | undefined> => {
 		let changed = false;
 		const latestGoalEventIndex = new Map<string, number>();
@@ -3361,6 +3359,7 @@ promptGuidelines: [
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		syncGoalTools();
 		loadState(ctx);
 		syncTerminalInputPause(ctx);
 		if (event.reason === "resume" && !state.goal && openGoals().length > 1 && ctx.hasUI) {

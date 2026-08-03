@@ -4,3 +4,4 @@ node_modules/
 *.tgz
 experiments/cases/*/runs/
 experiments/runs/
+.pi-subagents/

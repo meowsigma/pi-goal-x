@@ -146,7 +146,6 @@ const GOAL_EVENT_ENTRY = "pi-goal-event";
 const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 const COMPLETE_STATUS = "complete";
 const CONTINUATION_IDLE_RETRY_MS = 50;
-const STATUS_REFRESH_MS = 1000;
 /**
  * Tools that count as "real work" toward the active goal. If a non-tool-use
  * turn ends without any of these having been called, we DO NOT queue the next
@@ -410,8 +409,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	let continuationTimer: ReturnType<typeof setTimeout> | null = null;
 	let runningGoalId: string | null = null;
 	let terminalInputUnsubscribe: (() => void) | null = null;
-	let statusRefreshTimer: ReturnType<typeof setInterval> | null = null;
-	let statusRefreshCtx: ExtensionContext | null = null;
 	let auditProgress: AuditorWidgetProgress | null = null;
 	let auditAnimationTimer: ReturnType<typeof setInterval> | null = null;
 	let auditAbortController: AbortController | null = null;
@@ -429,15 +426,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	//   after their successful execute. Once set, pi.on("tool_call") blocks all
 	//   subsequent in-turn tool calls except POST_STOP_ALLOWED_TOOLS. This is the
 	//   schema fix for "agent keeps writing files after pause_goal".
-	// turnSeq: lightweight generation counter, incremented at each turn start.
-	//   Used to scope turnStoppedFor so stale markers from prior turns or sessions
-	//   cannot poison a resumed active goal.
-	// checkpointGoalId: remembers the incoming goal id from queued continuations.
-	//   When set but the goal is no longer active/autoContinue, work tools are blocked.
 	let goalWorkToolCalledThisTurn = false;
-	let turnSeq = 0;
-	let turnStoppedFor: { goalId: string; turnSeq: number } | null = null;
-	let checkpointGoalId: string | null = null;
+	let turnStoppedFor: string | null = null;
 
 	// #5 post-compaction resync: when a compaction just happened, the next agent
 	// turn gets an extra reminder block. Set in session_compact, consumed
@@ -534,37 +524,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	function stopStatusRefresh(): void {
-		if (statusRefreshTimer) {
-			clearInterval(statusRefreshTimer);
-			statusRefreshTimer = null;
-		}
-		statusRefreshCtx = null;
-	}
-
-	function syncStatusRefresh(ctx: ExtensionContext): void {
-		if (!ctx.hasUI || state.goal?.status !== "active") {
-			stopStatusRefresh();
-			return;
-		}
-		statusRefreshCtx = ctx;
-		if (statusRefreshTimer) return;
-		statusRefreshTimer = setInterval(() => {
-			if (!statusRefreshCtx || state.goal?.status !== "active") {
-				stopStatusRefresh();
-				return;
-			}
-			const displayGoal = goalForDisplay();
-			if (displayGoal) {
-				const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
-				statusRefreshCtx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
-			}
-			// Live-tick the above-editor widget so duration/tokens update.
-			goalWidgetComponent?.update();
-		}, STATUS_REFRESH_MS);
-		statusRefreshTimer.unref?.();
-	}
-
 	function clearContinuationTimer(): void {
 		if (continuationTimer) {
 			clearTimeout(continuationTimer);
@@ -581,28 +540,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	function clearActiveAccounting(): void {
 		accounting.activeGoalId = null;
 		accounting.lastAccountedAt = null;
-	}
-
-	function advanceTurnSeq(): void {
-		turnSeq += 1;
-		if (turnStoppedFor?.turnSeq !== turnSeq) turnStoppedFor = null;
-	}
-
-	function currentTurnStoppedGoalId(): string | null {
-		if (!turnStoppedFor) return null;
-		if (turnStoppedFor.turnSeq !== turnSeq) {
-			turnStoppedFor = null;
-			return null;
-		}
-		return turnStoppedFor.goalId;
-	}
-
-	function isActionableContinuationGoal(goalId: string | null | undefined): goalId is string {
-		return !!goalId && state.goal?.id === goalId && state.goal.status === "active" && state.goal.autoContinue;
-	}
-
-	function isStaleCheckpointBlockedToolCall(toolName: string): boolean {
-		return !POST_STOP_ALLOWED_TOOL_SET.has(toolName);
 	}
 
 	function clearStoppedRuntimeState(): void {
@@ -803,7 +740,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	 * Live above-editor widget for the active goal. Inspired by rpiv-todo's
 	 * TodoOverlay: register the widget once with a factory, read live state
 	 * via the closure at render time, and call `tui.requestRender()` on every
-	 * state change so the overlay refreshes without re-registration.
+	 * state change so the overlay refreshes without re-registration. Normal pi
+	 * renders still read current values through the closure; do not request
+	 * periodic renders just to tick elapsed time because terminal redraws pull
+	 * users out of scrollback while they review long goals and earlier context.
 	 *
 	 * Layout (sisyphus, running):
 	 *   ◆ Sisyphus  [▰▰▰▱▱] 3/5
@@ -834,7 +774,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const totalOpen = openGoals().length;
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);
-			stopStatusRefresh();
 			return;
 		}
 		if (!state.goal) {
@@ -860,7 +799,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			} else {
 				goalWidgetComponent?.update();
 			}
-			stopStatusRefresh();
 			return;
 		}
 
@@ -888,12 +826,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			widgetRegistered = true;
 		} else {
 			goalWidgetComponent?.update();
-		}
-
-		if (state.goal.status === "complete") {
-			stopStatusRefresh();
-		} else {
-			syncStatusRefresh(ctx);
 		}
 	}
 
@@ -1314,7 +1246,7 @@ Verification contract:
 		continuationTimer = null;
 		continuationScheduledFor = null;
 		syncGoalTools();
-		if (!isActionableContinuationGoal(goalId)) {
+		if (!state.goal || state.goal.id !== goalId || state.goal.status !== "active" || !state.goal.autoContinue) {
 			if (continuationQueuedFor === goalId) continuationQueuedFor = null;
 			return;
 		}
@@ -3296,6 +3228,8 @@ promptGuidelines: [
 		},
 	}));
 
+	syncGoalTools();
+
 	pi.on("context", async (event): Promise<{ messages: typeof event.messages } | undefined> => {
 		let changed = false;
 		const latestGoalEventIndex = new Map<string, number>();
@@ -3334,8 +3268,8 @@ promptGuidelines: [
 
 	pi.on("turn_start", async (_event, ctx) => {
 		// Per-turn flag resets (#4 + C9 fix).
-		advanceTurnSeq();
 		goalWorkToolCalledThisTurn = false;
+		turnStoppedFor = null;
 		syncGoalTools();
 		beginAccounting();
 		updateUI(ctx);
@@ -3343,27 +3277,15 @@ promptGuidelines: [
 
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
 	pi.on("tool_call", async (event, ctx) => {
-		const stoppedGoalId = currentTurnStoppedGoalId();
 		// Post-stop in-turn block (C9 0ad8 fix): after pause_goal / abort_goal /
 		// complete_goal / propose_goal_tweak fires in this turn, block all subsequent tool calls except
 		// read-only inspection. Forces the agent to yield the turn instead of "fixing"
 		// the situation by creating extra files etc.
-		if (stoppedGoalId !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
+		if (turnStoppedFor !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
 			return {
 				block: true,
-				reason: `The goal was already stopped earlier in this turn (goalId=${stoppedGoalId}). ` +
+				reason: `The goal was already stopped earlier in this turn (goalId=${turnStoppedFor}). ` +
 					`Do not call more tools; end the turn with a brief summary and yield to the user.`,
-			};
-		}
-		// Stale checkpoint guard: if the turn was triggered by a queued continuation
-		// for a goal that is no longer active/autoContinue, block work tools.
-		if (checkpointGoalId !== null && !isActionableContinuationGoal(checkpointGoalId) && isStaleCheckpointBlockedToolCall(event.toolName)) {
-			// Block the tool call with a stale-checkpoint message.
-			return {
-				block: true,
-				reason: `Cannot call ${event.toolName}: the goal checkpoint that triggered this turn is no longer active. ` +
-					`Goal ${checkpointGoalId} has been paused, cleared, or replaced. ` +
-					`End the turn with a brief summary and yield to the user.`,
 			};
 		}
 		// Phase 5 soft gate relaxation: active-goal question block and repeated get_goal
@@ -3447,7 +3369,6 @@ promptGuidelines: [
 
 	pi.on("session_start", async (event, ctx) => {
 		loadState(ctx);
-		syncGoalTools();
 		syncTerminalInputPause(ctx);
 		if (event.reason === "resume" && !state.goal && openGoals().length > 1 && ctx.hasUI) {
 			await focusGoalCommand(ctx);
@@ -3488,13 +3409,11 @@ promptGuidelines: [
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		advanceTurnSeq();
 		syncGoalTools();
 		const currentSystemPrompt = () => ctx.getSystemPrompt?.() || event.systemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 
 		if (confirmationIntent !== null) {
-			checkpointGoalId = null;
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
@@ -3502,7 +3421,6 @@ promptGuidelines: [
 		}
 
 		if (tweakDraftingFor !== null) {
-			checkpointGoalId = null;
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
@@ -3513,12 +3431,8 @@ promptGuidelines: [
 		// matches the active goal, abort the whole turn instead of letting the
 		// model act on a stale instruction.
 		if (incomingGoalId !== null) {
-			// Reconcile from disk to pick up any external state changes before
-			// evaluating whether the checkpoint is actionable.
-			reconcileFocusedGoalFromDisk(ctx);
-			checkpointGoalId = incomingGoalId;
 			clearContinuationState();
-			if (!isActionableContinuationGoal(incomingGoalId)) {
+			if (!state.goal || state.goal.id !== incomingGoalId || (state.goal.status !== "active") || !state.goal.autoContinue) {
 				try {
 					ctx.abort?.();
 				} catch {}
@@ -3527,12 +3441,10 @@ promptGuidelines: [
 					systemPrompt: `${currentSystemPrompt()}\n\n${staleContinuationPrompt(incomingGoalId, state.goal)}`,
 				};
 			}
-			checkpointGoalId = null;
 		} else {
 			// A user-driven turn — clear any queued continuation so we don't
 			// double-fire after the user's own message returns. Also reset the
 			// autoContinue nudge state so the user always gets a fresh chain.
-			checkpointGoalId = null;
 			clearContinuationState();
 			resetGetGoalNudgeState(state.goal?.id);
 		}
@@ -3634,7 +3546,6 @@ promptGuidelines: [
 	pi.on("session_shutdown", async (_event, ctx) => {
 		accountProgress(ctx);
 		clearContinuationTimer();
-		stopStatusRefresh();
 		terminalInputUnsubscribe?.();
 		terminalInputUnsubscribe = null;
 		if (state.goal) persist(ctx);

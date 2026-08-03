@@ -8,6 +8,17 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [0.20.1] — 2026-08-03
+
+### Fixed
+
+- **Republished to match merged main:** The 0.20.0 npm tarball was built from the
+  integration branch before the merge and omitted the local main line changes
+  (`propose_goal_tweak` tasks parameter with inheritance and box-drawn display,
+  `renderConfirmationTasks` refactor, deferred `syncGoalTools`, test/CHANGELOG updates).
+  0.20.1 ships the full merged tree at `origin/main` (merge commit 3274063), including
+  all five integrated PRs (#4-#8).
+
 ## [0.20.0] — 2026-08-03
 
 ### Added

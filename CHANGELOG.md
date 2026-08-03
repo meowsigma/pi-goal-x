@@ -8,7 +8,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
-## [0.19.0] — 2026-08-03
+## [0.20.0] — 2026-08-03
 
 ### Added
 

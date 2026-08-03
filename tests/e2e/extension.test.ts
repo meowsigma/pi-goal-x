@@ -127,6 +127,52 @@ describe("Extension E2E", () => {
 		return t;
 	}
 
+	// ── 0: syncGoalTools deferred from load time (PR #8) ───────────────────
+	it("e2e: syncGoalTools is not called during extension loading, only after session_start", async () => {
+		// Isolated mock pi that throws "Extension runtime not initialized" on
+		// getActiveTools — simulating real SDK behavior during extension loading.
+		// With the fix, no getActiveTools call happens until session_start.
+		let getActiveToolsCallCount = 0;
+		const isolatedHandlers = new Map<string, Function>();
+		const isolatedToolDefs: ToolDefinition[] = [];
+
+		const isolatedMockPi = {
+			registerTool: (def: ToolDefinition) => { isolatedToolDefs.push(def); },
+			registerCommand: () => {},
+			on: (event: string, handler: Function) => { isolatedHandlers.set(event, handler); },
+			appendEntry: () => {},
+			registerMessageRenderer: () => {},
+			sendMessage: () => {},
+			getActiveTools: () => {
+				getActiveToolsCallCount++;
+				throw new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
+			},
+			setActiveTools: () => {},
+			hasUI: false,
+		};
+
+		// Load the extension — with the fix this must NOT trigger getActiveTools
+		piGoalExtension(isolatedMockPi as any);
+		const loadTimeCalls = getActiveToolsCallCount;
+
+		assert.equal(loadTimeCalls, 0,
+			`syncGoalTools must not call getActiveTools during extension loading. ` +
+			`Called ${loadTimeCalls} time(s). The top-level syncGoalTools() should be removed.`);
+
+		// After session_start fires, syncGoalTools runs (the throw is swallowed
+		// by its internal try/catch) and getActiveTools is called.
+		const ss = isolatedHandlers.get("session_start");
+		assert.ok(ss, "session_start handler must be registered");
+
+		const minimalCtx = createMockCtx("/tmp", []);
+		await ss({ reason: "start" }, minimalCtx);
+
+		const afterSessionStart = getActiveToolsCallCount;
+		assert.ok(afterSessionStart > loadTimeCalls,
+			`syncGoalTools should call getActiveTools during session_start. ` +
+			`Before: ${loadTimeCalls}, After: ${afterSessionStart}`);
+	});
+
 	// ── 1: Deferred archival ───────────────────────────────────────────────
 	it("e2e: complete without sync produces deferred archival state", async () => {
 		const f = testFixture();

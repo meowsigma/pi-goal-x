@@ -38,6 +38,7 @@ export function resolveSessionFocus(args: {
 	pool: Map<string, GoalRecord>;
 	focusEntry?: GoalFocusEntry | null;
 	legacyGoal?: GoalRecord | null;
+	autoSelectSingleGoal?: boolean;
 }): string | null {
 	const focusedGoalId = args.focusEntry?.focusedGoalId ?? null;
 	const focused = focusedGoalId ? focusedGoalFromPool(args.pool, focusedGoalId) : null;
@@ -52,8 +53,14 @@ export function resolveSessionFocus(args: {
 		args.pool.set(args.legacyGoal.id, cloneGoal(args.legacyGoal));
 		return args.legacyGoal.id;
 	}
-	const open = openGoalsFromPool(args.pool);
-	return open.length === 1 ? open[0]?.id ?? null : null;
+	// Auto-select single open goal only when explicitly enabled.
+	// Default (false): sessions start unfocused to prevent goals from
+	// bleeding across sessions that share the same .pi/goals/ directory.
+	if (args.autoSelectSingleGoal) {
+		const open = openGoalsFromPool(args.pool);
+		return open.length === 1 ? open[0]?.id ?? null : null;
+	}
+	return null;
 }
 
 export function goalSelectorLabel(goal: GoalRecord, focusedGoalId: string | null): string {

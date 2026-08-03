@@ -104,7 +104,7 @@ Pressing `Esc` or aborting an active run pauses the goal so it does not remain f
 - **Branch-local focus**: because focus is reconstructed from the current session branch, `/tree` navigation can restore a different focus for a different branch.
 - **One continuation chain**: auto-continue only schedules work for the focused goal in the current session.
 
-Creating a goal with `/goals`, `/sisyphus`, `/goals-set`, or `/sisyphus-set` no longer clears other open goals. It creates a new active goal file and focuses it. Use `/goal-list` to inspect open goals and `/goal-focus` to switch the session focus. If the latest focus entry explicitly clears focus, or points at a missing/stale goal, a remaining single open goal is not auto-focused; single-open auto-focus only happens when no focus entry exists at all. If multiple open goals exist and the session has no valid focus, `/goal-resume`, `/goal-clear`, `/goal-abort`, `/goal-pause`, and `/goal-tweak` ask the user to choose a goal instead of acting on all of them.
+Creating a goal with `/goals`, `/sisyphus`, `/goals-set`, or `/sisyphus-set` no longer clears other open goals. It creates a new active goal file and focuses it. Use `/goal-list` to inspect open goals and `/goal-focus` to switch the session focus. If the latest focus entry explicitly clears focus, or points at a missing/stale goal, a remaining single open goal is not auto-focused. By default (`autoSelectSingleGoal: false`) sessions start unfocused so goals stay session-scoped — useful when multiple sessions share the same `.pi/goals/` directory. Set `autoSelectSingleGoal: true` to restore the old behavior where a single open goal is auto-focused when no focus entry exists at all. If multiple open goals exist and the session has no valid focus, `/goal-resume`, `/goal-clear`, `/goal-abort`, `/goal-pause`, and `/goal-tweak` ask the user to choose a goal instead of acting on all of them.
 
 ## Agent tools
 
@@ -216,6 +216,7 @@ Configured interactively via `/goal-settings`, or edited directly:
   "disableTasks": false,
   "disableContracts": false,
   "subtaskDepth": 1,
+  "autoSelectSingleGoal": false,
   "provider": "fireworks",
   "model": "accounts/fireworks/models/deepseek-v4-flash",
   "thinkingLevel": "high",
@@ -228,6 +229,7 @@ Configured interactively via `/goal-settings`, or edited directly:
 | `disableTasks` | `false` | Suppress task list features entirely when `true` |
 | `disableContracts` | `false` | Suppress verification contract enforcement when `true` |
 | `subtaskDepth` | `1` | Maximum nesting depth for subtasks |
+| `autoSelectSingleGoal` | `false` | When `true`, auto-focus the single open goal when a session has no focus entry (default keeps goals session-scoped) |
 | `provider` | system default | Provider name for the auditor agent |
 | `model` | system default | Model name for the auditor agent |
 | `thinkingLevel` | system default | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |

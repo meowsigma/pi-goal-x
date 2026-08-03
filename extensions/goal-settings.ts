@@ -26,6 +26,7 @@ export interface GoalSettings {
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
 	disabled?: boolean;
+	autoSelectSingleGoal?: boolean;
 }
 
 export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
@@ -41,6 +42,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"thinkingLevel",
 	"thinking_level",
 	"disabled",
+	"autoSelectSingleGoal",
 ]);
 
 /**
@@ -105,6 +107,7 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	if (model !== undefined) settings.model = model;
 	if (thinkingLevel !== undefined) settings.thinkingLevel = thinkingLevel;
 	if (record.disabled === true || record.disabled === "true") settings.disabled = true;
+	if (record.autoSelectSingleGoal === true || record.autoSelectSingleGoal === "true") settings.autoSelectSingleGoal = true;
 	return settings;
 }
 
@@ -136,6 +139,7 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
 		model: fileConfig.model,
 		thinkingLevel: fileConfig.thinkingLevel,
 		disabled: fileConfig.disabled,
+		autoSelectSingleGoal: fileConfig.autoSelectSingleGoal ?? false,
 	};
 }
 
@@ -166,6 +170,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (disableTasks === true) clean.disableTasks = true;
 	if (disableContracts === true) clean.disableContracts = true;
 	if (subtaskDepth !== undefined) clean.subtaskDepth = subtaskDepth;
+	if (settings.autoSelectSingleGoal === true) clean.autoSelectSingleGoal = true;
 	const configPath = goalSettingsPath(cwd);
 	fs.mkdirSync(path.dirname(configPath), { recursive: true });
 	const persisted: Record<string, unknown> = {};
@@ -176,6 +181,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (clean.disableTasks) persisted.disableTasks = true;
 	if (clean.disableContracts) persisted.disableContracts = true;
 	if (clean.subtaskDepth !== undefined) persisted.subtaskDepth = clean.subtaskDepth;
+	if (settings.autoSelectSingleGoal === true) persisted.autoSelectSingleGoal = true;
 	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
 	return clean;
 }

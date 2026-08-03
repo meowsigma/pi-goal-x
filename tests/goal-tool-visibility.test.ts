@@ -255,7 +255,7 @@ describe("Tool visibility integration", () => {
 				sisyphus: false,
 			}, Date.UTC(2026, 5, 26, 10, 0, 0));
 			completedGoal.status = "complete" as const;
-			completedGoal.completedAt = new Date().toISOString();
+			(completedGoal as GoalRecord & { completedAt: string }).completedAt = new Date().toISOString();
 
 			const written = writeActiveGoalFile({ cwd: f.cwd } as any, completedGoal);
 			const focusEntry = goalFocusDetails(completedGoal.id, "created");

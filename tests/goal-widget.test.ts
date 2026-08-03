@@ -510,7 +510,7 @@ test("GoalWidgetComponent unfocused with 38 open goals at width 109", () => {
 	const component = new GoalWidgetComponent({
 		tui,
 		theme: createMockTheme(),
-		getGoal: () => undefined,
+		getGoal: () => null,
 		getOpenGoalCount: () => 38,
 		getSettings: () => ({}),
 	});

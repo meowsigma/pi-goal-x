@@ -317,22 +317,6 @@ test("continuationPrompt: task list suppressed when disableTasks is true", () =>
 	assert.ok(!prompt.includes("TASK LIST"), "task list suppressed from continuationPrompt");
 });
 
-// ── Integration: tool gate simulation ────────────────────────────────────
-
-import { validateVerificationSummary } from "../extensions/goal-policy.ts";
-
-test("validateVerificationSummary: passes when contracts disabled even with empty summary", () => {
-	// The gate logic in goal.ts skips validateVerificationSummary when contracts are disabled.
-	// This test verifies the integration point: when the gate is skipped, no enforcement occurs.
-	// Simulating the disabled-contracts path: we don't call validateVerificationSummary at all.
-	// The contract gate is only reached when contracts are enabled.
-	const gate = validateVerificationSummary({
-		verificationContract: "Must verify",
-		verificationSummary: "I verified",
-	});
-	assert.equal(gate.ok, true, "valid summary passes when gate is reached");
-});
-
 // ── subtaskDepth ────────────────────────────────────────────────────────
 
 test("parseGoalSettings: parses subtaskDepth as number", () => {
@@ -370,34 +354,6 @@ test("loadGoalSettings: reads subtaskDepth from file", () => {
 		const result = loadGoalSettings(dir, {});
 		assert.equal(result.subtaskDepth, 3);
 	});
-});
-
-// ── Unified acceptance: buildDraftConfirmationText with tasks ────────────
-
-import { buildDraftConfirmationText } from "../extensions/goal-draft.ts";
-
-test("buildDraftConfirmationText includes task section when appended to objective", () => {
-	const text = buildDraftConfirmationText({
-		focus: "goal",
-		originalTopic: "Build the thing",
-		objective: "=== Goal ===\nObjective: Build the thing\n\n┌─ TASKS ─────────────────────────────────────┐\n[ ] t1: Set up\n  [ ] t1a: Install\n└──────────────────────────────────────────────┘",
-		autoContinue: true,
-	});
-	assert.match(text, /Build the thing/);
-	assert.match(text, /t1: Set up/);
-	assert.match(text, /t1a: Install/);
-	assert.match(text, /┌─ TASKS/);
-});
-
-test("buildDraftConfirmationText works without task section (backward compat)", () => {
-	const text = buildDraftConfirmationText({
-		focus: "goal",
-		originalTopic: "Simple goal",
-		objective: "=== Goal ===\nObjective: Simple goal",
-		autoContinue: true,
-	});
-	assert.match(text, /Simple goal/);
-	assert.equal(text.includes("TASKS"), false);
 });
 
 // ── Scroll fix: hardware cursor toggle ──────────────────────────────────

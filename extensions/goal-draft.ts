@@ -179,7 +179,7 @@ export function validateGoalDraftProposal(input: DraftProposalInput): DraftPropo
 	if (input.intent === null) {
 		return {
 			ok: false,
-			message: "propose_goal_draft REJECTED: no /goals or /sisyphus intent discussion is in progress. Tell the user to invoke /goals <topic> or /sisyphus <topic> first, or use /goals-set / /sisyphus-set for immediate creation.",
+			message: "propose_goal_draft REJECTED: no /goal, /sisyphus, or /goal-tweak guided draft is in progress.",
 		};
 	}
 
@@ -188,7 +188,7 @@ export function validateGoalDraftProposal(input: DraftProposalInput): DraftPropo
 	if (actualSisyphus !== expectedSisyphus) {
 		return {
 			ok: false,
-			message: `propose_goal_draft REJECTED (focus gate): confirmation focus is "${input.intent.focus}" (user invoked ${input.intent.focus === "sisyphus" ? "/sisyphus" : "/goals"}) but you passed sisyphus=${actualSisyphus}. Set sisyphus=${expectedSisyphus} to match the user's choice, then retry. Do NOT change the user's mode autonomously.`,
+			message: `propose_goal_draft REJECTED (focus gate): the user invoked ${input.intent.focus === "sisyphus" ? "/sisyphus" : "/goal"} but you passed sisyphus=${actualSisyphus}. Set sisyphus=${expectedSisyphus} to match their choice.`,
 		};
 	}
 
@@ -204,7 +204,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 	const safeTopic = promptSafeObjective(topic.trim() || "(no topic provided — ask the user what they want to accomplish)");
 	const header = focus === "sisyphus"
 		? "[GOAL CONFIRMATION focus=sisyphus]\nThe user invoked Sisyphus intent discussion (/sisyphus). Help turn their request into a confirmed goal contract. Do NOT start substantive work yet."
-		: "[GOAL CONFIRMATION focus=goal]\nThe user invoked goal intent discussion (/goals). Help turn their request into a confirmed goal contract. Do NOT start substantive work yet.";
+		: "[GOAL CONFIRMATION focus=goal]\nThe user invoked guided goal drafting (/goal). Help turn their request into a confirmed goal contract. Do NOT start substantive work yet.";
 
 	const commonProtocol = [
 		"Confirmation protocol:",
@@ -222,7 +222,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 	];
 
 	const goalFocusItems = [
-		"For /goals, propose a normal goal in this shape when ready:",
+		"For /goal, propose a normal goal in this shape when ready:",
 		"=== Goal ===",
 		"Objective: <one-sentence outcome>",
 		"Success criteria: <observable evidence the goal is done>",

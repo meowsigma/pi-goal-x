@@ -5,14 +5,13 @@ export interface GoalUsageLike {
 
 export interface GoalDisplayRecordLike {
 	objective: string;
-	status: "active" | "paused" | "complete";
+	status: "active" | "paused" | "blocked" | "budget_limited" | "complete";
 	autoContinue: boolean;
 	usage: GoalUsageLike;
 	sisyphus: boolean;
 	stopReason?: "user" | "agent";
 }
 
-export { isQuestionLikeToolName } from "./goal-tool-names.ts";
 
 
 export function truncateText(value: string, max = 120): string {
@@ -64,6 +63,8 @@ export function statusLabel(goal: Pick<GoalDisplayRecordLike, "sisyphus" | "stat
 	const prefix = goal.sisyphus ? "sisyphus " : "";
 	if (goal.status === "active" && goal.autoContinue) return `${prefix}running`;
 	if (goal.status === "paused" && goal.stopReason === "agent") return `${prefix}paused (agent)`;
+	if (goal.status === "blocked") return `${prefix}blocked`;
+	if (goal.status === "budget_limited") return `${prefix}budget limited`;
 	return `${prefix}${goal.status}`;
 }
 

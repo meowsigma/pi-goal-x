@@ -1,7 +1,8 @@
-export type GoalStatus = "active" | "paused" | "complete";
+export type GoalStatus = "active" | "paused" | "blocked" | "budget_limited" | "complete";
 export type StopReason = "user" | "agent";
-export type GoalEventKind = "checkpoint" | "stale" | "drafting";
-export type DraftingFocus = "goal" | "sisyphus";
+export type GoalEventKind = "checkpoint" | "stale";
+/** Goal creation mode used by the /goal and /sisyphus commands. */
+export type GoalMode = "goal" | "sisyphus";
 export type GoalFocusReason = "created" | "selected" | "unfocused" | "resumed" | "completed" | "cleared" | "aborted" | "migrated";
 
 export type TaskStatus = "pending" | "complete" | "skipped";
@@ -42,10 +43,19 @@ export interface GoalRecord {
 	activePath?: string;
 	archivedPath?: string;
 	stopReason?: StopReason;
-	// Set by the agent's pause_goal tool. Cleared when the goal becomes active again.
+	// Set when the model reports the goal blocked. Cleared when the goal becomes active again.
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
 	skipAuditor?: boolean;
+	/**
+	 * Persisted monotonic mutation counter (follow-up Stage 4). Missing
+	 * historical values normalize to zero. Cross-process writers compare the
+	 * revision captured at reconciliation with the disk value under the
+	 * per-goal lock; a mismatch is a typed conflict instead of a blind write.
+	 */
+	revision?: number;
+	/** Optional token budget (whole tokens). When accounted usage reaches it, the runtime marks the goal budget_limited. */
+	tokenBudget?: number;
 	taskList?: GoalTaskList;
 	/** Plain-text description of what verification evidence is required before completing this goal. */
 	verificationContract?: string;
@@ -70,13 +80,17 @@ export interface GoalEventDetails {
 	timestamp?: number;
 	currentGoalId?: string | null;
 	currentStatus?: GoalStatus | null;
-	focus?: DraftingFocus;
+	/** Legacy-read-only creation mode on historical event entries; no writer emits it today. */
+	focus?: GoalMode;
 }
 
 export interface GoalCreationConfig {
 	objective: string;
 	autoContinue: boolean;
 	sisyphus: boolean;
+	taskList?: GoalTaskList;
+	/** User-chosen per-draft auditor bypass, persisted on the created goal. */
+	skipAuditor?: boolean;
 }
 
 export interface AssistantUsage {
@@ -161,6 +175,8 @@ export function createGoal(config: GoalCreationConfig, now = Date.now()): GoalRe
 		autoContinue: config.autoContinue,
 		usage: emptyUsage(),
 		sisyphus: config.sisyphus,
+		skipAuditor: config.skipAuditor === true ? true : undefined,
+		revision: 0,
 		createdAt: timestamp,
 		updatedAt: timestamp,
 	};
@@ -217,6 +233,35 @@ export function normalizeTaskList(value: unknown): GoalTaskList | undefined {
 	};
 }
 
+/**
+ * Shared positive-safe-integer normalization for persisted numeric values such
+ * as tokenBudget. Non-finite, fractional, zero, negative, and unsafe numbers
+ * normalize to absent rather than silently changing meaning. Live tool input
+ * is validated separately (rejected with a user-facing message); this handles
+ * persisted legacy values.
+ */
+/**
+ * Live-input validation for token_budget (shared by slash-command parsing, tool
+ * execution, and record creation). Tool callers are untrusted, so the schema
+ * Type.Integer bound is double-checked at runtime with Number.isSafeInteger.
+ */
+export function validateTokenBudgetInput(value: unknown): { ok: true; value: number } | { ok: false; message: string } {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return { ok: false, message: "token_budget must be a number." };
+	}
+	if (!Number.isSafeInteger(value)) {
+		return { ok: false, message: "token_budget must be a whole safe integer (fractional values are not accepted)." };
+	}
+	if (value < 1) {
+		return { ok: false, message: "token_budget must be at least 1." };
+	}
+	return { ok: true, value };
+}
+
+export function normalizePositiveSafeInteger(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : undefined;
+}
+
 export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 	const raw = asRecord(value);
 	if (!raw) return null;
@@ -224,15 +269,22 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 	if (!objective) return null;
 
 	const timestamp = nowIso();
+	// Persisted lifecycle status is authoritative. autoContinue is an execution
+	// preference only: it must never rewrite status during reads or migration.
 	const rawStatus = raw.status;
-	let status: GoalStatus = rawStatus === "complete" ? "complete" : rawStatus === "paused" ? "paused" : "active";
+	const status: GoalStatus = rawStatus === "complete"
+		? "complete"
+		: rawStatus === "paused"
+			? "paused"
+			: rawStatus === "budget_limited"
+				? "budget_limited"
+				: rawStatus === "blocked"
+					? "blocked"
+					: "active";
+	// autoContinue normalizes independently of status.
 	const autoContinue = typeof raw.autoContinue === "boolean" ? raw.autoContinue : true;
 	const usage = normalizeUsage(raw.usage);
 	const sisyphus = raw.sisyphus === true;
-
-	if (status === "paused" && autoContinue) {
-		status = "active";
-	}
 
 	return {
 		id: typeof raw.id === "string" && raw.id ? safeIdPart(raw.id) : newGoalId(),
@@ -249,6 +301,8 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		pauseReason: typeof raw.pauseReason === "string" && raw.pauseReason.trim() ? raw.pauseReason : undefined,
 		pauseSuggestedAction: typeof raw.pauseSuggestedAction === "string" && raw.pauseSuggestedAction.trim() ? raw.pauseSuggestedAction : undefined,
 		skipAuditor: raw.skipAuditor === true ? true : undefined,
+		revision: Number.isSafeInteger(raw.revision) && (raw.revision as number) >= 0 ? (raw.revision as number) : 0,
+		tokenBudget: normalizePositiveSafeInteger(raw.tokenBudget),
 		taskList: normalizeTaskList(raw.taskList),
 		verificationContract: typeof raw.verificationContract === "string" ? raw.verificationContract : undefined,
 	};

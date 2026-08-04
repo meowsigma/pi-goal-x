@@ -2,15 +2,38 @@
 
 The experiment suite is an optional end-to-end harness for checking `pi-goal` behavior with real pi sessions and model calls.
 
-Current coverage goals:
+Current supported coverage goals (C20-C26):
 
-1. Drafting starts from `/goal-set` or `/goal-sisyphus` and converges on a concrete objective.
-2. Goal creation goes through `propose_goal_draft` and user confirmation.
-3. Focus remains human-owned when multiple open goals exist.
-4. Active goals continue only after meaningful work, not after empty chat turns.
-5. `pause_goal` is used for real blockers.
-6. `abort_goal` is used for obsolete, impossible, unsafe, or user-cancelled work.
-7. `update_goal(status="complete")` is used only when evidence satisfies the objective and can survive the independent auditor.
-8. Post-compaction prompts reconstruct the focused goal from durable files and ledger events.
+1. Explicit requests select `create_goal`; removed tools are never called.
+2. Lifecycle changes remain user-owned slash commands.
+3. The same blocker is attempted across three goal turns before
+   `update_goal(status="blocked")`.
+4. `update_goal(status="complete")` contains no paperwork and survives an
+   evidence-based independent audit.
+5. Focus remains human-owned while multiple goals remain durable.
+6. `set_goal_tasks` owns structure and `update_goal_task` owns status.
+7. Token-budget exhaustion wraps up without inventing completion.
 
-Retired scenarios tied to removed resource-limit or fixed-turn continuation-guard designs should not be reintroduced unless the product explicitly brings those lifecycles back.
+B1-B2 and C1-C19 were MIGRATED to the five-tool interface by the hardening
+work (2026-08-05): the full supported matrix is `SUPPORTED_CASES.json`
+(B1-B2 + C1-C20 through C26), and removed tool names appear only in negative
+rubric assertions.
+
+## Release gate
+
+C20-C26 remain the release evaluation set. Per the hardening plan's product
+decision (and the author-only verification policy), real-model runs are the
+manual, opt-in pre-release gate: run each case at least three times on the
+supported model matrix and record pass rates in MILESTONES.md before a release.
+They are NOT part of `npm test` and incur model usage.
+
+## Harness enforcement
+
+`SUPPORTED_CASES.json` is enforced at run start: case ids must match the
+`supported` array exactly; raw case directories require the explicit
+`--allow-unsupported` diagnostic flag. The provider smoke request uses the
+selected model and validates HTTP status and JSON shape. The outer timeout is
+portable (`timeout`, `gtimeout`, or the bundled Node watchdog). Shell tests in
+`tests/shell/harness.test.sh` (run by the fast suite) cover resolution,
+payload, missing configuration, and timeout selection. Observation files under
+`observations/` are historical evidence per `observations/INDEX.md`.

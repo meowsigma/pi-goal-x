@@ -51,9 +51,9 @@ function fileExists(filePath: string): boolean {
 }
 
 /**
- * Simulates the full lifecycle that complete_goal + turn_end perform:
+ * Simulates the full lifecycle that update_goal(complete) + turn_end perform:
  * 1. Write goal as active (normal)
- * 2. Mark complete with deferred write (complete_goal behavior)
+ * 2. Mark complete with deferred write (update_goal(complete) behavior)
  * 3. Verify NOT archived yet
  * 4. Archive (turn_end behavior)
  * 5. Verify IS archived
@@ -71,7 +71,7 @@ test("deferred archival lifecycle via writeActiveGoalFile then archiveGoalFile",
 		const poolBefore = readActiveGoalPool(ctx);
 		assert.ok(poolBefore.has(goal.id), "goal should be in active pool before completion");
 
-		// Step 2: Simulate complete_goal — mark complete via writeActiveGoalFile (deferred archival)
+		// Step 2: Simulate update_goal(complete) — mark complete via writeActiveGoalFile (deferred archival)
 		const completed = writeActiveGoalFile(ctx, { ...active, status: "complete" as const });
 		assert.match(completed.activePath ?? "", /^\.pi\/goals\/active_goal_/, "complete goal should still have activePath (deferred)");
 		assert.equal(completed.archivedPath, undefined, "complete goal should NOT have archivedPath yet (deferred)");
@@ -117,7 +117,6 @@ test("deferred archival lifecycle via writeActiveGoalFile then archiveGoalFile",
 test("approval path: buildCompletionReport includes auditor report", () => {
 	const report = buildCompletionReport({
 		detailedSummary: "Goal: Audit approval test\nStatus: active",
-		completionSummary: "All requirements satisfied.",
 		auditorReport: "Auditor: I have verified all requirements.\n\n<approved/>",
 	});
 	assert.ok(report.includes("Goal audit approved."), "approval path must say 'Goal audit approved.'");
@@ -132,7 +131,6 @@ test("approval path: buildCompletionReport includes auditor report", () => {
 test("disabled-bypass path: buildCompletionReport includes auditSkippedReason", () => {
 	const report = buildCompletionReport({
 		detailedSummary: "Goal: Disabled bypass test\nStatus: active",
-		completionSummary: "Marked complete via bypass.",
 		auditSkippedReason: "auditor disabled in settings",
 	});
 	assert.ok(report.includes("Goal audit skipped."), "disabled-bypass path must say 'Goal audit skipped.'");
@@ -149,7 +147,6 @@ test("disabled-bypass path: buildCompletionReport includes auditSkippedReason", 
 test("Esc-skip path: buildCompletionReport includes Esc-abort reason", () => {
 	const report = buildCompletionReport({
 		detailedSummary: "Goal: Esc abort test\nStatus: active",
-		completionSummary: "Bypassed during audit.",
 		auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
 	});
 	assert.ok(report.includes("Goal audit skipped."), "Esc-skip path must say 'Goal audit skipped.'");
@@ -167,17 +164,14 @@ test("all three paths produce distinct tool output text", () => {
 
 	const approval = buildCompletionReport({
 		detailedSummary: commonDetailed,
-		completionSummary: "Approved case.",
 		auditorReport: "Inspected and verified.\n\n<approved/>",
 	});
 	const disabled = buildCompletionReport({
 		detailedSummary: commonDetailed,
-		completionSummary: "Disabled bypass case.",
 		auditSkippedReason: "auditor disabled in settings",
 	});
 	const esc = buildCompletionReport({
 		detailedSummary: commonDetailed,
-		completionSummary: "Esc abort case.",
 		auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
 	});
 
@@ -198,7 +192,7 @@ test("all three paths produce distinct tool output text", () => {
 
 /**
  * Verify that readActiveGoalFiles filters out complete goals (even if archivedPath
- * is not set — deferred state). This ensures the 'complete_goal returns but goal
+ * is not set — deferred state). This ensures the completion flow returns but the goal
  * not yet archived' state is handled correctly by the pool.
  */
 test("readActiveGoalFiles filters complete goals regardless of archivedPath", () => {
@@ -235,7 +229,7 @@ test("detect complete-but-not-archived goal for turn_end archival", () => {
 	try {
 		const goal = makeGoal({ id: "pending-archival-detect" });
 		const active = writeActiveGoalFile(ctx, goal);
-		// Simulate deferred state from complete_goal
+		// Simulate deferred state from update_goal(complete)
 		const deferred = writeActiveGoalFile(ctx, { ...active, status: "complete" as const });
 
 		// The condition the turn_end handler checks:

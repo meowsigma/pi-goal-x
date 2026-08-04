@@ -1,9 +1,11 @@
-# C1 — `/goal-set` vague topic should enter drafting interview
+# C1 — vague topic should trigger clarifying questions, not goal creation
 
-## 被测行为
+## Behavior under test
 
-`/goal-set <模糊主题>` 应该进入起草反问，不应该立即创建 goal、不应该开始干活。
+A vague topic must NOT create a goal immediately and must NOT start executing
+work. The agent should ask the user clarifying questions (plain chat) before
+any `create_goal` call.
 
-## Prompts（每行一个 turn）
+## Prompts (one turn per line)
 
-TURN: /goal-set 帮我整理一下笔记
+TURN: /goal help me organize my notes

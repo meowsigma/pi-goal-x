@@ -7,6 +7,7 @@ import test from "node:test";
 import {
 	buildGoalAuditorPrompt,
 	parseAuditorDecision,
+	resolveAuditorModel,
 	resolveAuditorSessionModelOptions,
 	runGoalCompletionAuditor,
 } from "../extensions/goal-auditor.ts";
@@ -148,83 +149,56 @@ test("loadGoalSettings does not read old env vars", () => {
 test("buildGoalAuditorPrompt demands semantic approval markers", () => {
 	const prompt = buildGoalAuditorPrompt({
 		goal: goal(),
-		completionSummary: "Generated a VitePress scaffold and build passes.",
 		detailedSummary: "Goal: tutorial",
 	});
 	assert.ok(prompt.includes("independent completion auditor"));
 	assert.ok(prompt.includes("scaffold-only") || prompt.includes("alpha scaffold") || prompt.includes("generated template"));
 	assert.ok(prompt.includes("<approved/>"));
 	assert.ok(prompt.includes("<disapproved/>"));
-	assert.ok(prompt.includes("Generated a VitePress scaffold"));
+	assert.ok(prompt.includes("<executor_claim>"), "untrusted executor claim section present");
+	assert.ok(prompt.includes("UNTRUSTED"), "claim is marked untrusted");
+	assert.ok(prompt.includes("(no claim provided)"), "absent claim renders explicitly");
 	assert.ok(!prompt.includes("<test_evidence>"), "should not contain deprecated <test_evidence>");
-	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
-	assert.ok(prompt.includes("6. End with exactly <approved/>"));
+	assert.ok(prompt.includes("4. Explain missing or weak evidence"));
+	assert.ok(prompt.includes("5. End with exactly <approved/>"));
 });
 
-test("buildGoalAuditorPrompt renders verification summary when provided", () => {
+test("buildGoalAuditorPrompt renders a completion summary as an untrusted claim", () => {
 	const prompt = buildGoalAuditorPrompt({
 		goal: goal(),
-		completionSummary: "All tests pass.",
 		detailedSummary: "Goal: test",
-		verificationSummary: "Ran npm test (0 failures). Re-read requirements and confirmed every item is addressed. Grepped for remaining STP references (none found).",
+		completionSummary: "Ran npm test (0 failures) and everything is green.",
 	});
-	assert.ok(prompt.includes("<verification_summary>"));
-	assert.ok(prompt.includes("Ran npm test (0 failures)"));
-	assert.ok(prompt.includes("Re-read requirements"));
-	assert.ok(prompt.includes("Grepped for remaining STP"));
-	assert.ok(prompt.includes("</verification_summary>"));
-	// Step 3 appears when verificationSummary is present
-	assert.ok(prompt.includes("3. Check the <verification_summary> against real artifacts"));
-	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
-	assert.ok(prompt.includes("6. End with exactly <approved/>"));
+	assert.ok(prompt.includes("Ran npm test (0 failures)"), "claim text reaches the auditor");
+	assert.ok(prompt.includes("claim, never evidence"), "claim is not treated as evidence");
+	assert.ok(prompt.includes("cannot make an otherwise incomplete goal complete"), "claim cannot approve");
+	assert.ok(prompt.includes("cross-check it against real artifacts"), "auditor cross-checks the claim");
 });
 
 test("buildGoalAuditorPrompt renders verification contract when goal has one", () => {
 	const prompt = buildGoalAuditorPrompt({
 		goal: goal({ verificationContract: "Run npm test (0 failures), grep for remaining references, re-read requirements" }),
-		completionSummary: "All done.",
 		detailedSummary: "Goal: test",
-		verificationSummary: "All checks passed.",
 	});
 	assert.ok(prompt.includes("<verification_contract>"));
 	assert.ok(prompt.includes("Run npm test (0 failures)"));
 	assert.ok(prompt.includes("grep for remaining references"));
 	assert.ok(prompt.includes("</verification_contract>"));
-	// Step 4 appears when verificationContract is present
-	assert.ok(prompt.includes("4. Verify that the executor has satisfied every item in the <verification_contract>"));
+	// The contract checklist step appears when verificationContract is present
+	assert.ok(prompt.includes("3. Verify that the executor has satisfied every item in the <verification_contract>"));
 });
 
 test("buildGoalAuditorPrompt omits verification sections when absent", () => {
 	const prompt = buildGoalAuditorPrompt({
 		goal: goal(),
-		completionSummary: "Done.",
 		detailedSummary: "Goal: test",
 	});
-	assert.ok(!prompt.includes("<verification_summary>"), "should not contain <verification_summary> when not provided");
+	assert.ok(!prompt.includes("<verification_summary>"), "must never contain a verification-summary section (paperwork removed)");
 	assert.ok(!prompt.includes("<verification_contract>"), "should not contain <verification_contract> when goal has none");
 	// Checklist should skip steps that depend on absent sections
-	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
-	assert.ok(prompt.includes("6. End with exactly <approved/>"));
-	assert.ok(!prompt.includes("3. Check the <verification_summary>"), "step 3 should be omitted without verificationSummary");
-	assert.ok(!prompt.includes("4. Verify that the executor has satisfied"), "step 4 should be omitted without verificationContract");
-});
-
-test("buildGoalAuditorPrompt shows both verification summary and contract when both present", () => {
-	const prompt = buildGoalAuditorPrompt({
-		goal: goal({ verificationContract: "Contract item A, Contract item B" }),
-		completionSummary: "Verified.",
-		detailedSummary: "Goal: test",
-		verificationSummary: "Verified A and B.",
-	});
-	assert.ok(prompt.includes("<verification_summary>"));
-	assert.ok(prompt.includes("Verified A and B."));
-	assert.ok(prompt.includes("<verification_contract>"));
-	assert.ok(prompt.includes("Contract item A, Contract item B"));
-	// Both steps 3 and 4 should appear
-	assert.ok(prompt.includes("3. Check the <verification_summary>"));
-	assert.ok(prompt.includes("4. Verify that the executor has satisfied"));
-	assert.ok(prompt.includes("5. Explain missing or weak evidence"));
-	assert.ok(prompt.includes("6. End with exactly <approved/>"));
+	assert.ok(prompt.includes("4. Explain missing or weak evidence"));
+	assert.ok(prompt.includes("5. End with exactly <approved/>"));
+	assert.ok(!prompt.includes("3. Verify that the executor has satisfied"), "contract step should be omitted without verificationContract");
 });
 
 test("runGoalCompletionAuditor returns aborted error when signal is already aborted (pre-flight)", async () => {
@@ -390,4 +364,35 @@ test("runGoalCompletionAuditor cleans up abort listener on normal completion", a
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
+});
+
+test("resolveAuditorModel refuses provider-only settings instead of choosing the first available model", () => {
+	const result = resolveAuditorModel({
+		modelRegistry: {
+			getAvailable: () => [{ provider: "deepseek", id: "first" }],
+			find: () => undefined,
+		},
+		model: undefined,
+	} as never, { provider: "deepseek" } as never);
+	assert.equal(result.model, undefined);
+	assert.match(result.error ?? "", /Provider-only auditor configuration is refused/);
+});
+
+test("resolveAuditorModel resolves explicit provider/model and falls back to the session model when unset", () => {
+	const model = { provider: "alpha", id: "fast" };
+	const explicit = resolveAuditorModel({
+		modelRegistry: {
+			getAvailable: () => [model],
+			find: (p: string, m: string) => (p === "alpha" && m === "fast" ? model : undefined),
+		},
+		model: undefined,
+	} as never, { provider: "alpha", model: "fast" } as never);
+	assert.equal(explicit.model, model);
+
+	const session = { provider: "alpha", id: "fast" };
+	const unset = resolveAuditorModel({
+		modelRegistry: { getAvailable: () => [model], find: () => undefined },
+		model: session,
+	} as never, {} as never);
+	assert.equal(unset.model, session);
 });

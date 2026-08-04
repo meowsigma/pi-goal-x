@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { buildCompletionReport, validateGoalUpdate } from "../extensions/goal-policy.ts";
+import { buildCompletionReport } from "../extensions/goal-policy.ts";
 import { createGoal } from "../extensions/goal-record.ts";
 import {
 	archiveGoalFile,
@@ -110,7 +110,7 @@ test("quick-sync then later complete: archived file has updated objective", () =
 		assert.equal(synced.status, "active");
 		assert.equal(synced.archivedPath, undefined);
 
-		// Step 2: Later, mark complete (simulating complete_goal({status:"complete"}))
+		// Step 2: Later, mark complete (simulating update_goal({status:"complete"}))
 		const completed = writeActiveGoalFile(ctx, {
 			...synced,
 			status: "complete" as const,
@@ -148,13 +148,12 @@ test("quick-sync then later complete: archived file has updated objective", () =
 test("sync + approval path: report includes new objective and approval", () => {
 	const report = buildCompletionReport({
 		detailedSummary: "Goal: Build feature X\nUpdated objective: Build feature Y\nStatus: active",
-		completionSummary: "Feature Y implemented and tested.",
 		auditorReport: "Inspected and verified.\n\n<approved/>",
 	});
 	assert.ok(report.includes("Goal audit approved."), "must say approved");
 	assert.ok(report.includes("<approved/>"), "must include approval marker");
 	assert.ok(report.includes("Goal complete."), "must conclude with Goal complete.");
-	assert.ok(report.includes("Feature Y"), "must reference the updated objective");
+	assert.ok(report.includes("Build feature Y"), "must reference the updated objective");
 });
 
 // ── 4. Sync + disabled bypass ────────────────────────────────────────────────
@@ -163,13 +162,12 @@ test("sync + approval path: report includes new objective and approval", () => {
 test("sync + disabled bypass: report includes new objective and skip reason", () => {
 	const report = buildCompletionReport({
 		detailedSummary: "Goal: Build feature X\nUpdated objective: Build feature Y\nStatus: active",
-		completionSummary: "Feature Y implemented.",
 		auditSkippedReason: "auditor disabled in settings",
 	});
 	assert.ok(report.includes("Goal audit skipped."), "must say skipped");
 	assert.ok(report.includes("auditor disabled in settings"), "must include skip reason");
 	assert.ok(report.includes("Goal complete."));
-	assert.ok(report.includes("Feature Y"), "must reference the updated objective");
+	assert.ok(report.includes("Build feature Y"), "must reference the updated objective");
 	assert.ok(!report.includes("<approved/>"), "must NOT include approval marker");
 });
 
@@ -179,13 +177,12 @@ test("sync + disabled bypass: report includes new objective and skip reason", ()
 test("sync + Esc bypass: report includes new objective and Esc reason", () => {
 	const report = buildCompletionReport({
 		detailedSummary: "Goal: Build feature X\nUpdated objective: Build feature Y\nStatus: active",
-		completionSummary: "Feature Y implemented.",
 		auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
 	});
 	assert.ok(report.includes("Goal audit skipped."));
 	assert.ok(report.includes("auditor bypassed (user pressed Escape during audit)"));
 	assert.ok(report.includes("Goal complete."));
-	assert.ok(report.includes("Feature Y"));
+	assert.ok(report.includes("Build feature Y"));
 	assert.ok(!report.includes("<approved/>"));
 });
 
@@ -230,7 +227,7 @@ test("multiple syncs then complete: final objective in archived file", () => {
 });
 
 // ── 7. Sync while paused ─────────────────────────────────────────────────────
-// Simulates: goal is paused, agent syncs objective via propose_goal_tweak.
+// Simulates: goal is paused and the objective is updated via /goal-tweak.
 // Status stays paused, objective changes on disk.
 
 test("sync while paused: status stays paused, objective changed on disk", () => {
@@ -245,8 +242,6 @@ test("sync while paused: status stays paused, objective changed on disk", () => 
 		assert.equal(paused.objective, originalObj);
 
 		// Valid gate check
-		const gate = validateGoalUpdate({ goal: paused });
-		assert.equal(gate.ok, true, "paused goal should pass validateGoalUpdate");
 
 		// Update objective while paused
 		const updated = writeActiveGoalFile(ctx, { ...paused, objective: newObj });
@@ -316,17 +311,14 @@ test("all three bypass paths produce correct distinct reports", () => {
 
 	const approval = buildCompletionReport({
 		detailedSummary: base,
-		completionSummary: "Approval test.",
 		auditorReport: "All verified.\n\n<approved/>",
 	});
 	const disabled = buildCompletionReport({
 		detailedSummary: base,
-		completionSummary: "Disabled test.",
 		auditSkippedReason: "auditor disabled in settings",
 	});
 	const esc = buildCompletionReport({
 		detailedSummary: base,
-		completionSummary: "Esc test.",
 		auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
 	});
 
@@ -372,27 +364,3 @@ test("all three bypass paths produce correct distinct reports", () => {
 });
 
 // ── 10. Edge: Cannot update complete goal (handler gate test) ─────────────────
-
-test("validateGoalUpdate rejects complete goal", () => {
-	const goal = makeGoal({ status: "complete" } as GoalRecord);
-	const result = validateGoalUpdate({ goal });
-	assert.equal(result.ok, false);
-	if (!result.ok) {
-		assert.match(result.message, /cannot update objective/);
-		assert.match(result.message, /already complete/);
-	}
-});
-
-test("validateGoalUpdate rejects null goal (no goal exists)", () => {
-	const result = validateGoalUpdate({ goal: null });
-	assert.equal(result.ok, false);
-	if (!result.ok) {
-		assert.match(result.message, /cannot update objective/);
-		assert.match(result.message, /No goal is set/);
-	}
-});
-
-test("validateGoalUpdate accepts active and paused goals", () => {
-	assert.equal(validateGoalUpdate({ goal: makeGoal() }).ok, true);
-	assert.equal(validateGoalUpdate({ goal: makeGoal({ status: "paused" }) }).ok, true);
-});

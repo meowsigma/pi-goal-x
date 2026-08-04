@@ -1,10 +1,8 @@
-import { Type } from "@earendil-works/pi-ai";
-import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
-import { truncateText } from "./goal-core.ts";
-import { QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME } from "./goal-tool-names.ts";
-import type { GoalDraftingFocus } from "./goal-draft.ts";
+
+export type GoalDraftingFocus = "goal" | "sisyphus";
 
 export interface GoalQuestionnaireQuestion {
 	id: string;
@@ -29,7 +27,7 @@ export interface GoalQuestionnaireResult {
 	auditorEnabled?: boolean;
 }
 
-export type ProposalDecision = "confirm" | "continue";
+export type ProposalDecision = "confirm" | "continue" | "cancel";
 
 export function normalizeQuestionnaireQuestions(rawQuestions: GoalQuestionnaireQuestion[]): GoalQuestionnaireQuestion[] {
 	const seenIds = new Set<string>();
@@ -62,8 +60,10 @@ export function shouldAutoConfirmProposal(args: { hasUI: boolean; autoConfirmEnv
 }
 
 export function proposalDecisionFromQuestionnaireResult(args: { cancelled: boolean; answer?: string }): ProposalDecision {
-	if (args.cancelled) return "continue";
-	return (args.answer ?? "").startsWith("Confirm") ? "confirm" : "continue";
+	if (args.cancelled) return "continue"; // never trapped; escape keeps refining
+	if ((args.answer ?? "").startsWith("Confirm")) return "confirm";
+	if ((args.answer ?? "").startsWith("Cancel")) return "cancel";
+	return "continue";
 }
 
 export function isHeadlessQuestionSufficientForDraft(args: { topic: string; questionText: string }): boolean {
@@ -98,6 +98,23 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		// sequences every cycle, which can cause terminal viewport snapping).
 		const wasHardwareCursorShown = tui.getShowHardwareCursor();
 		tui.setShowHardwareCursor(false);
+		// Pause pi's working spinner for the dialog duration: its ~80ms
+		// re-renders write output while the user is scrolled up reading the
+		// proposal, which snaps the terminal viewport back to the bottom
+		// ("terminal scrolls back down after X seconds"). Restored on close.
+		ctx.ui.setWorkingVisible(false);
+		// Terminal-height bound: the dialog renders in the editor slot, so the opened
+		// frame height is (pre-dialog frame - 1) + dialog lines. Bound the dialog so
+		// the frame never exceeds the terminal height — without this, closing a dialog
+		// taller than the terminal triggers pi-tui's generic shrink full-render
+		// (\x1b[2J\x1b[H\x1b[3J), erasing terminal scrollback and yanking the viewport
+		// so the window takes ~10s to scroll back to the bottom. The tail slice keeps
+		// the actionable options/footer in view; content that fits renders exactly as
+		// the pre-regression (383ae52) UI. Only applies with real TUI dimensions.
+		const tuiInfo = tui as unknown as { terminal?: { rows?: number }; previousLines?: string[] };
+		const terminalRows = tuiInfo.terminal?.rows;
+		const baseFrame = tuiInfo.previousLines?.length;
+		const maxDialogLines = terminalRows && baseFrame ? Math.max(10, terminalRows - baseFrame + 1) : undefined;
 		let currentTab = 0;
 		let optionIndex = 0;
 		let inputMode = false;
@@ -127,6 +144,8 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		function submit(cancelled: boolean) {
 			// Restore hardware cursor now that the dialog is closing
 			tui.setShowHardwareCursor(wasHardwareCursorShown);
+			// Resume pi's working spinner (the agent run is still active until agent_end).
+			ctx.ui.setWorkingVisible(true);
 			const ordered = questions.map((q) => answers.get(q.id)).filter((a): a is GoalQuestionnaireAnswer => !!a);
 			done({ questions, answers: ordered, cancelled, auditorEnabled: auditorToggleInit ? auditorEnabled : undefined });
 		}
@@ -305,7 +324,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			function render(width: number): string[] {
 			if (cachedLines) return cachedLines;
 			const safeWidth = Math.max(20, width);
-			const lines: string[] = [];
+			let lines: string[] = [];
 			const q = currentQuestion();
 			const opts = displayOptions();
 			const add = (s: string) => lines.push(truncateToWidth(s, safeWidth, "…", true));
@@ -497,6 +516,10 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 					lines[i] = truncateToWidth(lines[i], safeWidth);
 				}
 			}
+			// Churn guard: tail-slice to the terminal-height bound (see factory top).
+			if (maxDialogLines !== undefined && lines.length > maxDialogLines) {
+				lines = lines.slice(lines.length - maxDialogLines);
+			}
 			cachedLines = lines;
 			return lines;
 		}
@@ -520,7 +543,7 @@ export async function showProposalDialog(
 		id: "confirm",
 		question: headerTitle,
 		context: confirmationText,
-		options: ["Confirm — create this goal now", "Continue chatting — keep refining"],
+		options: ["Confirm — create this goal now", "Continue chatting — keep refining", "Cancel — discard this draft"],
 		recommended: 0,
 		allowCustom: false,
 	}], defaultAuditorEnabled !== undefined ? { defaultEnabled: defaultAuditorEnabled } : undefined);
@@ -529,149 +552,4 @@ export async function showProposalDialog(
 		answer: result.answers[0]?.answer,
 	});
 	return { decision, auditorEnabled: result.auditorEnabled ?? true };
-}
-
-export function registerQuestionnaireTools(pi: ExtensionAPI): void {
-	pi.registerTool(defineTool({
-		name: QUESTION_TOOL_NAME,
-		label: "goal_question",
-		description:
-			"Ask the user a focused single question through pi-goal's built-in goal_question UI. " +
-			"This is the single-question alias for goal_questionnaire and is allowed during drafting.",
-		promptSnippet: "Ask the user a focused question with optional choices.",
-		promptGuidelines: [
-			"Use goal_question when exactly one user decision is required before proceeding.",
-			"During drafting this is allowed; it returns user Q&A into the conversation and is not task execution.",
-			"Prefer concise options. Use allowFreeText=false only when the user must pick from fixed choices.",
-		],
-		parameters: Type.Object({
-			question: Type.String({ description: "Question to ask the user." }),
-			context: Type.Optional(Type.String({ description: "Short context explaining why the answer is needed." })),
-			options: Type.Optional(Type.Array(Type.String({ description: "Suggested answer option." }))),
-			recommended: Type.Optional(Type.Integer({ minimum: 0, description: "0-based index of the recommended option." })),
-			allowFreeText: Type.Optional(Type.Boolean({ description: "Allow the user to write a custom answer. Defaults to true." })),
-		}),
-		executionMode: "sequential",
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (!ctx.hasUI) {
-				return {
-					content: [{ type: "text", text: "Headless mode: the question was recorded, but no interactive UI answer was collected. If the original request is already fully specified, proceed with the documented/default assumption; otherwise ask the user in final text and stop." }],
-					details: { questions: [], answers: [], cancelled: true, answer: undefined },
-				};
-			}
-
-			const result = await runGoalQuestionnaire(ctx, [{
-				id: "answer",
-				question: params.question,
-				context: params.context,
-				options: params.options ?? [],
-				recommended: params.recommended,
-				allowCustom: params.allowFreeText ?? true,
-			}]);
-
-			if (result.cancelled) {
-				return {
-					content: [{ type: "text", text: "User cancelled the question." }],
-					details: { ...result, answer: undefined },
-				};
-			}
-
-			const answer = result.answers[0]?.answer ?? "";
-			return {
-				content: [{ type: "text", text: `User answered: ${answer}` }],
-				details: { ...result, answer },
-			};
-		},
-		renderCall(args, theme) {
-			return new Text(theme.fg("toolTitle", theme.bold("goal_question ")) + theme.fg("muted", truncateText(args?.question ?? "", 80)), 0, 0);
-		},
-		renderResult(result, _options, theme) {
-			const details = result.details as { answer?: string; cancelled?: boolean } | undefined;
-			if (details?.cancelled) return new Text(theme.fg("warning", "(cancelled)"), 0, 0);
-			if (details?.answer !== undefined) return new Text(theme.fg("success", "✓ ") + theme.fg("muted", details.answer), 0, 0);
-			const text = result.content[0];
-			return new Text(text?.type === "text" ? text.text : "", 0, 0);
-		},
-	}));
-
-	pi.registerTool(defineTool({
-		name: QUESTIONNAIRE_TOOL_NAME,
-		label: "goal_questionnaire",
-		description:
-			"Ask the user one or more questions via pi-goal's built-in goal_questionnaire UI. " +
-			"Use this during drafting when you need structured grill/Q&A before propose_goal_draft; " +
-			"batch related questions into one call. Returns Q&A records in the conversation history.",
-		promptSnippet: "Ask the user one or more structured questions with choices and optional free-text answers.",
-		promptGuidelines: [
-			"Use goal_questionnaire when a user decision or missing requirement blocks a concrete draft.",
-			"During /goals or /sisyphus intent discussion, goal_questionnaire is allowed when structured Q&A helps produce a concrete draft.",
-			"Prefer 1-3 focused questions. Batch related choices in one questionnaire call instead of repeatedly interrupting the user.",
-			"Use recommended to mark the best default choice when there is one. Set allowCustom=false only for strict binary/choice prompts such as confirmation.",
-		],
-		parameters: Type.Object({
-			questions: Type.Array(
-				Type.Object({
-					id: Type.String({ description: "Short stable identifier, e.g. 'scope', 'success', 'constraints'." }),
-					question: Type.String({ description: "The question to ask the user." }),
-					context: Type.Optional(Type.String({ description: "Optional background, trade-offs, or why the answer matters." })),
-					options: Type.Optional(Type.Array(Type.String({ description: "Suggested answer option." }), { description: "Suggested answers. Free-text is still available unless allowCustom=false." })),
-					recommended: Type.Optional(Type.Integer({ minimum: 0, description: "0-based index of the recommended option. Shown with a star and selected by default." })),
-					allowCustom: Type.Optional(Type.Boolean({ description: "Allow the user to write a custom answer. Defaults to true." })),
-				}),
-				{ minItems: 1 },
-			),
-		}),
-		executionMode: "sequential",
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (!ctx.hasUI) {
-				return {
-					content: [{ type: "text", text: "Headless mode: the questions were recorded, but no interactive UI answers were collected. If the original request is already fully specified, proceed with documented/default assumptions; otherwise ask the user in final text and stop." }],
-					details: { questions: [], answers: [], cancelled: true } satisfies GoalQuestionnaireResult,
-				};
-			}
-
-			const rawQuestions = params.questions.map((q) => ({
-				id: q.id,
-				question: q.question,
-				context: q.context,
-				options: q.options ?? [],
-				recommended: q.recommended,
-				allowCustom: q.allowCustom ?? true,
-			}));
-
-			const result = await runGoalQuestionnaire(ctx, rawQuestions);
-			if (result.cancelled) {
-				return {
-					content: [{ type: "text", text: "(goal_questionnaire dismissed)" }],
-					details: result,
-				};
-			}
-
-			return {
-				content: [{ type: "text", text: formatQuestionnaireAnswers(result) }],
-				details: result,
-			};
-		},
-		renderCall(args, theme) {
-			const qs = (args.questions as Array<{ id: string; question: string }>) || [];
-			const labels = qs.map((q) => q.id).join(", ");
-			let text = theme.fg("toolTitle", theme.bold("goal_questionnaire "));
-			text += theme.fg("muted", `${qs.length} question${qs.length !== 1 ? "s" : ""}`);
-			if (labels) text += theme.fg("dim", ` (${truncateToWidth(labels, 40)})`);
-			return new Text(text, 0, 0);
-		},
-		renderResult(result, _options, theme) {
-			const details = result.details as GoalQuestionnaireResult | undefined;
-			if (!details) {
-				const text = result.content[0];
-				return new Text(text?.type === "text" ? text.text : "", 0, 0);
-			}
-			if (details.cancelled) return new Text(theme.fg("warning", "(dismissed)"), 0, 0);
-			const lines = details.answers.map((answer) => {
-				const prefix = answer.wasCustom ? "(wrote) " : "";
-				return `${theme.fg("success", "✓ ")}${theme.fg("accent", answer.id)}: ${theme.fg("muted", prefix)}${answer.answer}`;
-			});
-			return new Text(lines.join("\n"), 0, 0);
-		},
-	}));
 }

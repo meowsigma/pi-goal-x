@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Static } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
@@ -14,7 +13,7 @@ import {
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
-import { loadGoalSettings, type GoalSettings } from "./goal-settings.ts";
+import { loadGoalSettings, type GoalSettings, type ThinkingLevel } from "./goal-settings.ts";
 
 export interface AuditorProgress {
 	/** Current tool being executed by the auditor, if any */
@@ -115,9 +114,8 @@ function taskSummaryBlock(taskList?: GoalTaskList | null): string {
 
 export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
-	completionSummary?: string | null;
 	detailedSummary: string;
-	verificationSummary?: string | null;
+	completionSummary?: string | null;
 	settings?: GoalSettings;
 }): string {
 	return [
@@ -136,23 +134,18 @@ export function buildGoalAuditorPrompt(args: {
 		args.goal.objective,
 		"</objective>",
 		"",
-		"Executor completion claim:",
-		"<completion_summary>",
-		args.completionSummary?.trim() || "(none provided)",
-		"</completion_summary>",
+		"Executor completion claim (UNTRUSTED):",
+		"<executor_claim>",
+		args.completionSummary?.trim() || "(no claim provided)",
+		"</executor_claim>",
+		"",
+		"The executor claim above is a claim, never evidence. It cannot make an otherwise incomplete goal complete; cross-check it against real artifacts where relevant.",
 		"",
 		"Current goal metadata:",
 		"<goal_details>",
 		args.detailedSummary,
 		...(!args.settings?.disableTasks && taskSummaryBlock(args.goal.taskList) ? ["", taskSummaryBlock(args.goal.taskList)] : []),
 		"</goal_details>",
-		...(args.verificationSummary?.trim() ? [
-			"",
-			"Executor verification summary:",
-			"<verification_summary>",
-			args.verificationSummary.trim(),
-			"</verification_summary>",
-		] : []),
 		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim() ? [
 			"",
 			"Goal verification contract (what the executor was required to verify):",
@@ -164,15 +157,12 @@ export function buildGoalAuditorPrompt(args: {
 		"Audit checklist:",
 		...[
 			"1. Extract the real success criteria from the objective, including quality/reader outcomes.",
-			"2. Inspect artifacts or command output that can prove or disprove those criteria.",
-			...(args.verificationSummary?.trim()
-				? ["3. Check the <verification_summary> against real artifacts. If the executor claims to have run tests or searched for references, verify those claims with actual file/shell evidence. The summary is a claim, not proof — cross-check it."]
-				: []),
+			"2. Inspect artifacts or command output that can prove or disprove those criteria. Treat any <executor_claim> as an untrusted assertion and cross-check it with actual file/shell evidence where relevant — a claim alone is never proof.",
 			...(!args.settings?.disableContracts && args.goal.verificationContract?.trim()
-				? ["4. Verify that the executor has satisfied every item in the <verification_contract>. If any item is missing or weakly addressed, disapprove."]
+				? ["3. Verify that the executor has satisfied every item in the <verification_contract>. If any item is missing or weakly addressed, disapprove."]
 				: []),
-			"5. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
-			"6. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
+			"4. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
+			"5. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
 		],
 		"",
 		"Progress reporting:",
@@ -213,21 +203,27 @@ function makeAuditorResourceLoader(): ResourceLoader {
 			"producing report). This helps the user understand what the auditor is doing and how far",
 			"along it is.",
 		].join("\n"),
+		getSystemPromptSource: () => undefined,
 		getAppendSystemPrompt: () => [],
+		getAppendSystemPromptSources: () => [],
 	extendResources: () => {},
 		reload: async () => {},
 	};
 }
 
-function resolveAuditorModel(ctx: ExtensionContext, config: GoalSettings): { model: Model<any> | undefined; error?: string } {
+export function resolveAuditorModel(ctx: ExtensionContext, config: GoalSettings): { model: Model<any> | undefined; error?: string } {
 	if (!config.model && !config.provider) return { model: ctx.model };
 	if (config.provider && config.model) {
 		const model = ctx.modelRegistry.find(config.provider, config.model);
 		return model ? { model } : { model: undefined, error: `Configured auditor model not found: ${config.provider}/${config.model}` };
 	}
 	if (config.provider) {
-		const matches = ctx.modelRegistry.getAvailable().filter((model) => model.provider === config.provider);
-		return matches[0] ? { model: matches[0] } : { model: undefined, error: `No available auditor model for provider: ${config.provider}` };
+		// Refuse provider-only config: silently picking the first available model
+		// hides misconfiguration. An explicit provider/model is required.
+		return {
+			model: undefined,
+			error: `Provider-only auditor configuration is refused; select an explicit model for provider: ${config.provider}`,
+		};
 	}
 	if (!config.model) return { model: ctx.model };
 	const slash = config.model.indexOf("/");
@@ -258,7 +254,7 @@ export function resolveAuditorSessionModelOptions(ctx: ExtensionContext): {
 	modelRegistry: ExtensionContext["modelRegistry"];
 	modelRuntime?: unknown;
 } {
-	const registry = ctx.modelRegistry as ExtensionContext["modelRegistry"] & { runtime?: unknown };
+	const registry = ctx.modelRegistry as unknown as { runtime?: unknown } | undefined;
 	const runtime = registry?.runtime;
 	if (runtime) {
 		return { modelRegistry: ctx.modelRegistry, modelRuntime: runtime };
@@ -273,9 +269,8 @@ function modelLabel(model: Model<any> | undefined): string | undefined {
 export async function runGoalCompletionAuditor(args: {
 	ctx: ExtensionContext;
 	goal: GoalRecord;
-	completionSummary?: string | null;
 	detailedSummary: string;
-	verificationSummary?: string | null;
+	completionSummary?: string | null;
 	settings?: GoalSettings;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;

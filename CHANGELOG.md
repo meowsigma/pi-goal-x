@@ -8,6 +8,251 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [Unreleased]
+
+### Reverted
+
+- **Goal dialogs and tool-call headings restored to the pre-regression
+  surface (commit `383ae52`).** The previous unreleased round (alternate-screen
+  dialogs, full wrapped headings, bounded bottom overlay panels) is fully
+  reverted: `propose_goal_draft` / goal questionnaire opens inline in the main
+  TUI buffer via plain `ctx.ui.custom` (chat history visible above, terminal
+  scrollback fully usable — no DECSET 1049 alternate screen, no `\x1b[2J`
+  clears); the task-list confirmation and audit escape dialogs return to their
+  centered 70% overlays; `update_goal` headings render the status word only,
+  and `set_goal_tasks` truncates the change summary to 80 columns again.
+  Terminal scrollback is enabled in full: dialog content stays in the main
+  buffer and is readable by scrolling up, and opening/navigating/closing cause
+  no viewport churn for content that fits on screen. (A pre-existing pi-tui
+  shrink path could clear the scrollback when closing a dialog taller than
+  the terminal — now eliminated by the churn guard below; the fits-on-screen
+  surface is unchanged.)
+
+### Fixed
+
+- **Provider-error turns no longer auto-continue.** A turn/run whose
+  assistant message has `stopReason: "error"` (provider failure or empty
+  terminal response) no longer queues a goal auto-continuation — previously
+  a single failed hidden checkpoint could become an unbounded
+  checkpoint/error retry storm. Accounting and display reconciliation still
+  run; only the continuation queue is suppressed (`goal-events.ts`, danim47c
+  pattern).
+- **Escape is owned by the active goal dialog.** While any goal-owned modal
+  is open (questionnaire, task-list confirmation, goal settings, goal
+  picker/focus, task-list overlay, audit escape dialog), Escape closes the
+  dialog and never pauses the goal — the global Escape-to-pause handler
+  yields via a modal depth counter (`enterGoalModal`/`exitGoalModal` in
+  `try/finally`, bn-l pattern). Previously only the audit escape dialog was
+  guarded, so Escape in a proposal or settings dialog could pause the running
+  goal before the dialog processed it.
+- **Usage/accounting no longer lost on revision conflicts.** `persist()` on
+  a revision conflict (another process wrote the goal) now merges the local
+  session's additive token/time delta onto the disk record and advances its
+  revision, instead of silently dropping the update. The disk's authoritative
+  fields (objective, tasks, status) are preserved; usage stays monotonic and
+  is never double-counted.
+- **`/goal-settings` redesign.** The settings menu is sectioned (Goal
+  behavior / Task tracking / Completion auditor); the auditor provider/model
+  rows open a searchable model picker (current-session/default entry,
+  authenticated models with a ✓ marker on the exact current selection, and
+  an advanced manual `provider/model` entry); thinking level is a selector;
+  the auditor enable/disable row reads "auditor disabled". Provider-only
+  auditor configuration is now refused with a clear error instead of
+  silently picking the first available model (ll01 pattern).
+- **Goal questionnaire viewport churn (taller-than-screen proposals).**
+  Closing a questionnaire whose opened frame exceeded the terminal height
+  triggered pi-tui's generic shrink full-render
+  (`\x1b[2J\x1b[H\x1b[3J`), erasing terminal scrollback and leaving the
+  viewport at the top, so the window took ~10s to scroll back to the bottom.
+  `runGoalQuestionnaire` now bounds its render to the terminal height with a
+  tail slice (`max(10, rows − pre-dialog frame + 1)`; only engaged with real
+  TUI dimensions): the opened frame never exceeds the screen, so there is no
+  shrink full-render — no 2J/3J, no viewport jump — while content that fits
+  renders exactly as before (383ae52). Tradeoff for taller-than-screen
+  dialogs: the tail (options/footer + last content) stays in view; the
+  dialog head is not written to the buffer.
+- **Terminal scrolling back down while reading a goal dialog.** With the
+  dialog open and the user scrolled up to read the proposal, the viewport
+  snapped back to the bottom “after X seconds”: pi's working spinner ticks
+  every ~80ms and each tick rewrites its line (~44 bytes), and any output
+  while scrolled up snaps the viewport to the bottom in iTerm2/Ghostty/kitty
+  (default behavior). The goal dialogs (questionnaire, task-list
+  confirmation, escape dialog) now pause the spinner for their duration
+  (`setWorkingVisible(false)` on open, `setWorkingVisible(true)` on
+  close/dispose) — measured 0 bytes per tick afterwards, so reading the
+  proposal in scrollback is undisturbed. No-op in headless contexts.
+- **Programmatic before/after test:**
+  `experiments/scroll-repro/before-after-churn.mjs` drives the real
+  `runGoalQuestionnaire` through the real pi-tui renderer with the real pi
+  frame layout (header, chat, status-with-spinner, editor, footer) and
+  reports open/nav/close scrolls, 2J/3J emissions, post-close viewport
+  position, scrollback content, and the bytes emitted by five working-spinner
+  ticks while the user is scrolled up reading the dialog; `--expect-fixed`
+  asserts the fixed behavior (exit 0: no 2J/3J anywhere, no periodic output,
+  fits scenario stays 0-churn).
+
+## [0.22.0] — 2026-08-04
+
+Single consolidated release on the simplification branch: the codex-inspired
+interface, the hardening pass, and the goal-runtime follow-up all ship
+together as the one version after the 0.21 baseline.
+
+### Added
+
+- **Codex-inspired five-tool model surface:** `create_goal` (objective
+  1–4000 chars, mode, optional `token_budget`), `get_goal` (stable snapshot,
+  no nudge map), and `update_goal` — terminal outcomes `complete` (audited
+  from actual evidence; optional `completion_summary` is an untrusted
+  claim), `blocked` (set only after the same blocker recurs on three
+  consecutive goal turns), and `paused` (immediate agent pause with required
+  `reason` and optional `suggested_action`) — plus the two consolidated task
+  tools `set_goal_tasks` (flat parent-linked task-tree definition with
+  confirmation) and `update_goal_task` (per-task
+  `complete`/`skipped`/`pending` status updates without stopping the turn).
+- **Token-budget support:** optional `token_budget` on creation; when
+  accounted usage reaches the budget the goal transitions to a distinct
+  `budget_limited` status exactly once, emits a `goal_budget_limited` ledger
+  event, and injects one-time wrap-up steering (summarize, do not start new
+  work, do not claim completion).
+- **Curated fourteen-command palette:** `/goal` and `/sisyphus` start
+  guided drafting (bare `/goal` is never status); `/goal-direct` and
+  `/sisyphus-direct` bypass it; `/goal-list`, `/goal-focus`, `/goal-unfocus`,
+  `/goal-settings`, `/goal-tweak`, `/goal-clear`, `/goal-pause`,
+  `/goal-resume`, plus `/goal-status` (read-only focused-goal summary) and
+  `/goal-cancel` (discard the in-progress draft as a durable no-op).
+- **Guided drafting runtime, restored as a first-class workflow.** Drafting
+  runs in a transient, user-invoked profile with `goal_question`,
+  `goal_questionnaire`, and `propose_goal_draft` (Confirm / Continue /
+  Cancel with per-draft auditor selection); confirmation atomically creates
+  the objective, verification contract, and task tree, then restores the
+  execution profile. Drafts persist in branch-local `pi-goal-draft` session
+  entries (survive compaction and tree navigation) with Resume/Replace/Cancel
+  protection; Sisyphus proposals require ordered-step structure;
+  contracts-disabled settings keep contract lines as plain prose.
+- **GoalService/runtime/accounting extraction:** `goal.ts` is a thin
+  installer; state lives in a shared `GoalCore` (goal-state.ts) with
+  tools/commands/events/widget/format split into dedicated modules.
+- **Cross-process mutation serialization:** goals carry a persisted
+  monotonic `revision` (legacy records normalize to zero); `GoalService`
+  acquires a per-goal filesystem lock, re-reads the authoritative file under
+  it, and returns typed conflicts to stale writers instead of overwriting
+  blindly. `update_goal_task` retries once only when the same task and
+  status/structure remain unchanged; `set_goal_tasks` surfaces the typed
+  conflict.
+- **Enforced, portable experiment harness:** `SUPPORTED_CASES.json`
+  membership is required before a run directory is created (raw dirs need
+  `--allow-unsupported`); the provider smoke uses the selected model and
+  validates HTTP status and JSON shape with capped response text; the outer
+  timeout discovers `timeout`, `gtimeout`, then a bundled Node watchdog;
+  shell tests with stubbed curl/pi cover resolution, payload, missing
+  configuration, and timeout selection; an observations index marks old runs
+  as historical evidence. Experiment cases B1–B2 and C1–C26 are migrated to
+  the current interface with mechanical rubrics.
+- **Test runner self-check:** `npm run test:selfcheck` asserts the
+  discovered test entries match the pinned manifest.
+
+### Changed
+
+- **Settings menu is fully operable.** Every persisted field is selectable
+  and editable through `/goal-settings` (`disableTasks`, `disableContracts`,
+  `autoSelectSingleGoal`, `disabled`, `provider`, `model`, `thinkingLevel`,
+  `subtaskDepth`); `subtaskDepth` validates the full input string (whole
+  positive safe integers only) and repeated task toggles in one menu session
+  reinstall the correct fixed three/five profile every time.
+- **`/goal-clear` asks for confirmation.** Cancelling changes no file,
+  focus entry, ledger entry, or runtime state (byte-for-byte no-op); headless
+  runs return guidance without mutation. The focus is re-validated after the
+  dialog so a stale confirmation never archives the wrong goal.
+- **Task-list confirmation uses neutral labels.** The dialog offers Confirm
+  task list / Keep current tasks and returns only a task decision — no
+  goal-creation wording, questionnaire state, or auditor toggle.
+- **Completion commits are failure-checked.** `commitGoalCompletion` returns
+  a discriminated result and inspects `GoalService.apply`; a failed state
+  mutation never renders a success report, a `goal_completed` event, or a
+  focus clear, and deferred-archive failures surface as observable warnings.
+- **Audit aborts produce one canonical outcome.** Escape during an audit
+  records transient state only; the eventual user choice writes exactly one
+  ledger event — `audit_skipped(user_aborted)` for complete-without-audit,
+  nothing for continue-working — and continue-working leaves the goal active.
+- **`/goal-tweak` is a guided, user-confirmed refinement** through
+  GoalService (preserves usage/tasks/mode/budget, reactivates
+  `budget_limited` goals), validated against the focused goal's revision and
+  staying user-started — there is no steady-state `propose_goal_tweak`.
+- **Capability parity without tool sprawl.** The agent can pause with a
+  reason and optional suggested action; abandonment stays user-owned via
+  `/goal-clear`; objective changes stay user-started via `/goal-tweak`;
+  `completion_summary` is passed to the auditor as an untrusted claim —
+  never evidence, never an approval bypass.
+- **Bounded five-tool steering prompts** (10k fragment cap, objective
+  escaping, three-turn blocker policy).
+- **Pi SDK family upgraded to 0.83** (`pi-ai`, `pi-coding-agent`, `pi-tui`
+  together; no forced audit-fix split). Both the full development graph and
+  the published/runtime graph audit clean (transitive advisories fixed with
+  same-major overrides; the lock was generated with npm 12 because npm 11
+  ignores overrides and `npm ci` replays the resolved versions).
+- **Test runner consolidation.** Unit and handler-integration tests are
+  automatically discovered and run in one Node process with
+  contract-faithful test adapters for the small Pi SDK runtime surface they
+  exercise; `test:serial` remains the real-SDK, process-isolated
+  compatibility path. `tests/e2e/extension.test.ts` is replaced by
+  `tests/integration/extension.test.ts` (the handler-level integration suite
+  drives the actual registered tools with an auditor fixture).
+
+### Fixed
+
+- **Persisted lifecycle status is authoritative.** The paused `&&`
+  autoContinue `=>` active migration is deleted: a persisted paused record
+  (including the legacy `{status:"paused", autoContinue:true}` case) stays
+  paused through every read, markdown parse, and session restore.
+  `autoContinue` is an execution preference and never rewrites status.
+- **Disabled-auditor completion is reachable.** `settings.disabled: true` is
+  an explicit user-owned setting that skips the auditor, records
+  `audit_skipped`, and completes through the normal deferred-completion path
+  — no model-only bypass field. All successful completion commits
+  (audit-approved, globally disabled, legacy per-goal skip, Escape bypass)
+  share one transaction helper.
+- **Disk-fresh task transactions.** `update_goal_task` reconciles the
+  focused record, validates the focus token, loads the task from the
+  disk-refreshed clone, validates the transition against it, and updates only
+  that task's path, returning typed failures for
+  removed-task/task-list races. Concurrent external task edits survive unless
+  the operation changes the same task.
+- **Structural task replacement clears omitted fields.** Matching task ids
+  preserve only runtime progress (status, evidence, completion/skip
+  timestamps, skip reason); omitted structural fields (verification contract,
+  lightweight flag, children, parentage) are cleared, not inherited.
+- **Token budget hardening.** `token_budget` is a positive safe integer in
+  the schema and at runtime; fractional, zero, negative, infinite, and unsafe
+  values are rejected live and normalized to absent when persisted.
+- **Ledger vocabulary and diagnostics.** Reopening a task writes
+  `task_reopened` (the old synthetic `task_skipped` unskip reason still reads
+  back); `appendGoalEvent` returns a discriminated result and every
+  GoalService ledger loop routes failures through an observable
+  `onDiagnostic` hook without rolling back the authoritative state write.
+- **Fixed three/five tool profile.** `installGoalToolProfile` installs
+  exactly five goal tools with tasks enabled, exactly three when disabled,
+  only at session start and on `disableTasks` settings toggles; lifecycle
+  transitions never add/remove/restore goal tools and ordinary pi work tools
+  are never touched.
+
+### Removed
+
+- **Hidden tool shims and legacy command routing:** the `complete_goal`,
+  `pause_goal`, `abort_goal`, `propose_goal_tweak`, `propose_task_list`,
+  `complete_task`, `skip_task`, and `step_complete` tool registrations are
+  gone from the active surface; the `/goals`, `/goals-set`, `/sisyphus-set`,
+  and `/goal-abort` command registrations are gone. The drafting tools
+  (`goal_question`, `goal_questionnaire`, `propose_goal_draft`) live only
+  inside the transient drafting profile, and the restored `/goal-status` is a
+  read-only command. Old goal-file and ledger readers
+  (`readActiveGoalPool`, `readGoalLedger`, `mergeGoalPromptFromDisk`,
+  `latestAuditorResultForGoal`, `normalizeGoalRecord`) remain for
+  backward-compatible reads of existing data. See the README “Command
+  migration” and “Tool migration” tables.
+- Obsolete abort/pause/completion-summary policy builders.
+
+---
+
 ## [0.21.0] — 2026-08-03
 
 ### Added

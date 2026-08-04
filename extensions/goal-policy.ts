@@ -1,7 +1,7 @@
 import { statusLabel, type GoalDisplayRecordLike } from "./goal-core.ts";
 import type { GoalTask, GoalTaskList, TaskStatus } from "./goal-record.ts";
 
-export type GoalStatusLike = "active" | "paused" | "complete";
+export type GoalStatusLike = "active" | "paused" | "blocked" | "budget_limited" | "complete";
 export type StopReasonLike = "user" | "agent";
 
 export interface GoalPolicyRecordLike extends GoalDisplayRecordLike {
@@ -17,21 +17,15 @@ export type PolicyValidation =
 	| { ok: true }
 	| { ok: false; message: string };
 
-export function isGoalUnfinished(goal: Pick<GoalPolicyRecordLike, "status"> | null | undefined): boolean {
-	return !!goal && goal.status !== "complete";
-}
-
 export function isRunnableStatus(status: GoalStatusLike): boolean {
 	return status === "active";
 }
 
 export function isCompletableStatus(status: GoalStatusLike): boolean {
-	return status === "active" || status === "paused";
-}
-
-export function validateGoalCreationSlot(goal: Pick<GoalPolicyRecordLike, "status"> | null): PolicyValidation {
-	void goal;
-	return { ok: true };
+	// A budget-limited goal is NOT completed by the transition itself, but the
+	// user (or the model on explicit evidence) may still complete it. A blocked
+	// goal is the model's terminal surrender — resume or clear it instead.
+	return status === "active" || status === "paused" || status === "budget_limited";
 }
 
 export function validateGoalCompletion(args: {
@@ -41,89 +35,49 @@ export function validateGoalCompletion(args: {
 	const { goal, runningGoalId } = args;
 	if (!goal) return { ok: false, message: "No goal is set." };
 	if (runningGoalId && goal.id !== runningGoalId) return { ok: false, message: "The active goal changed during this run; not marking it complete." };
-	if (!isCompletableStatus(goal.status)) return { ok: false, message: `Goal is ${statusLabel(goal)}; complete_goal does not apply.` };
+	if (!isCompletableStatus(goal.status)) return { ok: false, message: `Goal is ${statusLabel(goal)}; update_goal(complete) does not apply.` };
 	return { ok: true };
 }
 
-export function validateGoalUpdate(args: {
-	goal: GoalPolicyRecordLike | null;
-}): PolicyValidation {
-	if (!args.goal) return { ok: false, message: "No goal is set; cannot update objective." };
-	if (args.goal.status === "complete") return { ok: false, message: "Goal is already complete; cannot update objective." };
-	return { ok: true };
-}
-
-export function validateGoalAbort(args: {
+/** update_goal(blocked) applies only to an ACTIVE goal — paused/complete/blocked/budget-limited reject it. */
+export function validateGoalBlock(args: {
 	goal: GoalPolicyRecordLike | null;
 	runningGoalId?: string | null;
-	reason: string;
 }): PolicyValidation {
-	const { goal, runningGoalId } = args;
-	if (!goal) return { ok: false, message: "No goal is set; abort_goal is a no-op." };
-	if (runningGoalId && goal.id !== runningGoalId) return { ok: false, message: "The active goal changed during this run; not aborting." };
-	if (goal.status === "complete") return { ok: false, message: "Goal is complete; abort_goal does not apply." };
-	if (!args.reason.trim()) return { ok: false, message: "abort_goal requires a non-empty reason." };
+	const { goal } = args;
+	if (!goal) return { ok: false, message: "No goal is set." };
+	if (goal.status !== "active") {
+		return { ok: false, message: `Goal is ${statusLabel(goal)}; update_goal(blocked) applies only to an active goal.` };
+	}
 	return { ok: true };
 }
 
-export function validatePauseGoal(args: {
+/**
+ * update_goal(paused) is the agent-initiated immediate pause (Stage 5.1-C).
+ * It applies only to an ACTIVE goal and is distinct from the three-turn
+ * blocked gate and from the user-owned pause/resume commands.
+ */
+export function validateGoalAgentPause(args: {
 	goal: GoalPolicyRecordLike | null;
 	runningGoalId?: string | null;
-	reason: string;
 }): PolicyValidation {
-	const { goal, runningGoalId } = args;
-	if (!goal) return { ok: false, message: "No goal is set; pause_goal is a no-op." };
-	if (runningGoalId && goal.id !== runningGoalId) return { ok: false, message: "The active goal changed during this run; not pausing." };
-	if (!isRunnableStatus(goal.status)) return { ok: false, message: `Goal is ${statusLabel(goal)}; pause_goal does not apply.` };
-	if (!args.reason.trim()) return { ok: false, message: "pause_goal requires a non-empty reason." };
+	const { goal } = args;
+	if (!goal) return { ok: false, message: "No goal is set." };
+	if (goal.status !== "active") {
+		return { ok: false, message: `Goal is ${statusLabel(goal)}; update_goal(paused) applies only to an active goal.` };
+	}
 	return { ok: true };
-}
-
-export function buildPausedByAgentGoal<T extends GoalPolicyRecordLike>(goal: T, args: {
-	reason: string;
-	suggestedAction?: string;
-	updatedAt: string;
-}): T {
-	const suggested = args.suggestedAction?.trim() || undefined;
-	return {
-		...goal,
-		status: "paused",
-		autoContinue: false,
-		stopReason: "agent",
-		pauseReason: args.reason.trim(),
-		pauseSuggestedAction: suggested,
-		updatedAt: args.updatedAt,
-	};
-}
-
-export function buildAbortedByAgentGoal<T extends GoalPolicyRecordLike>(goal: T, args: {
-	reason: string;
-	updatedAt: string;
-}): T {
-	return {
-		...goal,
-		status: "paused",
-		autoContinue: false,
-		stopReason: "agent",
-		pauseReason: `Aborted: ${args.reason.trim()}`,
-		pauseSuggestedAction: undefined,
-		updatedAt: args.updatedAt,
-	};
 }
 
 export function validateResumeGoal(goal: GoalPolicyRecordLike | null): PolicyValidation {
-	if (!goal) return { ok: false, message: "No goal is set. Use /goals or /sisyphus to discuss, or /goals-set / /sisyphus-set to start immediately." };
-	if (goal.status === "complete") return { ok: false, message: "Goal is complete. Use /goals to discuss a new one or /goals-set to start immediately." };
+	if (!goal) return { ok: false, message: "No goal is set. Use /goal to draft one, or /goal-direct <objective> to start immediately." };
+	if (goal.status === "complete") return { ok: false, message: "Goal is complete. Use /goal to draft a new one, or /goal-direct <objective> to start immediately." };
 	if (goal.status === "active" && goal.autoContinue) return { ok: false, message: "Goal is already running." };
 	return { ok: true };
 }
 
-export function clearGoalCommandMessage(args: { archived: boolean; wasDrafting: boolean }): string {
-	return args.archived ? "Goal cleared and archived." : args.wasDrafting ? "Drafting cancelled." : "No goal is set.";
-}
-
-export function abortGoalCommandMessage(args: { archived: boolean; wasDrafting: boolean }): string {
-	return args.archived ? "Goal aborted and archived." : args.wasDrafting ? "Drafting cancelled." : "No goal is set.";
+export function clearGoalCommandMessage(args: { archived: boolean }): string {
+	return args.archived ? "Goal cleared and archived." : "No goal is set.";
 }
 
 /** Count tasks in subtree recursively */
@@ -161,24 +115,9 @@ export function taskCompletionBlockWarning(taskList: GoalTaskList): string | nul
 }
 
 /**
- * Validate that a verificationSummary satisfies a verificationContract.
- * If a contract exists, the summary must be non-empty.
+ * Validate a task completion transition (evidence requirement is enforced by
+ * the update_goal_task handler against the task's verification contract).
  */
-export function validateVerificationSummary(args: {
-	verificationContract?: string | null;
-	verificationSummary?: string | null;
-}): PolicyValidation {
-	const contract = args.verificationContract?.trim();
-	const summary = args.verificationSummary?.trim();
-	if (contract && !summary) {
-		return {
-			ok: false,
-			message: `This goal has a verification contract but no verificationSummary was provided. Provide a verificationSummary that addresses the contract requirements.`,
-		};
-	}
-	return { ok: true };
-}
-
 export function validateTaskCompletion(args: {
 	goal: GoalPolicyRecordLike | null;
 	taskId: string;
@@ -204,7 +143,7 @@ export function validateTaskSkip(args: {
 	if (task.status === "complete") return { ok: false, message: `Task "${args.taskId}" is already complete.` };
 	// Skipped tasks toggle via the executor; reason is only required for first-time skips.
 	if (task.status === "skipped") return { ok: true };
-	if (!args.reason.trim()) return { ok: false, message: "skip_task requires a non-empty reason." };
+	if (!args.reason.trim()) return { ok: false, message: "Skipping requires a non-empty reason." };
 	return { ok: true };
 }
 
@@ -346,7 +285,7 @@ export function skipAllSubtasks(task: GoalTask, now: string, reason: string): Go
 	};
 }
 
-export function buildCompletionReport(args: { detailedSummary: string; completionSummary?: string | null; auditorReport?: string | null; auditSkippedReason?: string | null; taskSummary?: string | null }): string {
+export function buildCompletionReport(args: { detailedSummary: string; auditorReport?: string | null; auditSkippedReason?: string | null; taskSummary?: string | null }): string {
 	const auditSkipped = args.auditSkippedReason?.trim();
 	const auditorReport = args.auditorReport?.trim();
 	const lines = auditSkipped
@@ -354,10 +293,6 @@ export function buildCompletionReport(args: { detailedSummary: string; completio
 		: auditorReport
 			? ["Goal audit approved.", "", "Auditor approval:", auditorReport, "", "Goal complete."]
 			: ["Goal complete."];
-	const summary = args.completionSummary?.trim();
-	if (summary) {
-		lines.push("", "Completion summary:", summary);
-	}
 	const taskSummary = args.taskSummary?.trim();
 	if (taskSummary) {
 		lines.push("", `Task summary: ${taskSummary}`);

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { buildCompletionReport, findSubtaskDepthViolation, validateGoalUpdate, validateTaskListProposal } from "../extensions/goal-policy.ts";
+import { buildCompletionReport, findSubtaskDepthViolation, validateTaskListProposal } from "../extensions/goal-policy.ts";
 import { createGoal } from "../extensions/goal-record.ts";
 import {
 	archiveGoalFile,
@@ -40,61 +40,39 @@ function makeGoal(overrides: Partial<GoalRecord> = {}): GoalRecord {
 	};
 }
 
-// ─── validateGoalUpdate (handler gate) ───────────────────────────────────────
+// ─── updatedObjective schema rejection (removed from the model surface) ──────
 
-test("validateGoalUpdate rejects null goal (no goal exists)", () => {
-	const result = validateGoalUpdate({ goal: null });
-	assert.equal(result.ok, false);
-	if (!result.ok) {
-		assert.match(result.message, /cannot update objective/);
-		assert.match(result.message, /No goal is set/);
-	}
-});
-
-test("validateGoalUpdate rejects complete goal", () => {
-	const goal = makeGoal({ status: "complete" } as GoalRecord);
-	const result = validateGoalUpdate({ goal });
-	assert.equal(result.ok, false);
-	if (!result.ok) {
-		assert.match(result.message, /cannot update objective/);
-		assert.match(result.message, /already complete/);
-	}
-});
-
-test("validateGoalUpdate accepts active goal", () => {
-	const result = validateGoalUpdate({ goal: makeGoal() });
-	assert.equal(result.ok, true);
-});
-
-test("validateGoalUpdate accepts paused goal", () => {
-	const result = validateGoalUpdate({ goal: makeGoal({ status: "paused" }) });
-	assert.equal(result.ok, true);
-});
-
-// ─── updatedObjective schema rejection (was removed from complete_goal) ───────
-
-test("complete_goal schema has additionalProperties: false to reject unknown params", () => {
-	const source = readFileSync("extensions/goal.ts", "utf8");
-	const updateGoalIdx = source.indexOf('name: "complete_goal"');
-	assert.ok(updateGoalIdx >= 0, "must find complete_goal tool registration");
+test("update_goal schema has additionalProperties: false and no updatedObjective", () => {
+	const source = readFileSync("extensions/goal-core-tools.ts", "utf8");
+	const updateGoalIdx = source.indexOf('name: "update_goal"');
+	assert.ok(updateGoalIdx >= 0, "must find update_goal tool registration");
 	const registerBlock = source.substring(updateGoalIdx, updateGoalIdx + 4000);
 	assert.ok(registerBlock.includes("additionalProperties: false"),
-		"complete_goal schema must have additionalProperties: false");
+		"update_goal schema must have additionalProperties: false");
 	assert.ok(!registerBlock.includes("updatedObjective"),
-		"complete_goal schema must not contain updatedObjective");
+		"update_goal schema must not contain updatedObjective");
 	assert.ok(!source.includes("updatedObjective"),
-		"updatedObjective must not appear anywhere in goal.ts");
+		"updatedObjective must not appear anywhere in goal-core-tools.ts");
+	assert.equal(source.includes('name: "complete_goal"'), false,
+		"complete_goal tool registration must be removed");
 });
 
-test("complete_goal without status throws correct error message", () => {
-	const source = readFileSync("extensions/goal.ts", "utf8");
-	const updateGoalIdx = source.indexOf('name: "complete_goal"');
-	const registerBlock = source.substring(updateGoalIdx, updateGoalIdx + 4000);
-	assert.ok(!registerBlock.includes("params.updatedObjective"),
+test("update_goal routes complete directly to the shared completion flow", () => {
+	const source = readFileSync("extensions/goal-core-tools.ts", "utf8");
+	// The completion flow is reached directly from the update_goal executor for
+	// status=complete; blocked and paused route to their own flows. The claim
+	// is a single scalar parameter — no options object, no paperwork fields.
+	assert.ok(!source.includes("params.updatedObjective"),
 		"Phase 1 updatedObjective handling must be removed");
-	assert.ok(registerBlock.includes('"complete_goal requires status=complete when marking a goal complete."'),
-		"handler must throw error mentioning status=complete");
-	assert.ok(!registerBlock.includes("updatedObjective"),
+	assert.ok(source.includes("completion_summary: Type.Optional(Type.String"),
+		"public schema carries the scalar completion_summary claim");
+	assert.ok(!source.includes("verificationSummary?: string"),
+		"internal options type must not carry verificationSummary");
+	assert.ok(!source.includes("confirmBypassAuditor"),
+		"internal options type must not carry confirmBypassAuditor");
+	assert.ok(source.includes("return deps.runGoalCompletionFlow(core, ctx, params.completion_summary);"),
+		"executor must route status=complete to the completion flow with the scalar claim");
+	assert.ok(!source.includes("updatedObjective"),
 		"handler must not reference updatedObjective in error messages");
 });
 
@@ -102,7 +80,7 @@ test("complete_goal without status throws correct error message", () => {
 
 // ─── completion flow unaffected ────────────────────────────────────────────
 
-test("complete_goal with status=complete still works (completion flow unchanged)", () => {
+test("update_goal(complete) with status=complete still works (completion flow unchanged)", () => {
 	const ctx = tempCtx();
 	try {
 		const goal = makeGoal();
@@ -134,20 +112,19 @@ test("complete_goal with status=complete still works (completion flow unchanged)
 test("buildCompletionReport handles updated objective display", () => {
 	const report = buildCompletionReport({
 		detailedSummary: "Goal: Build feature X\nUpdated objective: Build feature Y\nStatus: active",
-		completionSummary: "Feature Y built successfully.",
 		auditorReport: "Inspected and verified.\n\n<approved/>",
 	});
 	assert.ok(report.includes("Goal complete."));
 	assert.ok(report.includes("<approved/>"));
 });
 
-// ─── propose_goal_tweak handler simulation ───────────────────────────────────
-// The propose_goal_tweak confirm path writes the new objective via
+// ─── tweak persist-path simulation (shared proposal validators) ────────────
+// The tweak persist path writes the new objective via
 // writeActiveGoalFile, appends a state entry, clears tweakDraftingFor, sets
 // turnStoppedFor, and returns terminate:true. We simulate the storage-level
 // write and verify the goal is updated on disk.
 
-test("propose_goal_tweak path: writeActiveGoalFile with new objective (simulated handler execution)", () => {
+test("tweak persist path: writeActiveGoalFile with new objective (simulated handler execution)", () => {
 	const ctx = tempCtx();
 	try {
 		const originalObj = "Original objective";
@@ -158,7 +135,7 @@ test("propose_goal_tweak path: writeActiveGoalFile with new objective (simulated
 		const active = writeActiveGoalFile(ctx, goal);
 		assert.equal(active.objective, originalObj);
 
-		// Simulate propose_goal_tweak confirm path: write with new objective (same
+		// Simulate the tweak persist path: write with new objective (same
 		// pattern the handler uses: spread state goal, set new objective + updatedAt)
 		const tweaked = writeActiveGoalFile(ctx, {
 			...active,
@@ -183,7 +160,7 @@ test("propose_goal_tweak path: writeActiveGoalFile with new objective (simulated
 	}
 });
 
-test("propose_goal_tweak path: taskList persisted when tasks parameter provided", () => {
+test("tweak persist path: taskList persisted when tasks parameter provided", () => {
 	const ctx = tempCtx();
 	try {
 		const goal = makeGoal({
@@ -196,7 +173,7 @@ test("propose_goal_tweak path: taskList persisted when tasks parameter provided"
 			{ id: "t2", title: "Task two", status: "pending" as const, verificationContract: "Must verify" },
 		];
 
-		// Simulate propose_goal_tweak confirm path with tasks parameter
+		// Simulate the tweak persist path with tasks parameter
 		const tweaked = writeActiveGoalFile(ctx, {
 			...active,
 			objective: "Updated objective with new tasks",
@@ -223,7 +200,7 @@ test("propose_goal_tweak path: taskList persisted when tasks parameter provided"
 	}
 });
 
-test("propose_goal_tweak path: original taskList inherited when tasks omitted", () => {
+test("tweak persist path: original taskList inherited when tasks omitted", () => {
 	const ctx = tempCtx();
 	try {
 		const originalTasks = [
@@ -242,7 +219,7 @@ test("propose_goal_tweak path: original taskList inherited when tasks omitted", 
 		const active = writeActiveGoalFile(ctx, goal);
 		assert.ok(active.taskList, "original must have taskList");
 
-		// Simulate propose_goal_tweak confirm path WITHOUT tasks parameter:
+		// Simulate the tweak persist path WITHOUT tasks parameter:
 		// the handler inherits the current goal's taskList
 		const updatedObjective = "Objective tweaked, tasks inherited unchanged";
 		const withInherited = writeActiveGoalFile(ctx, {
@@ -267,7 +244,7 @@ test("propose_goal_tweak path: original taskList inherited when tasks omitted", 
 	}
 });
 
-test("propose_goal_tweak path: taskList cleared when tasks omitted and goal has no taskList", () => {
+test("tweak persist path: taskList cleared when tasks omitted and goal has no taskList", () => {
 	const ctx = tempCtx();
 	try {
 		// Goal WITHOUT task list
@@ -289,7 +266,7 @@ test("propose_goal_tweak path: taskList cleared when tasks omitted and goal has 
 	}
 });
 
-test("propose_goal_tweak path: task validation rejects deep subtasks", () => {
+test("tweak persist path: task validation rejects deep subtasks", () => {
 	const ctx = tempCtx();
 	try {
 		const goal = makeGoal({ objective: "Test validation" });
@@ -335,13 +312,11 @@ test("goal evolution instruction mentions /goal-tweak instead of updatedObjectiv
 	const goal = makeGoal();
 
 	const contText = continuationPrompt(goal);
-	assert.ok(contText.includes("Goal evolution:"), "continuationPrompt must include Goal evolution instruction");
 	assert.ok(!contText.includes("updatedObjective"), "continuationPrompt must NOT reference updatedObjective");
 	assert.ok(contText.includes("immutable"), "continuationPrompt must mention the goal is immutable");
 	assert.ok(contText.includes("/goal-tweak"), "continuationPrompt must instruct user to run /goal-tweak");
 
 	const goalText = goalPrompt(goal);
-	assert.ok(goalText.includes("Goal evolution:"), "goalPrompt must include Goal evolution instruction");
 	assert.ok(!goalText.includes("updatedObjective"), "goalPrompt must NOT reference updatedObjective");
 	assert.ok(goalText.includes("/goal-tweak"), "goalPrompt must instruct user to run /goal-tweak");
 });

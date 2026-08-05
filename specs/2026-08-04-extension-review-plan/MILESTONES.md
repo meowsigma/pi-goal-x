@@ -95,3 +95,7 @@ implementation.
   budget threshold alerts, headless pause banner. Part 3 now has 7 features
   (F1–F7); the multi-goal dashboard stays parked because it needs a new slash
   command.
+- Fifth pass (2026-08-04): on request, F7's spec entry was expanded with
+  concrete mechanics (one-shot per pause transition via the `goal_paused`
+  ledger path, idempotent, untruncated reason + suggested action, TUI
+  sessions unaffected) and an example banner line.

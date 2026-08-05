@@ -294,14 +294,29 @@ Rationale: the budget currently transitions only at 100% with no warning
 gradient. User value: users can decide to raise or trim scope before the hard
 stop, not after.
 
-**F7. Headless-friendly pause banner (priority 7).** Description: in
-`hasUI:false` sessions, a pause via `update_goal(paused)` or `/goal-pause`
-prints a one-shot banner line to the session log (reason + suggested action)
-so the next human opening the log sees why work stopped.
-Surfaces: **human** (log reader). Rationale: headless runs have no widget or
-notification; the pause reason currently exists only in the goal file.
-User value: auditability of why a background run stopped, without opening
-`.pi/goals` files.
+**F7. Headless pause banner (priority 7).** Description: in headless sessions
+(`hasUI:false` — CI runs, background pi processes, no TUI), a goal pause via
+`update_goal({status:"paused"})` (with reason and optional suggested action)
+or `/goal-pause` prints a **one-shot banner** to the session log at the moment
+of the pause transition, so the next human who opens that log sees why the
+run stopped. Example:
+
+```
+[PI GOAL PAUSED abc123] Work stopped: awaiting your decision on the feature set.
+Suggested next: /goal-tweak, then /goal-resume. (Auto-continue is off.)
+```
+
+Mechanics: fires exactly once per pause transition — hooked to the existing
+`goal_paused` ledger-event path so it is idempotent and never re-printed by
+later checkpoints; it carries the full untruncated pause reason + suggested
+action; TUI sessions are unaffected (they already have the widget/dialog).
+Surfaces: **human** (log reader). Rationale: in headless runs there is no
+widget and no notification surface — today the pause reason lives only in the
+goal record and the agent-facing paused prompt (the "Agent pause reason:"
+line), which a human skimming the log never sees; the ledger event exists but
+is not readable at a glance. User value: anyone auditing why a background run
+stopped gets the answer in the first lines of the log, without opening
+`.pi/goals` files or re-parsing ledger JSONL.
 
 Prioritisation note: F1 first because it surfaces data already recorded (no
 new mutation surface), F2 next because it reuses the confirmation dialog, F3

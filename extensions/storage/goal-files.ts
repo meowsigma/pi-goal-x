@@ -19,6 +19,36 @@ import {
 export const GOALS_DIR = ".pi/goals";
 export const ARCHIVED_GOALS_DIR = ".pi/goals/archived";
 
+/**
+ * Per-file parse cache (P1-1): keyed by (absolute path, mtime, size), so
+ * steady-state parses of goal files cost one lstat instead of lstat+read+
+ * JSON-parse. Every parse call site (pool scan, reconcile, merge-from-disk)
+ * shares this cache; writers invalidate the entries they touch.
+ */
+interface GoalFileParseCacheEntry {
+	mtimeMs: number;
+	size: number;
+	parsed: GoalRecord | null;
+}
+
+const goalFileParseCache = new Map<string, GoalFileParseCacheEntry>();
+
+/** Directory listing cache (names only): keyed by (absolute path, dir mtime). */
+interface GoalDirListingCacheEntry {
+	mtimeMs: number;
+	names: string[];
+}
+
+const goalDirListingCache = new Map<string, GoalDirListingCacheEntry>();
+
+function invalidateGoalPathCaches(filePath: string): void {
+	goalFileParseCache.delete(filePath);
+}
+
+function invalidateGoalDirCache(root: string): void {
+	goalDirListingCache.delete(root);
+}
+
 export interface GoalFileContext {
 	cwd: string;
 }
@@ -93,11 +123,17 @@ export function atomicWriteGoalFile(ctx: GoalFileContext, rootRel: string, relPa
 	const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	fs.writeFileSync(tempPath, content, "utf8");
 	fs.renameSync(tempPath, filePath);
+	invalidateGoalPathCaches(filePath);
+	invalidateGoalDirCache(path.resolve(ctx.cwd, rootRel));
 }
 
 export function safeUnlinkGoalFile(ctx: GoalFileContext, rootRel: string, relPath: string): void {
 	const filePath = resolveGoalPath(ctx, rootRel, relPath);
-	if (fs.existsSync(filePath) && !fs.lstatSync(filePath).isSymbolicLink()) fs.unlinkSync(filePath);
+	if (fs.existsSync(filePath) && !fs.lstatSync(filePath).isSymbolicLink()) {
+		fs.unlinkSync(filePath);
+		invalidateGoalPathCaches(filePath);
+		invalidateGoalDirCache(path.resolve(ctx.cwd, rootRel));
+	}
 }
 
 export function makeActiveGoalPath(goal: GoalRecord): string {
@@ -211,13 +247,32 @@ export function extractObjectiveFromBody(body: string): string | undefined {
 }
 
 export function parseGoalFile(filePath: string): GoalRecord | null {
+	let stat: fs.Stats;
+	try {
+		stat = fs.lstatSync(filePath);
+	} catch {
+		goalFileParseCache.delete(filePath);
+		return null;
+	}
+	if (stat.isSymbolicLink()) return null;
+	const cached = goalFileParseCache.get(filePath);
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+		return cached.parsed;
+	}
 	let content: string;
 	try {
-		if (fs.lstatSync(filePath).isSymbolicLink()) return null;
 		content = fs.readFileSync(filePath, "utf8");
 	} catch {
 		return null;
 	}
+	return parseGoalContentCached(filePath, stat.mtimeMs, stat.size, content);
+}
+
+/**
+ * Parse goal-file content and seed the P1-1 parse cache (shared by the sync
+ * and the parallel async readers). Returns null for malformed content.
+ */
+export function parseGoalContentCached(filePath: string, mtimeMs: number, size: number, content: string): GoalRecord | null {
 	const end = findJsonObjectEnd(content);
 	if (end < 0) return null;
 	let raw: Record<string, unknown>;
@@ -227,7 +282,9 @@ export function parseGoalFile(filePath: string): GoalRecord | null {
 		return null;
 	}
 	const objective = extractObjectiveFromBody(content.slice(end + 1)) ?? raw.objective;
-	return normalizeGoalRecord({ ...raw, objective });
+	const parsed = normalizeGoalRecord({ ...raw, objective });
+	goalFileParseCache.set(filePath, { mtimeMs, size, parsed });
+	return parsed;
 }
 
 export function writeActiveGoalFile(ctx: GoalFileContext, current: GoalRecord): GoalRecord {
@@ -265,14 +322,21 @@ export function readActiveGoalFiles(ctx: GoalFileContext): GoalRecord[] {
 	const root = path.resolve(ctx.cwd, GOALS_DIR);
 	let entries: string[];
 	try {
-		if (fs.lstatSync(root).isSymbolicLink()) return [];
-		entries = fs.readdirSync(root);
+		const rootStat = fs.lstatSync(root);
+		if (rootStat.isSymbolicLink()) return [];
+		const cachedListing = goalDirListingCache.get(root);
+		if (cachedListing && cachedListing.mtimeMs === rootStat.mtimeMs) {
+			entries = cachedListing.names;
+		} else {
+			entries = fs.readdirSync(root)
+				.filter((name) => /^active_goal_.*\.md$/.test(name))
+				.sort((a, b) => a.localeCompare(b));
+			goalDirListingCache.set(root, { mtimeMs: rootStat.mtimeMs, names: entries });
+		}
 	} catch {
 		return [];
 	}
 	return entries
-		.filter((name) => /^active_goal_.*\.md$/.test(name))
-		.sort((a, b) => a.localeCompare(b))
 		.map((name) => {
 			const relPath = `${GOALS_DIR}/${name}`;
 			if (!isSafeActivePath(ctx, relPath)) return null;
@@ -287,6 +351,47 @@ export function readActiveGoalPool(ctx: GoalFileContext): Map<string, GoalRecord
 	const pool = new Map<string, GoalRecord>();
 	for (const goal of readActiveGoalFiles(ctx)) {
 		pool.set(goal.id, goal);
+	}
+	return pool;
+}
+
+/**
+ * Parallel pool read (P1-7): fs.promises-based readdir + per-file stat/read
+ * in parallel, seeding the P1-1 parse cache so subsequent sync reads hit it.
+ * Used by session startup rehydration (loadState).
+ */
+export async function readActiveGoalPoolAsync(ctx: GoalFileContext): Promise<Map<string, GoalRecord>> {
+	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	let names: string[];
+	try {
+		const rootStat = await fs.promises.lstat(root);
+		if (rootStat.isSymbolicLink()) return new Map();
+		names = (await fs.promises.readdir(root))
+			.filter((name) => /^active_goal_.*\.md$/.test(name))
+			.sort((a, b) => a.localeCompare(b));
+	} catch {
+		return new Map();
+	}
+	const parsed = await Promise.all(names.map(async (name): Promise<GoalRecord | null> => {
+		const relPath = `${GOALS_DIR}/${name}`;
+		if (!isSafeActivePath(ctx, relPath)) return null;
+		const abs = resolveGoalPath(ctx, GOALS_DIR, relPath);
+		try {
+			const [stat, content] = await Promise.all([
+				fs.promises.lstat(abs),
+				fs.promises.readFile(abs, "utf8"),
+			]);
+			if (stat.isSymbolicLink()) return null;
+			const parsed = parseGoalContentCached(abs, stat.mtimeMs, stat.size, content);
+			if (!parsed || parsed.status === "complete") return null;
+			return sanitizeGoalPaths(ctx, { ...parsed, activePath: relPath });
+		} catch {
+			return null;
+		}
+	}));
+	const pool = new Map<string, GoalRecord>();
+	for (const goal of parsed) {
+		if (goal) pool.set(goal.id, goal);
 	}
 	return pool;
 }

@@ -27,9 +27,28 @@ export interface GoalSettings {
 	thinkingLevel?: ThinkingLevel;
 	disabled?: boolean;
 	autoSelectSingleGoal?: boolean;
+	/** E3: load the project's own skills/extensions into auditor sessions (off by default = isolation). */
+	auditorProjectResources?: boolean;
+	/** F5: stall detector timeout in minutes (0 = off). */
+	stallTimeoutMinutes?: number;
 }
 
 export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
+
+/**
+ * mtime+size-keyed cache for the settings file (P1-1): loadGoalSettings is on
+ * the per-turn hot path (before_agent_start, queueContinuation, tool gates,
+ * widget render) and previously sync-read the file every call. The cache
+ * turns steady-state loads into one statSync per call. saveGoalSettingsFileConfig
+ * invalidates the entry it wrote.
+ */
+interface SettingsFileCacheEntry {
+	mtimeMs: number;
+	size: number;
+	config: GoalSettings;
+}
+
+const settingsFileCache = new Map<string, SettingsFileCacheEntry>();
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
@@ -43,6 +62,8 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"thinking_level",
 	"disabled",
 	"autoSelectSingleGoal",
+	"auditorProjectResources",
+	"stallTimeoutMinutes",
 ]);
 
 /**
@@ -108,20 +129,37 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	if (thinkingLevel !== undefined) settings.thinkingLevel = thinkingLevel;
 	if (record.disabled === true || record.disabled === "true") settings.disabled = true;
 	if (record.autoSelectSingleGoal === true || record.autoSelectSingleGoal === "true") settings.autoSelectSingleGoal = true;
+	if (record.auditorProjectResources === true || record.auditorProjectResources === "true") settings.auditorProjectResources = true;
+	const stallTimeoutMinutes = asPositiveInt(record.stallTimeoutMinutes);
+	if (stallTimeoutMinutes !== undefined) settings.stallTimeoutMinutes = stallTimeoutMinutes;
 	return settings;
 }
 
 /**
  * Load settings from the file on disk. Returns {} if file missing or invalid.
+ * Cached by (resolved path, mtime, size) so steady-state reads are one stat.
  */
 export function loadGoalSettingsFileConfig(cwd: string, env?: NodeJS.ProcessEnv): GoalSettings {
+	const configPath = goalSettingsPath(cwd, env);
+	let stat: fs.Stats;
 	try {
-		const configPath = goalSettingsPath(cwd, env);
-		if (fs.existsSync(configPath)) return parseGoalSettings(JSON.parse(fs.readFileSync(configPath, "utf8")));
+		stat = fs.statSync(configPath);
 	} catch {
-		// file missing, malformed JSON, etc. — use defaults
+		settingsFileCache.delete(configPath);
+		return {};
 	}
-	return {};
+	const cached = settingsFileCache.get(configPath);
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+		return cached.config;
+	}
+	try {
+		const config = parseGoalSettings(JSON.parse(fs.readFileSync(configPath, "utf8")));
+		settingsFileCache.set(configPath, { mtimeMs: stat.mtimeMs, size: stat.size, config });
+		return config;
+	} catch {
+		// malformed JSON, etc. — use defaults
+		return {};
+	}
 }
 
 /**
@@ -140,6 +178,8 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
 		thinkingLevel: fileConfig.thinkingLevel,
 		disabled: fileConfig.disabled,
 		autoSelectSingleGoal: fileConfig.autoSelectSingleGoal ?? false,
+		auditorProjectResources: fileConfig.auditorProjectResources ?? false,
+		stallTimeoutMinutes: fileConfig.stallTimeoutMinutes,
 	};
 }
 
@@ -151,6 +191,49 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
  * Determine whether the auditor should be enabled by default based on settings.
  * The auditor is enabled by default unless settings.disabled === true.
  */
+/**
+ * E2: which env var (if any) overrides a settings key's effective value.
+ * Returns the env var name when it is set and affects the key, else null.
+ */
+export function envOverrideFor(key: keyof GoalSettings | "settingsFile", env: NodeJS.ProcessEnv = process.env): string | null {
+	if (key === "disableTasks" && env.PI_GOAL_DISABLE_TASKS !== undefined) return "PI_GOAL_DISABLE_TASKS";
+	if (key === "disableContracts" && env.PI_GOAL_DISABLE_CONTRACTS !== undefined) return "PI_GOAL_DISABLE_CONTRACTS";
+	if (key === "settingsFile" && env[PI_GOAL_SETTINGS_FILE_ENV] !== undefined) return PI_GOAL_SETTINGS_FILE_ENV;
+	return null;
+}
+
+/**
+ * E2: effective-settings report with provenance (env vs file vs default),
+ * surfaced by /goal-status.
+ */
+export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
+	const fileConfig = loadGoalSettingsFileConfig(cwd, env);
+	const effective = loadGoalSettings(cwd, env);
+	const lines = ["Settings (provenance):"];
+	const rows: Array<{ key: keyof GoalSettings; label: string; format: (v: GoalSettings) => string }> = [
+		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", format: (v) => (v.autoSelectSingleGoal === true ? "true" : "false") },
+		{ key: "disableContracts", label: "disableContracts", format: (v) => (v.disableContracts === true ? "true" : "false") },
+		{ key: "disableTasks", label: "disableTasks", format: (v) => (v.disableTasks === true ? "true" : "false") },
+		{ key: "subtaskDepth", label: "subtaskDepth", format: (v) => String(v.subtaskDepth ?? 1) },
+		{ key: "disabled", label: "auditor disabled", format: (v) => (v.disabled === true ? "true" : "false") },
+		{ key: "provider", label: "provider", format: (v) => v.provider ?? "(default)" },
+		{ key: "model", label: "model", format: (v) => v.model ?? "(default)" },
+		{ key: "thinkingLevel", label: "thinking_level", format: (v) => v.thinkingLevel ?? "(default)" },
+		{ key: "auditorProjectResources", label: "auditor project resources", format: (v) => (v.auditorProjectResources === true ? "true" : "false") },
+		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: (v) => String(v.stallTimeoutMinutes ?? 0) },
+	];
+	for (const row of rows) {
+		const envVar = envOverrideFor(row.key, env);
+		const value = row.format(effective);
+		const source = envVar ? `env (${envVar})` : row.key in fileConfig ? "file" : "default";
+		lines.push(`  ${row.label}: ${value} (${source})`);
+	}
+	lines.push(`  settings file: ${goalSettingsPath(cwd, env)}`);
+	const fileOverride = envOverrideFor("settingsFile", env);
+	if (fileOverride) lines.push(`  (settings file overridden by ${fileOverride})`);
+	return lines;
+}
+
 export function isAuditorEnabledByDefault(settings: GoalSettings): boolean {
 	return settings.disabled !== true;
 }
@@ -171,8 +254,11 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (disableContracts === true) clean.disableContracts = true;
 	if (subtaskDepth !== undefined) clean.subtaskDepth = subtaskDepth;
 	if (settings.autoSelectSingleGoal === true) clean.autoSelectSingleGoal = true;
+	if (settings.auditorProjectResources === true) clean.auditorProjectResources = true;
+	if (settings.stallTimeoutMinutes !== undefined) clean.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	const configPath = goalSettingsPath(cwd);
 	fs.mkdirSync(path.dirname(configPath), { recursive: true });
+	settingsFileCache.delete(configPath);
 	const persisted: Record<string, unknown> = {};
 	if (clean.provider) persisted.provider = clean.provider;
 	if (clean.model) persisted.model = clean.model;
@@ -182,6 +268,8 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (clean.disableContracts) persisted.disableContracts = true;
 	if (clean.subtaskDepth !== undefined) persisted.subtaskDepth = clean.subtaskDepth;
 	if (settings.autoSelectSingleGoal === true) persisted.autoSelectSingleGoal = true;
+	if (settings.auditorProjectResources === true) persisted.auditorProjectResources = true;
+	if (clean.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = clean.stallTimeoutMinutes;
 	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
 	return clean;
 }

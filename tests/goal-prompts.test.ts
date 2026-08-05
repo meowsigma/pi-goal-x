@@ -82,9 +82,10 @@ test("taskListBlock renders correctly with mixed statuses", () => {
 	assert.match(block, /\[TASK LIST/);
 	assert.match(block, /1\/3 tasks complete/);
 	assert.match(block, /1 skipped/);
-	assert.match(block, /\[x\] t1/);
+	// P1-4: completed/skipped collapse to counts; only pending renders inline.
+	assert.equal(block.includes("[x] t1"), false, "completed tasks collapse to the header count");
+	assert.equal(block.includes("[~] t3"), false, "skipped tasks collapse to the header count");
 	assert.match(block, /\[ \] t2/);
-	assert.match(block, /\[~\] t3/);
 	assert.match(block, /TASK GATE/);
 	assert.match(block, /Next pending: t2/);
 });
@@ -174,9 +175,9 @@ test("taskListBlock renders subtasks indented", () => {
 	const block = taskListBlock(g);
 	assert.ok(block);
 	assert.match(block, /\[ \] t1/);
-	// Subtasks indented
+	// Subtasks indented (pending only; the completed t1b collapses to the count)
 	assert.match(block, /  \[ \] t1a/);
-	assert.match(block, /  \[x\] t1b/);
+	assert.equal(block.includes("[x] t1b"), false, "completed subtask collapses to the count (P1-4)");
 	// All tasks counted: t1 + t1a + t1b = 3 total, 1 complete
 	assert.match(block, /1\/3 tasks complete/);
 });
@@ -200,7 +201,7 @@ test("taskListBlock renders nested subtasks up to depth limit", () => {
 	assert.ok(block);
 	assert.match(block, /\[ \] t1/);
 	assert.match(block, /\[ \] t1a/);
-	assert.match(block, /\[x\] t1ai/);
+	assert.equal(block.includes("[x] t1ai"), false, "completed grandchild collapses to the count (P1-4)");
 	// 3-level hierarchy: 3 tasks, 1 complete
 	assert.match(block, /1\/3 tasks complete/);
 });
@@ -249,7 +250,9 @@ test("goalPrompt includes subtask rendering", () => {
 	};
 	const prompt = goalPrompt(g);
 	assert.match(prompt, /\[ \] t1/);
-	assert.match(prompt, /\[x\] t1a/);
+	// P1-4: the completed child collapses to the header count.
+	assert.equal(prompt.includes("[x] t1a"), false, "completed subtask collapses to the count (P1-4)");
+	assert.match(prompt, /1\/2 tasks complete/);
 });
 
 test("continuationPrompt includes subtask rendering", () => {

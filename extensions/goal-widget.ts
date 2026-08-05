@@ -1,6 +1,8 @@
 import { matchesKey } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
+import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
+import { loadGoalSettings } from "./goal-settings.ts";
 import { serializeGoalFile } from "./storage/goal-files.ts";
 import { showTaskListOverlay } from "./widgets/task-list-overlay.ts";
 import type { AuditorWidgetProgress } from "./widgets/goal-widget.ts";
@@ -16,6 +18,12 @@ const DEBUG_GOALS_DIR = ".pi/goals/debug";
  */
 let debugGoalCounter = 0;
 let debugMockAuditTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Debug helpers are inert unless PI_GOAL_DEBUG is set (P1-13). */
+function isDebugEnabled(): boolean {
+	const value = process.env.PI_GOAL_DEBUG;
+	return value === "true" || value === "1";
+}
 
 /** Render task lines for the debug proposal dialog. */
 function formatModeLabelDebug(sisyphus: boolean): string {
@@ -42,6 +50,65 @@ function formatSectionDebug(title: string, content: string): string[] {
 }
 
 
+/**
+ * F3: toggle one task through the goal-service mutation boundary with the
+ * same gates as update_goal_task: completing a pending task requires its
+ * subtasks complete first and (unless contracts are disabled) evidence when
+ * it carries a verification contract — the evidence is collected through the
+ * UI input dialog; completing a complete task reopens it to pending (a
+ * deliberate TUI-only relaxation of the tool surface's immutability, for
+ * explicit human corrections).
+ */
+export async function toggleTaskViaService(core: GoalCore, ctx: ExtensionContext, goalId: string, taskId: string): Promise<{ ok: boolean; message?: string }> {
+	const goal = core.goalsById.get(goalId);
+	if (!goal) return { ok: false, message: `Goal ${goalId} not found in this session.` };
+	if (goal.status !== "active") return { ok: false, message: `Task updates apply only to an active goal (current status: ${goal.status}).` };
+	if (!goal.taskList) return { ok: false, message: "The goal has no task list." };
+	const settings = loadGoalSettings(ctx.cwd);
+	const task = findTaskInTree(goal.taskList.tasks, taskId);
+	if (!task) return { ok: false, message: `Task "${taskId}" not found.` };
+	const now = nowIso();
+
+	if (task.status === "pending") {
+		let evidence: string | undefined;
+		if (!settings.disableContracts && task.verificationContract) {
+			const input = await ctx.ui.input(`Evidence for task ${taskId}`, "");
+			if (input === undefined || !input.trim()) {
+				return { ok: false, message: `Task "${taskId}" has a verification contract; provide evidence to complete it.` };
+			}
+			evidence = input.trim().slice(0, 200);
+		}
+		const subtaskGate = checkSubtasksComplete(task);
+		if (subtaskGate) return { ok: false, message: subtaskGate };
+		const result = core.goalService.updateTask(ctx, {
+			focusToken: core.focusedOperationToken(goalId),
+			taskId,
+			validate: (t) => {
+				if (t.status === "complete") return { ok: false, message: `Task "${taskId}" is already complete.` };
+				return { ok: true };
+			},
+			update: (t) => ({ ...t, status: "complete" as const, completedAt: now, evidence }),
+			ledger: (written) => [{ type: "task_complete", goalId: written.id, taskId, evidence, at: written.updatedAt }],
+		});
+		if (!result.ok) return { ok: false, message: result.message };
+		return { ok: true };
+	}
+
+	if (task.status === "complete") {
+		const result = core.goalService.updateTask(ctx, {
+			focusToken: core.focusedOperationToken(goalId),
+			taskId,
+			validate: () => ({ ok: true }),
+			update: (t) => ({ ...t, status: "pending" as const, completedAt: undefined, evidence: undefined }),
+			ledger: (written) => [{ type: "task_reopened", goalId: written.id, taskId, at: written.updatedAt }],
+		});
+		if (!result.ok) return { ok: false, message: result.message };
+		return { ok: true };
+	}
+
+	return { ok: false, message: `Task "${taskId}" is skipped; change it with /goal-tweak or update_goal_task.` };
+}
+
 export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 		core.terminalInputUnsubscribe?.();
@@ -65,12 +132,18 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				return { consume: true };
 			}
 
-			// Ctrl+Shift+T — show task list overlay for all open goals
+			// Ctrl+Shift+T — show task list overlay for all open goals (F3:
+			// interactive: Enter toggles a task through goal-service).
 			if (matchesKey(data, "ctrl+shift+t")) {
 				core.enterGoalModal();
-				showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId).finally(() => core.exitGoalModal());
+				showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId, {
+					onToggleTask: (goalId, taskId) => toggleTaskViaService(core, ctx, goalId, taskId),
+				}).finally(() => core.exitGoalModal());
 				return { consume: true };
 			}
+
+			// Debug keybindings are inert unless PI_GOAL_DEBUG is set (P1-13).
+			if (!isDebugEnabled()) return undefined;
 
 			// ── Debug mode keybindings (hidden from normal view) ────────────────
 
@@ -114,6 +187,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 
 		/** Toggle a test goal: create (first press) or remove (second press) */
 		function createDebugGoal(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			const prev = core.state.goal;
 			if (prev && prev.id.startsWith("debug-")) {
 				// Toggle off — remove debug goal entirely (no archive, full delete)
@@ -149,6 +223,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 
 		/** Inject 3-4 sample tasks into the current goal */
 		function injectDebugTasks(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			if (!core.state.goal) {
 				ctx.ui.notify("No goal to inject tasks into; create one first (Ctrl+Shift+N)", "warning");
 				return;
@@ -193,6 +268,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 
 		/** Start a mock completion audit that transitions through phases */
 		function startMockAudit(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			stopMockAuditTimer();
 			const startedAt = Date.now();
 			const phases: { phase: AuditorWidgetProgress["phase"]; atMs: number; label: string; percentage: number }[] = [
@@ -263,6 +339,7 @@ function renderDebugTaskLines(tasks: GoalTask[], indent = 0): string[] {
 
 		/** Show the proposal dialog using real goal state — no hardcoded text */
 		function openDebugProposal(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			// Build a fresh debug goal + tasks in memory for the dialog
 			debugGoalCounter++;
 			const goal = createGoal({

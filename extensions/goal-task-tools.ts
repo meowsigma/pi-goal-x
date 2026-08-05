@@ -343,7 +343,7 @@ pi.registerTool(defineTool({
 		return new Text(theme.fg("toolTitle", "set_goal_tasks ") + theme.fg("muted", summary), 0, 0);
 	},
 	renderResult(result, _options, theme) {
-		return renderGoalResult(result, theme);
+		return renderGoalResult(result, _options, theme);
 	},
 }));
 
@@ -503,7 +503,7 @@ pi.registerTool(defineTool({
 		return new Text(theme.fg("toolTitle", "update_goal_task ") + theme.fg("muted", `${args?.task_id ?? ""} ${args?.status ?? ""}`), 0, 0);
 	},
 	renderResult(result, _options, theme) {
-		return renderGoalResult(result, theme);
+		return renderGoalResult(result, _options, theme);
 	},
 }));
 

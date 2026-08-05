@@ -2,7 +2,9 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
-import { buildDraftConfirmationText, buildTweakConfirmationText, goalDraftingPrompt, renderConfirmationTasks, type GoalDraftingFocus } from "./goal-draft.ts";
+import { buildDraftConfirmationText, buildTweakConfirmationText, goalDraftingPrompt, type GoalDraftingFocus } from "./goal-draft.ts";
+import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
+import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
 import { buildGoalCreatedReport } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
@@ -39,6 +41,8 @@ interface ActiveGoalDraft {
 	targetGoalId?: string;
 	startedAt: string;
 	auditorEnabled: boolean;
+	/** E5: formatted questionnaire Q&A to echo in the created-goal report. */
+	questionnaireEcho?: string;
 }
 
 const activeDrafts = new WeakMap<GoalCore, ActiveGoalDraft>();
@@ -183,7 +187,20 @@ function proposalText(draft: ActiveGoalDraft, objective: string, autoContinue: b
 	const base = draft.mode === "tweak" && current
 		? buildTweakConfirmationText({ currentObjective: current.objective, newObjective: objective, changeSummary: draft.originalTopic || "Goal revised through guided drafting.", sisyphus: current.sisyphus, tasks: taskList?.tasks })
 		: buildDraftConfirmationText({ focus: draft.mode === "sisyphus" ? "sisyphus" : "goal", originalTopic: draft.originalTopic, objective, autoContinue });
-	return !taskList || draft.mode === "tweak" ? base : base + "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
+	// F2 (option A, user-approved 2026-08-05): when a new draft has no proposed
+	// task list but the objective has ≥2 checklist/ordered markers, preview the
+	// derived tree in the confirmation so the human can adjust it before the
+	// goal exists. Plain objectives render byte-identical to 383ae52.
+	let tasksText = "";
+	if (taskList && taskList.tasks.length > 0) {
+		tasksText = "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
+	} else if (draft.mode !== "tweak") {
+		const derived = deriveTasksFromObjective(base);
+		if (derived && derived.length > 0) {
+			tasksText = "\n\nTasks derived from the objective (confirm or ask the agent to adjust):\n" + renderConfirmationTasks(derived, 0).join("\n");
+		}
+	}
+	return !taskList && draft.mode === "tweak" ? base : base + tasksText;
 }
 
 function flatTaskSchema() {
@@ -220,7 +237,7 @@ export function registerDraftingTools(core: GoalCore): void {
 			}
 		},
 		renderCall() { return new Text("goal_question", 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, theme); },
+		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
 	}));
 
 	pi.registerTool(defineTool({
@@ -244,13 +261,17 @@ export function registerDraftingTools(core: GoalCore): void {
 			core.enterGoalModal();
 			try {
 				const result = await runGoalQuestionnaire(ctx, questions);
+				if (!result.cancelled) {
+					const active = activeDraft(core);
+					if (active) active.questionnaireEcho = formatQuestionnaireAnswers(result); // E5
+				}
 				return { content: [{ type: "text", text: result.cancelled ? "The user cancelled the questionnaire. Continue drafting conversationally." : formatQuestionnaireAnswers(result) }], details: goalDetails(core.state.goal) };
 			} finally {
 				core.exitGoalModal();
 			}
 		},
 		renderCall() { return new Text("goal_questionnaire", 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, theme); },
+		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
 	}));
 
 	pi.registerTool(defineTool({
@@ -316,9 +337,18 @@ export function registerDraftingTools(core: GoalCore): void {
 			const settings = loadGoalSettings(ctx.cwd);
 			const extracted = settings.disableContracts ? { objective, verificationContract: undefined } : extractVerificationContract(objective);
 			if (draft.mode !== "tweak") {
-				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: taskResult.value, skipAuditor }, ctx, true, extracted.verificationContract);
+				// F2: if the confirmation carried no task plan but the objective has
+				// structure, bootstrap the derived tree so the goal starts trackable.
+				const effectiveTaskList: GoalTaskList | undefined = taskResult.value ?? (() => {
+					const derived = deriveTasksFromObjective(extracted.objective);
+					return derived && derived.length > 0 ? { tasks: derived, blockCompletion: false, proposedAt: nowIso() } : undefined;
+				})();
+				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: effectiveTaskList, skipAuditor }, ctx, true, extracted.verificationContract);
 				clearGoalDrafting(core, ctx);
-				return { content: [{ type: "text", text: buildGoalCreatedReport({ objective: extracted.objective }) }], details: goalDetails(core.state.goal), terminate: true };
+				// E5: echo the questionnaire Q&A in the created-goal report so the
+				// user can verify their input survived the clarification loop.
+				const qaEcho = activeDraft(core)?.questionnaireEcho;
+				return { content: [{ type: "text", text: buildGoalCreatedReport({ objective: extracted.objective, detailedSummary: qaEcho }) }], details: goalDetails(core.state.goal), terminate: true };
 			}
 			if (!target) return { content: [{ type: "text", text: "The goal changed while drafting; review it and start /goal-tweak again." }], details: goalDetails(core.state.goal) };
 			const token = core.focusedOperationToken(target.id);
@@ -335,6 +365,6 @@ export function registerDraftingTools(core: GoalCore): void {
 			return { content: [{ type: "text", text: "Goal tweak confirmed and applied." }], details: goalDetails(result.goal), terminate: true };
 		},
 		renderCall(args, theme) { return new Text(theme.fg("toolTitle", "propose_goal_draft ") + theme.fg("muted", args?.objective ?? ""), 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, theme); },
+		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
 	}));
 }

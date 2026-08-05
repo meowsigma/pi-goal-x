@@ -7,6 +7,8 @@ import {
 	truncateText,
 } from "./goal-core.ts";
 import { buildTaskSummary } from "./goal-policy.ts";
+import { countTaskSubtree } from "./goal-task-count.ts";
+import { latestAuditorResultForGoal, latestEventsForGoal, type GoalLedgerEvent } from "./goal-ledger.ts";
 import { GOAL_PROGRESS_TOOL_NAMES } from "./goal-tool-names.ts";
 import {
 	asRecord,
@@ -17,6 +19,7 @@ import {
 	type GoalRecord,
 	type GoalStateEntry,
 	type GoalStatus,
+	type GoalTask,
 } from "./goal-record.ts";
 
 export const STATE_ENTRY = "pi-goal-state";
@@ -82,14 +85,19 @@ export function oneLineSummary(goal: GoalRecord | null): string {
 
 // ---------- entry / render helpers ----------
 
-export function goalDetails(goal: GoalRecord | null): GoalStateEntry {
-	return { version: 3, goal: goal ? cloneGoal(goal) : null };
+export function goalDetails(goal: GoalRecord | null, resultDetail?: string): GoalStateEntry {
+	return { version: 3, goal: goal ? cloneGoal(goal) : null, ...(resultDetail ? { resultDetail } : {}) };
 }
 
-export function renderGoalResult(result: { details?: unknown; content: Array<{ type: string; text?: string }> }, theme: Theme): Text {
+export function renderGoalResult(result: { details?: unknown; content: Array<{ type: string; text?: string }> }, options: { expanded?: boolean } | undefined, theme: Theme): Text {
 	const first = result.content.find((item) => item.type === "text" && typeof item.text === "string");
 	const firstText = first?.text ?? "";
 	const details = result.details as GoalStateEntry | undefined;
+	if (details && typeof details === "object" && "resultDetail" in details && details.resultDetail && options?.expanded) {
+		// E7: the collapsed heading stays byte-identical; the full reason is one
+		// keystroke away in the expanded tool-result detail view.
+		return new Text(`${firstText}\n${details.resultDetail}`, 0, 0);
+	}
 	if (!details || typeof details !== "object" || !("goal" in details)) {
 		return new Text(firstText, 0, 0);
 	}
@@ -234,4 +242,55 @@ export function isMeaningfulProgressToolCall(toolName: string, args: unknown): b
 		if (typeof command === "string" && /^\s*echo\b/.test(command)) return false;
 	}
 	return true;
+}
+
+/**
+ * E1: per-goal history block (last audit verdict + recent lifecycle events)
+ * surfaced by get_goal and /goal-status; the ledger already records it.
+ */
+export function buildGoalHistoryBlock(goal: GoalRecord | null, ledgerEvents: GoalLedgerEvent[]): string {
+	if (!goal) return "";
+	const lines: string[] = [];
+	const audit = latestAuditorResultForGoal(ledgerEvents, goal.id);
+	if (audit) {
+		lines.push(`Last audit: ${audit.verdict} (${audit.at.slice(0, 10)}) — ${truncateText(audit.report, 90)}`);
+	}
+	const recent = latestEventsForGoal(ledgerEvents, goal.id, 6);
+	if (recent.length > 0) {
+		lines.push("Recent events:");
+		for (const event of recent) {
+			lines.push(`  ${event.at.slice(11, 19)} ${event.type}`);
+		}
+	}
+	return lines.join("\n");
+}
+
+/**
+ * F1: task-detail block mirroring the widget — counts, next pending with
+ * contracts, recent completions with evidence. Used by get_goal.
+ */
+export function buildGoalTaskDetailBlock(goal: GoalRecord): string {
+	if (!goal.taskList || goal.taskList.tasks.length === 0) return "";
+	const { total, complete, skipped } = countTaskSubtree(goal.taskList.tasks);
+	const lines: string[] = [];
+	const header = `${complete}/${total} tasks complete${skipped > 0 ? ` (${skipped} skipped)` : ""}`;
+	const pending: Array<{ task: GoalTask; depth: number }> = [];
+	const recent: GoalTask[] = [];
+	(function walk(tasks: GoalTask[], depth: number): void {
+		for (const t of tasks) {
+			if (t.status === "pending") pending.push({ task: t, depth });
+			if (t.status === "complete" && recent.length < 2) recent.push(t);
+			if (t.subtasks && t.subtasks.length > 0) walk(t.subtasks, depth + 1);
+		}
+	})(goal.taskList.tasks, 0);
+	lines.push(`Tasks: ${header}`);
+	for (const entry of pending.slice(0, 3)) {
+		lines.push(`${"  ".repeat(entry.depth)}[ ] ${entry.task.id}: ${entry.task.title}`);
+		if (entry.task.verificationContract) lines.push(`${"  ".repeat(entry.depth + 1)}contract: ${entry.task.verificationContract}`);
+	}
+	if (pending.length > 3) lines.push(`(+${pending.length - 3} more pending — see the task overlay)`);
+	for (const t of recent) {
+		lines.push(`[x] ${t.id}: ${t.title}${t.evidence ? ` — ${t.evidence}` : ""}`);
+	}
+	return lines.join("\n");
 }

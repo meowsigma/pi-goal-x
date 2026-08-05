@@ -27,7 +27,7 @@ import {
 } from "./goal-record.ts";
 import {
 	mergeGoalPromptFromDisk,
-	readActiveGoalPool,
+	readActiveGoalPoolAsync,
 	sanitizeGoalPaths,
 } from "./storage/goal-files.ts";
 import { GoalService } from "./goal-service.ts";
@@ -40,10 +40,9 @@ import {
 	resolveSessionFocus,
 } from "./goal-pool.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
-import { GoalWidgetComponent, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
+import { GOAL_WIDGET_KEY, GoalWidgetComponent, liveDisplayGoal, makeGoalWidgetFactory, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
 
-const GOAL_WIDGET_KEY = "goal";
 
 
 /**
@@ -108,13 +107,18 @@ export interface GoalCore {
 	refreshGoalDisplayFromDisk(ctx: ExtensionContext): void;
 	updateUI(ctx: ExtensionContext): void;
 	clearGoalWidget(ctx: ExtensionContext): void;
-	loadState(ctx: ExtensionContext): void;
+	loadState(ctx: ExtensionContext): Promise<void>;
 	setGoal(next: GoalRecord | null, ctx: ExtensionContext, shouldPersist?: boolean, focusReason?: GoalFocusReason): void;
 	archiveCurrentGoal(ctx: ExtensionContext, reason: StopReason | undefined): GoalRecord | null;
 	stopActiveGoal(status: Exclude<GoalStatus, "active">, reason: StopReason | undefined, ctx: ExtensionContext): void;
 	pauseActiveGoal(ctx: ExtensionContext): void;
 	queueContinuation(ctx: ExtensionContext, force?: boolean): void;
+	flushGoalTransaction(ctx: ExtensionContext): void;
 	replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow?: boolean, verificationContract?: string, tokenBudget?: number): void;
+	/** F5: bump the last-activity timestamp (called on real work events). */
+	touchGoalActivity(): void;
+	/** F5: detect a stalled active auto-continue goal; returns the [GOAL STALLED] steering note. */
+	checkStall(ctx: ExtensionContext): string;
 }
 
 export function createGoalCore(
@@ -366,6 +370,7 @@ export function createGoalCore(
 		opts: { recordLedger?: boolean } = {},
 	): void {
 		const previousGoalId = focusedGoalId;
+		if (previousGoalId !== goalId) goalService.flushTurn(ctx); // P1-3: persist the old buffer before switching focus
 		assignFocusedGoalId(goalId && goalsById.has(goalId) ? goalId : null);
 		if (previousGoalId !== focusedGoalId) {
 			clearContinuationState();
@@ -398,6 +403,7 @@ export function createGoalCore(
 	}
 
 	function removeFocusedGoal(ctx: ExtensionContext, reason: GoalFocusReason): void {
+		goalService.flushTurn(ctx); // P1-3: persist pending mutations before the goal leaves the session
 		if (focusedGoalId) goalsById.delete(focusedGoalId);
 		assignFocusedGoalId(null);
 		clearStoppedRuntimeState();
@@ -414,14 +420,8 @@ export function createGoalCore(
 	}
 
 	function goalForDisplay(): GoalRecord | null {
-		if (!state.goal || state.goal.status !== "active" || !accounting.isActiveFor(state.goal.id)) {
-			return state.goal;
-		}
-		const liveSeconds = accounting.liveSeconds();
-		if (liveSeconds === 0) return state.goal;
-		const live = cloneGoal(state.goal);
-		live.usage.activeSeconds += liveSeconds;
-		return live;
+		// P1-12: extracted live-usage view.
+		return liveDisplayGoal(state.goal, accounting);
 	}
 
 	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number } = {}): void {
@@ -443,11 +443,36 @@ export function createGoalCore(
 		state.goal = next;
 		persist(ctx);
 
+		// F6: threshold alerts at 50/75/90% — one ledger event + notification each.
+		const budgetGoal = state.goal;
+		if (budgetGoal && budgetGoal.status === "active" && typeof budgetGoal.tokenBudget === "number" && budgetGoal.tokenBudget > 0 && budgetGoal.usage.tokensUsed > 0) {
+			const pct = budgetGoal.usage.tokensUsed / budgetGoal.tokenBudget;
+			for (const threshold of [0.5, 0.75, 0.9]) {
+				const key = `${budgetGoal.id}:${threshold}`;
+				if (!budgetWarningsFired.has(key) && pct >= threshold) {
+					budgetWarningsFired.add(key);
+					try {
+						goalService.appendEvents(ctx, [{
+							type: "goal_budget_warning",
+							goalId: budgetGoal.id,
+							budget: budgetGoal.tokenBudget,
+							tokensUsed: budgetGoal.usage.tokensUsed,
+							pct: Math.round(pct * 100),
+							at: nowIso(),
+						}]);
+					} catch {
+						// Alert must never crash the turn.
+					}
+					ctx.ui.notify(`Token budget ${Math.round(pct * 100)}% used (${budgetGoal.usage.tokensUsed}/${budgetGoal.tokenBudget} tokens) — consider raising or trimming scope before the limit.`, "warning");
+				}
+			}
+		}
+
 		// Token-budget transition: when accounted usage reaches the budget, mark the
 		// goal budget_limited exactly once (status no longer active, so accounting
 		// stops and the transition cannot re-fire), emit the ledger event, arm the
 		// one-time wrap-up steering, and cancel pending continuations.
-		const budgetGoal = state.goal;
+		const budgetGoal2 = state.goal;
 		if (budgetGoal && budgetGoal.status === "active" && typeof budgetGoal.tokenBudget === "number" && budgetReached(budgetGoal)) {
 			const transition = goalService.apply(ctx, {
 				reconcile: false,
@@ -527,8 +552,58 @@ export function createGoalCore(
 	 *   └─ Suggested: ask the user for the test location
 	 */
 
+	let lastGoalActivityAt = Date.now();
+	let stallNotified = false;
+	const budgetWarningsFired = new Set<string>(); // "goalId:threshold"
+
+	function touchGoalActivity(): void {
+		lastGoalActivityAt = Date.now();
+		stallNotified = false;
+	}
+
+	function checkStall(ctx: ExtensionContext): string {
+		if (!state.goal || state.goal.status !== "active" || !state.goal.autoContinue) return "";
+		const timeoutMinutes = loadGoalSettings(ctx.cwd).stallTimeoutMinutes ?? 0;
+		if (timeoutMinutes <= 0 || stallNotified) return "";
+		const idleMs = Date.now() - lastGoalActivityAt;
+		if (idleMs < timeoutMinutes * 60_000) return "";
+		stallNotified = true;
+		const goalId = state.goal.id;
+		try {
+			goalService.appendEvents(ctx, [{
+				type: "goal_stalled",
+				goalId,
+				reason: `No continuation or tool activity for ${timeoutMinutes} minute${timeoutMinutes === 1 ? "" : "s"}.`,
+				at: nowIso(),
+			}]);
+		} catch {
+			// Stall detection must never crash the turn.
+		}
+		ctx.ui.notify(`Goal stalled: no activity for ${timeoutMinutes} minute${timeoutMinutes === 1 ? "" : "s"}.`, "warning");
+		return `\n\n[GOAL STALLED goalId=${goalId}]\nNo continuation or tool activity for ${timeoutMinutes} minute${timeoutMinutes === 1 ? "" : "s"}. Report your progress or ask the user to pause or resume the goal.`;
+	}
+
+	let uiFlushScheduled = false;
+	let lastUiCtx: ExtensionContext | null = null;
+
+	/**
+	 * P1-9: coalesced widget updates. Multiple updateUI calls within one
+	 * synchronous block (a tool handler typically calls it 2–4 times) collapse
+	 * into a single microtask render; the final turn_end render still shows the
+	 * latest state. The render itself reads live state at flush time.
+	 */
 	function updateUI(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
+		lastUiCtx = ctx;
+		if (uiFlushScheduled) return;
+		uiFlushScheduled = true;
+		queueMicrotask(() => {
+			uiFlushScheduled = false;
+			if (lastUiCtx) renderUI(lastUiCtx);
+		});
+	}
+
+	function renderUI(ctx: ExtensionContext): void {
 		const totalOpen = openGoals().length;
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);
@@ -539,18 +614,14 @@ export function createGoalCore(
 			if (!widgetRegistered) {
 				ctx.ui.setWidget(
 					GOAL_WIDGET_KEY,
-					(tui, theme) => {
-						goalWidgetComponentRef.current = new GoalWidgetComponent({
-							tui,
-							theme,
-							getGoal: () => goalForDisplay() ?? state.goal,
-							getOpenGoalCount: () => openGoals().length,
-							getAuditorProgress: () => auditProgress,
-							getSettings: () => loadGoalSettings(ctx.cwd),
-							getDebugMode: () => debugMode,
-						});
-						return goalWidgetComponentRef.current;
-					},
+					makeGoalWidgetFactory({
+						getGoal: () => goalForDisplay() ?? state.goal,
+						getOpenGoalCount: () => openGoals().length,
+						getAuditorProgress: () => auditProgress,
+						getSettings: () => loadGoalSettings(ctx.cwd),
+						getDebugMode: () => debugMode,
+						getStalled: () => stallNotified,
+					}),
 					{ placement: "aboveEditor" },
 				);
 				widgetRegistered = true;
@@ -567,18 +638,14 @@ export function createGoalCore(
 		if (!widgetRegistered) {
 			ctx.ui.setWidget(
 				GOAL_WIDGET_KEY,
-				(tui, theme) => {
-					goalWidgetComponentRef.current = new GoalWidgetComponent({
-						tui,
-						theme,
-						getGoal: () => goalForDisplay() ?? state.goal,
-						getOpenGoalCount: () => openGoals().length,
-						getAuditorProgress: () => auditProgress,
-						getSettings: () => loadGoalSettings(ctx.cwd),
-						getDebugMode: () => debugMode,
-					});
-					return goalWidgetComponentRef.current;
-				},
+				makeGoalWidgetFactory({
+					getGoal: () => goalForDisplay() ?? state.goal,
+					getOpenGoalCount: () => openGoals().length,
+					getAuditorProgress: () => auditProgress,
+					getSettings: () => loadGoalSettings(ctx.cwd),
+					getDebugMode: () => debugMode,
+					getStalled: () => stallNotified,
+				}),
 				{ placement: "aboveEditor" },
 			);
 			widgetRegistered = true;
@@ -587,8 +654,8 @@ export function createGoalCore(
 		}
 	}
 
-	function loadState(ctx: ExtensionContext): void {
-		goalsById = readActiveGoalPool(ctx);
+	async function loadState(ctx: ExtensionContext): Promise<void> {
+		goalsById = await readActiveGoalPoolAsync(ctx);
 		tasksEnabled = !loadGoalSettings(ctx.cwd).disableTasks;
 		focusRevision += 1; // Session reload/tree navigation invalidates pending async focus operations.
 		assignFocusedGoalId(null);
@@ -686,6 +753,7 @@ export function createGoalCore(
 			// accrue time, and the UI must reflect the new status immediately.
 			clearContinuationState();
 			clearActiveAccounting();
+			goalService.flushTurn(ctx); // P1-3: user-visible status change persists now, not at turn end
 			updateUI(ctx);
 		}
 	}
@@ -697,6 +765,10 @@ export function createGoalCore(
 		state.goal = { ...state.goal, autoContinue: false, pauseReason: undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);
 		ctx.ui.notify("Goal paused.", "info");
+	}
+
+	function flushGoalTransaction(ctx: ExtensionContext): void {
+		goalService.flushTurn(ctx);
 	}
 
 	function queueContinuation(ctx: ExtensionContext, force = false): void {
@@ -865,6 +937,9 @@ export function createGoalCore(
 		stopActiveGoal,
 		pauseActiveGoal,
 		queueContinuation,
+		flushGoalTransaction,
+		touchGoalActivity,
+		checkStall,
 		replaceGoal,
 	};
 }

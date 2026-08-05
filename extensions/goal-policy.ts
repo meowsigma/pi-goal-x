@@ -1,5 +1,6 @@
 import { statusLabel, type GoalDisplayRecordLike } from "./goal-core.ts";
 import type { GoalTask, GoalTaskList, TaskStatus } from "./goal-record.ts";
+import { countTaskSubtree } from "./goal-task-count.ts";
 
 export type GoalStatusLike = "active" | "paused" | "blocked" | "budget_limited" | "complete";
 export type StopReasonLike = "user" | "agent";
@@ -81,26 +82,8 @@ export function clearGoalCommandMessage(args: { archived: boolean }): string {
 }
 
 /** Count tasks in subtree recursively */
-function countSubtreeTasks(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: number } {
-	let total = 0;
-	let complete = 0;
-	let skipped = 0;
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete") complete++;
-		else if (t.status === "skipped") skipped++;
-		if (t.subtasks && t.subtasks.length > 0) {
-			const child = countSubtreeTasks(t.subtasks);
-			total += child.total;
-			complete += child.complete;
-			skipped += child.skipped;
-		}
-	}
-	return { total, complete, skipped, pending: total - complete - skipped };
-}
-
 export function buildTaskSummary(taskList: GoalTaskList): string {
-	const { total, complete, skipped } = countSubtreeTasks(taskList.tasks);
+	const { total, complete, skipped } = countTaskSubtree(taskList.tasks);
 	if (total === 0) return "No tasks";
 	const parts: string[] = [`${complete}/${total} tasks complete`];
 	if (skipped > 0) parts.push(`(${skipped} skipped)`);
@@ -109,7 +92,7 @@ export function buildTaskSummary(taskList: GoalTaskList): string {
 
 export function taskCompletionBlockWarning(taskList: GoalTaskList): string | null {
 	if (!taskList.blockCompletion) return null;
-	const { pending } = countSubtreeTasks(taskList.tasks);
+	const { pending } = countTaskSubtree(taskList.tasks);
 	if (pending === 0) return null;
 	return `${pending} task${pending > 1 ? "s" : ""} still pending with blockCompletion enabled. Complete or skip all pending tasks before finishing the goal.`;
 }
@@ -308,6 +291,32 @@ export function buildGoalCreatedReport(args: { objective: string; detailedSummar
 		lines.push("", "Goal details:", summary);
 	}
 	return lines.join("\n");
+}
+
+/** Count the ordered steps in a sisyphus objective (numbered items or "Step N"). */
+export function countOrderedSteps(objective: string): number {
+	const numbered = objective.match(/^\s*\d{1,2}\s*[.):]/gm)?.length ?? 0;
+	const stepMarkers = objective.match(/^\s*step\s+\d+/gim)?.length ?? 0;
+	return Math.max(numbered, stepMarkers);
+}
+
+/**
+ * E6/F4: where the goal is in its ordered sisyphus sequence. M = ordered steps
+ * in the objective; N = completed top-level tasks + 1 (clamped), falling back
+ * to 1 when no task tracking exists. Returns null for non-sisyphus goals or
+ * objectives without ordered markers.
+ */
+export function sisyphusStepProgress(goal: { sisyphus: boolean; objective: string; taskList?: { tasks?: Array<{ status: string }> } | null }): { current: number; total: number } | null {
+	if (!goal.sisyphus) return null;
+	const total = countOrderedSteps(goal.objective);
+	if (total === 0) return null;
+	let current = 1;
+	const tasks = goal.taskList?.tasks;
+	if (tasks && tasks.length > 0) {
+		const completedTop = tasks.filter((t) => t.status === "complete").length;
+		current = Math.min(total, completedTop + 1);
+	}
+	return { current, total };
 }
 
 export function shouldQueueContinuation(goal: Pick<GoalPolicyRecordLike, "status" | "autoContinue"> | null): boolean {

@@ -20,7 +20,13 @@ export interface GoalLock {
 	release(): void;
 }
 
-const DEFAULT_ACQUIRE_ATTEMPTS = 100;
+// P1-5: strictly bounded acquisition so the main thread never freezes for
+// seconds under cross-process contention. The default window is 8×25ms ≈ 200ms;
+// the persist path passes an even tighter bound (4×25ms ≈ 100ms). A contended
+// write now fails fast with a typed error instead of blocking the TUI for the
+// old 100×25ms ≈ 2.5s worst case; the optimistic revision check (goal-service)
+// is the real guard against concurrent writers.
+const DEFAULT_ACQUIRE_ATTEMPTS = 8;
 const DEFAULT_RETRY_MS = 25;
 const DEFAULT_STALE_TTL_MS = 30_000;
 

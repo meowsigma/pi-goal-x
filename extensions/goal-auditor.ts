@@ -13,6 +13,7 @@ import {
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
+import { countTaskSubtree } from "./goal-task-count.ts";
 import { loadGoalSettings, type GoalSettings, type ThinkingLevel } from "./goal-settings.ts";
 
 export interface AuditorProgress {
@@ -84,27 +85,9 @@ function renderAuditorTaskTree(tasks: GoalTask[], indent: number): string[] {
 	return lines;
 }
 
-function countAuditorTasks(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: number } {
-	let total = 0;
-	let complete = 0;
-	let skipped = 0;
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete") complete++;
-		else if (t.status === "skipped") skipped++;
-		if (t.subtasks && t.subtasks.length > 0) {
-			const child = countAuditorTasks(t.subtasks);
-			total += child.total;
-			complete += child.complete;
-			skipped += child.skipped;
-		}
-	}
-	return { total, complete, skipped, pending: total - complete - skipped };
-}
-
 function taskSummaryBlock(taskList?: GoalTaskList | null): string {
 	if (!taskList || taskList.tasks.length === 0) return "";
-	const { total, complete, skipped, pending } = countAuditorTasks(taskList.tasks);
+	const { total, complete, skipped, pending } = countTaskSubtree(taskList.tasks);
 	const lines: string[] = [`Tasks: ${complete}/${total} complete${skipped > 0 ? `, ${skipped} skipped` : ""}`];
 	lines.push(...renderAuditorTaskTree(taskList.tasks, 0));
 	const gate = taskList.blockCompletion && pending > 0 ? " | TASK GATE: pending tasks block completion" : "";
@@ -117,6 +100,9 @@ export function buildGoalAuditorPrompt(args: {
 	detailedSummary: string;
 	completionSummary?: string | null;
 	settings?: GoalSettings;
+	/** P1-6: parent-rendered evidence (ledger tail + turn trail) so the audit
+	 * starts warm instead of re-deriving what the parent session already holds. */
+	warmContext?: string | null;
 }): string {
 	return [
 		"You are the independent completion auditor for pi-goal.",
@@ -152,6 +138,13 @@ export function buildGoalAuditorPrompt(args: {
 			"<verification_contract>",
 			args.goal.verificationContract.trim(),
 			"</verification_contract>",
+		] : []),
+		...(args.warmContext?.trim() ? [
+			"",
+			"Warm parent context (already-rendered evidence from the executor session — inspect, do not re-derive):",
+			"<warm_context>",
+			args.warmContext.trim(),
+			"</warm_context>",
 		] : []),
 		"",
 		"Audit checklist:",
@@ -272,6 +265,8 @@ export async function runGoalCompletionAuditor(args: {
 	detailedSummary: string;
 	completionSummary?: string | null;
 	settings?: GoalSettings;
+	/** P1-6: parent-rendered evidence (ledger tail + turn trail). */
+	warmContext?: string | null;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
 	/**
@@ -333,12 +328,18 @@ export async function runGoalCompletionAuditor(args: {
 			},
 		});
 
+		const projectResources = args.settings?.auditorProjectResources === true;
 		const { session } = await createSession({
 			cwd: args.ctx.cwd,
 			model,
 			thinkingLevel,
 			...resolveAuditorSessionModelOptions(args.ctx),
-			resourceLoader: makeAuditorResourceLoader(),
+			// E3: default = the empty isolated loader (deliberate isolation);
+			// when auditorProjectResources is on, let the runtime build its own
+			// loader so the project's skills/extensions reach the auditor.
+			...(projectResources
+				? { resourceLoaderOptions: { noExtensions: false, noSkills: false, noPromptTemplates: false, noThemes: false, noContextFiles: false } }
+				: { resourceLoader: makeAuditorResourceLoader() }),
 			sessionManager: SessionManager.inMemory(args.ctx.cwd),
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
 			tools: ["read", "grep", "find", "ls", "bash", REPORT_AUDITOR_PROGRESS_TOOL_NAME],

@@ -8,6 +8,60 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Benchmark harness (PLAN.md Part 4, B1–B9)**: `experiments/bench/` —
+  agent-free (B8: pi packages stubbed, `createAgentSession` throws,
+  `node:fs` counted/latency-injected, net/http/https/child_process
+  forbidden), with a before/after baseline table + per-feature budgets
+  (`npm run bench -- before|after`, `npm run bench:gate`).
+- **Feature-enhancement set (E1–E7)**: goal history (last audit + recent
+  events) in `get_goal`/`/goal-status`; effective-settings provenance
+  report and env-override read-only rows in `/goal-settings`;
+  `auditorProjectResources` opt-in setting (off by default) so auditor
+  sessions can load project skills/extensions; budget progress line in the
+  goal widget + remaining-vs-overshoot in the budget-limited steering;
+  questionnaire Q&A echo in the created-goal report; sisyphus "At step N of
+  M" in `get_goal`; expandable pause/block reason detail in tool results
+  (collapsed headings byte-identical).
+- **Feature set (F1–F6)**: task detail block in the goal-running widget
+  (counts, next pending with contracts, recent completion evidence) with a
+  `get_goal` mirror; objective→task bootstrap at creation (confirmation
+  dialog + `set_goal_tasks` guidance); interactive task toggling in the
+  Ctrl+Shift+T overlay (Enter, same gates as `update_goal_task`, evidence
+  dialog for contracted tasks); sisyphus Step N/M badge + current-step
+  highlight in the widget; stall detector (`stallTimeoutMinutes` setting,
+  `[GOAL STALLED]` steering note, widget badge); token-budget threshold
+  alerts at 50/75/90% (`goal_budget_warning` ledger events + notifications).
+
+### Changed
+
+- **Optimisations (P1-1–P1-13)**: cache-first read layer (settings, goal
+  files, pool listing — mtime/size keyed), incremental ledger tail (O(1)
+  per-turn reads, torn-line safe), one-transaction-per-turn mutation buffer
+  (one lock + one write + one ledger batch at turn end, flushed before audit
+  dispatch/pause/focus-change/reload), trimmed task-list prompt block
+  (pending-first, completed/skipped collapsed to counts; 2154→387 est tokens
+  on a 50-task tree) with prompt fragment memoization, strictly bounded goal
+  lock (~200ms fail-fast instead of ~2.8s frozen), warm-start auditor (ledger
+  tail seeded into the audit prompt), parallel async session startup (~100x
+  on slow storage at 50 goals), batched ledger appends, microtask-coalesced
+  widget renders, single shared task-count walker, deduplicated dialog
+  scaffold + contract/render helpers, goal-state widget glue extracted to
+  `widgets/goal-widget.ts`, debug-only surface gated behind `PI_GOAL_DEBUG`.
+- **New ledger event types**: `goal_budget_warning`, `goal_stalled`.
+- **New settings**: `auditorProjectResources`, `stallTimeoutMinutes`.
+
+### Fixed
+
+- `loadGoalSettings` silently dropped the new `auditorProjectResources` and
+  `stallTimeoutMinutes` fields from its returned object — now carried
+  through (E3's setting was previously inert).
+
+---
+
 ## [0.22.0] — 2026-08-04
 
 Single consolidated release on the simplification branch: the codex-inspired

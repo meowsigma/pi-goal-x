@@ -1,7 +1,8 @@
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { GoalTask } from "./goal-record.ts";
+import { borderedLine, dialogInnerWidth, horizontalRule } from "./widgets/dialog-scaffold.ts";
 
 /** Render a task tree for confirmation dialogs (structural view). */
 export function renderConfirmationTasks(tasks: readonly GoalTask[], indent: number): string[] {
@@ -88,15 +89,11 @@ async function showTaskListConfirmationDialog(ctx: ExtensionContext, proposalTex
 
 				render(width: number): string[] {
 					const termWidth = Math.min(width, 80);
-					const innerWidth = Math.min(termWidth, 64) - 2;
+					const innerWidth = dialogInnerWidth(termWidth);
 
-					function line(leftContent: string): string {
-						const vis = visibleWidth(leftContent);
-						const fill = innerWidth - vis;
-						return accent("│") + leftContent + (fill > 0 ? " ".repeat(fill) : "") + accent("│");
-					}
+					const line = (leftContent: string): string => borderedLine(accent, innerWidth, leftContent);
 
-					const horizLine = "─".repeat(innerWidth);
+					const horizLine = horizontalRule(innerWidth);
 					const lines: string[] = [];
 					const p = "  ";
 

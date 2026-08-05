@@ -4,6 +4,7 @@ import {
 } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-contract.ts";
 import type { GoalRecord, GoalTask, TaskStatus } from "../goal-record.ts";
+import { countTaskSubtree } from "../goal-task-count.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 import { budgetLine } from "../goal-accounting.ts";
 
@@ -19,61 +20,62 @@ function taskMarker(status: TaskStatus): string {
 	return "[ ]";
 }
 
-/** Count tasks in subtree recursively */
-function countSubtree(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: GoalTask[] } {
-	let total = 0;
-	let complete = 0;
-	let skipped = 0;
-	const pending: GoalTask[] = [];
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete") complete++;
-		else if (t.status === "skipped") skipped++;
-		else pending.push(t);
-		if (t.subtasks && t.subtasks.length > 0) {
-			const child = countSubtree(t.subtasks);
-			total += child.total;
-			complete += child.complete;
-			skipped += child.skipped;
-			pending.push(...child.pending);
-		}
-	}
-	return { total, complete, skipped, pending };
-}
+/** Cap on pending tasks rendered inline in the prompt (P1-4 trim). */
+const MAX_PENDING_RENDERED = 10;
 
-/** Render task subtree recursively */
-function renderTaskTree(tasks: GoalTask[], indent: number): string[] {
+/** Render only PENDING nodes (depth-aware); completed/skipped collapse to counts. */
+function renderPendingTasks(tasks: GoalTask[], indent: number, rendered: { count: number; stop: boolean }): string[] {
+	if (rendered.stop) return [];
 	const prefix = "  ".repeat(indent);
 	const lines: string[] = [];
 	for (const task of tasks) {
-		let suffix = "";
-		if (task.status === "complete" && task.evidence) suffix = ` — ${task.evidence}`;
-		if (task.status === "skipped" && task.skipReason) suffix = ` — skipped: ${task.skipReason}`;
+		if (task.status !== "pending") {
+			// Completed/skipped: not rendered; their pending descendants still are.
+			if (task.subtasks && task.subtasks.length > 0) {
+				lines.push(...renderPendingTasks(task.subtasks, indent, rendered));
+			}
+			continue;
+		}
+		if (rendered.count >= MAX_PENDING_RENDERED) {
+			rendered.stop = true;
+			return lines;
+		}
+		rendered.count++;
 		const lw = task.lightweightSubtasks ? " (lightweight)" : "";
-		lines.push(`${prefix}${taskMarker(task.status)} ${task.id}: ${task.title}${lw}${suffix}`);
-		if (task.status === "pending" && task.verificationContract) {
+		lines.push(`${prefix}[ ] ${task.id}: ${task.title}${lw}`);
+		if (task.verificationContract) {
 			lines.push(`${prefix}  contract: ${task.verificationContract}`);
 		}
 		if (task.subtasks && task.subtasks.length > 0) {
-			lines.push(...renderTaskTree(task.subtasks, indent + 1));
+			lines.push(...renderPendingTasks(task.subtasks, indent + 1, rendered));
 		}
 	}
 	return lines;
 }
 
-/** Bounded task-list block: at most the next few pending tasks plus counts. */
+/**
+ * Bounded, trimmed task-list block (P1-4): pending tasks first with depth-aware
+ * indentation and contract snippets; completed/skipped are collapsed to the
+ * header counts. Previously the ENTIRE tree (up to 50 tasks + subtrees) was
+ * injected into every continuation prompt — most of it already-completed work.
+ */
 export function taskListBlock(goal: GoalRecord, settings?: GoalSettings): string {
 	if (settings?.disableTasks) return "";
 	if (!goal.taskList || goal.taskList.tasks.length === 0) return "";
-	const { total, complete, skipped, pending } = countSubtree(goal.taskList.tasks);
+	const { total, complete, skipped, pending, pendingTasks } = countTaskSubtree(goal.taskList.tasks, { collectPending: true });
 	const lines: string[] = [];
 	lines.push(`[TASK LIST — ${complete}/${total} tasks complete${skipped > 0 ? ` (${skipped} skipped)` : ""}]`);
-	lines.push(...renderTaskTree(goal.taskList.tasks, 0));
-	if (goal.taskList.blockCompletion && pending.length > 0) {
+	const rendered = { count: 0, stop: false };
+	lines.push(...renderPendingTasks(goal.taskList.tasks, 0, rendered));
+	const hiddenPending = (pending ?? 0) - rendered.count;
+	if (hiddenPending > 0) {
+		lines.push(`  (+${hiddenPending} more pending — see the task overlay, Ctrl+Shift+T)`);
+	}
+	if (goal.taskList.blockCompletion && pending! > 0) {
 		lines.push("  TASK GATE: do not request completion while tasks remain in [ ] pending state");
 	}
-	if (pending.length > 0) {
-		lines.push(`  Next pending: ${pending[0]!.id} — ${pending[0]!.title}`);
+	if (pendingTasks && pendingTasks.length > 0) {
+		lines.push(`  Next pending: ${pendingTasks[0]!.id} — ${pendingTasks[0]!.title}`);
 	}
 	return lines.join("\n");
 }
@@ -131,7 +133,39 @@ function inject(fragment: string, block: string): string {
 	return next.length > MAX_PROMPT_FRAGMENT_CHARS ? `${next.slice(0, MAX_PROMPT_FRAGMENT_CHARS)}\n…[prompt truncated]` : next;
 }
 
+/**
+ * Fragment memo (P1-4): the goal prompt block is rebuilt per context call;
+ * keyed on every field that changes output, so steady-state turns reuse it.
+ */
+const promptFragmentCache = new Map<string, string>();
+const PROMPT_CACHE_MAX = 100;
+
+function promptCacheKey(goal: GoalRecord, settings?: GoalSettings): string {
+	return JSON.stringify([
+		goal.id, goal.revision, goal.updatedAt, goal.status, goal.autoContinue, goal.sisyphus,
+		goal.usage.tokensUsed, goal.usage.activeSeconds,
+		settings?.disableTasks, settings?.disableContracts,
+	]);
+}
+
+function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, build: () => string): string {
+	const key = promptCacheKey(goal, settings);
+	const cached = promptFragmentCache.get(key);
+	if (cached !== undefined) return cached;
+	const value = build();
+	if (promptFragmentCache.size >= PROMPT_CACHE_MAX) {
+		const oldest = promptFragmentCache.keys().next().value;
+		if (oldest !== undefined) promptFragmentCache.delete(oldest);
+	}
+	promptFragmentCache.set(key, value);
+	return value;
+}
+
 export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
+	return cachedPrompt(goal, settings, () => buildGoalPrompt(goal, settings));
+}
+
+function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	const taskBlock = taskListBlock(goal, settings);
 	const contractBlock = verificationContractBlock(goal, settings);
 	const budget = budgetLine(goal);
@@ -153,6 +187,10 @@ ${sisyphusDisciplineBlock(goal)}
 }
 
 export function continuationPrompt(goal: GoalRecord, settings?: GoalSettings): string {
+	return cachedPrompt(goal, settings, () => buildContinuationPrompt(goal, settings));
+}
+
+function buildContinuationPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	const taskBlock = taskListBlock(goal, settings);
 	const contractBlock = verificationContractBlock(goal, settings);
 	const budget = budgetLine(goal);

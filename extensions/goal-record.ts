@@ -64,6 +64,8 @@ export interface GoalRecord {
 export interface GoalStateEntry {
 	version: 3;
 	goal: GoalRecord | null;
+	/** E7: expandable tool-result detail line (e.g. full pause reason). */
+	resultDetail?: string;
 }
 
 export interface GoalFocusEntry {

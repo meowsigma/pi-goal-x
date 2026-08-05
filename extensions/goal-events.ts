@@ -14,8 +14,9 @@ import {
 import { buildCompactionSummary } from "./goal-compaction.ts";
 import { latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
+import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
-import { budgetLine } from "./goal-accounting.ts";
+import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
 import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
 import { goalSelectorLabel } from "./goal-pool.ts";
 import {
@@ -79,6 +80,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.advanceTurnSeq();
 		core.goalWorkToolCalledThisTurn = false;
 		core.beginAccounting();
+		core.goalService.beginTurn(ctx, core.focusedGoalId); // P1-3 transaction buffer
+		core.touchGoalActivity(); // F5
 		core.updateUI(ctx);
 	});
 
@@ -115,12 +118,14 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("tool_execution_end", async (_event, ctx) => {
+		core.touchGoalActivity(); // F5
 		core.accountProgress(ctx);
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
 		const message = event.message as AssistantMessageLike;
 		const tokens = assistantTurnTokens(message);
+		core.touchGoalActivity(); // F5
 		core.accountProgress(ctx, { completedTurnTokens: tokens });
 
 		if (isAbortedAssistantMessage(message)) {
@@ -185,6 +190,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		) {
 			core.queueContinuation(ctx);
 		}
+		core.goalService.endTurn(ctx); // P1-3: single flush (lock + write + ledger batch)
 	});
 
 	pi.on("message_end", async (event, ctx) => {
@@ -196,7 +202,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
-		core.loadState(ctx);
+		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
+		await core.loadState(ctx);
 		core.installGoalToolProfile(!loadGoalSettings(ctx.cwd).disableTasks);
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
@@ -234,6 +241,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {
+		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		if (core.state.goal) core.persist(ctx);
 		core.beginAccounting();
 		// Arm a deterministic compaction summary for the next agent turn.
@@ -245,7 +253,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
-		core.loadState(ctx);
+		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
+		await core.loadState(ctx);
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
 		core.beginAccounting();
@@ -329,8 +338,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (core.state.goal?.status === "budget_limited") {
 			const limitedGoal = core.state.goal;
 			const budgetText = budgetLine(limitedGoal);
+			// E4: surface the remaining-vs-overshoot fact in the wrap-up steering.
+			const remaining = budgetRemaining(limitedGoal);
+			const balanceText = typeof remaining === "number"
+				? remaining < 0
+					? ` — ${formatTokenValue(-remaining)} over the budget`
+					: ` — ${formatTokenValue(remaining)} remaining`
+				: "";
 			const reminder = core.runtime.consumePostBudgetReminder()
-				? `\n\n[TOKEN BUDGET REACHED goalId=${limitedGoal.id}]\nThe goal's token budget has been reached${budgetText ? ` (${budgetText})` : ""}. Wrap up the current work in one final response: summarize what was accomplished and what remains, do not start new substantive work, and do not claim the goal is complete unless it actually is. To continue, the user must raise or remove the budget and resume the goal.`
+				? `\n\n[TOKEN BUDGET REACHED goalId=${limitedGoal.id}]\nThe goal's token budget has been reached${budgetText ? ` (${budgetText}${balanceText})` : ""}. Wrap up the current work in one final response: summarize what was accomplished and what remains, do not start new substantive work, and do not claim the goal is complete unless it actually is. To continue, the user must raise or remove the budget and resume the goal.`
 				: "";
 			return {
 				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL BUDGET LIMITED goalId=${limitedGoal.id}]\n${untrustedObjectiveBlock(limitedGoal)}${budgetText ? `\n${budgetText}` : ""}${reminder}`,
@@ -339,6 +355,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		const activeGoal = core.state.goal;
 		const settings = loadGoalSettings(ctx.cwd);
 		let prompt = goalPrompt(activeGoal, settings);
+		// F5: [GOAL STALLED] steering note when the detector fired.
+		const stalledNote = core.checkStall(ctx);
+		if (stalledNote) prompt += stalledNote;
 		// Inject durable auditor feedback if the latest result was a rejection
 		try {
 			const ledger = readGoalLedger(ctx);

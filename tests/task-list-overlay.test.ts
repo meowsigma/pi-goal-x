@@ -360,8 +360,12 @@ test("keybinding calls showTaskListOverlay with focusedGoalId", async () => {
 		"goal-widget.ts contains the ctrl+shift+t keybinding",
 	);
 	assert.ok(
-		goalSource.includes("showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId)"),
-		"goal-widget.ts calls showTaskListOverlay with focusedGoalId",
+		goalSource.includes("showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId, {"),
+		"goal-widget.ts calls showTaskListOverlay with focusedGoalId (F3 adds the toggle callback)",
+	);
+	assert.ok(
+		goalSource.includes("onToggleTask"),
+		"goal-widget.ts wires the F3 interactive toggle callback",
 	);
 	assert.ok(
 		goalSource.includes('return { consume: true }'),

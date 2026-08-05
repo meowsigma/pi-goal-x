@@ -9,6 +9,7 @@ import {
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
 import { nowIso, type GoalRecord } from "./goal-record.ts";
+import { latestEventsForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 import type { GoalCore } from "./goal-state.ts";
@@ -235,12 +236,21 @@ if (settings.disabled === true) {
 	const completionAuditController = new AbortController();
 	core.auditAbortController = completionAuditController;
 
+	// P1-6: warm start — seed the auditor with the parent-rendered ledger tail
+	// (recent lifecycle + task evidence) so it does not re-derive session facts.
+	const ledger = readGoalLedger(ctx).events;
+	const warmTail = latestEventsForGoal(ledger, auditTarget.id, 8);
+	const warmContext = warmTail.length > 0
+		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
+		: null;
+
 	const auditor = await (core.dependencies.runCompletionAuditor ?? runGoalCompletionAuditor)({
 		ctx,
 		goal: auditTarget,
 		detailedSummary: detailedSummary(auditTarget),
 		completionSummary: completionSummary?.trim() || undefined,
 		settings: loadGoalSettings(ctx.cwd),
+		warmContext,
 		signal: completionAuditController.signal,
 		onProgress: (progress) => {
 			core.auditProgress = {

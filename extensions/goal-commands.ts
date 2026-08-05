@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
-import { detailedSummary, oneLineSummary } from "./goal-format.ts";
+import { buildGoalHistoryBlock, detailedSummary, oneLineSummary } from "./goal-format.ts";
 import {
 	goalSettingsPath,
 	loadGoalSettings,
@@ -15,6 +15,8 @@ import {
 	otherOpenGoalCount,
 } from "./goal-pool.ts";
 import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
+import { readGoalLedger } from "./goal-ledger.ts";
+import { effectiveSettingsReport, envOverrideFor } from "./goal-settings.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
@@ -158,7 +160,14 @@ export function registerGoalCommands(core: GoalCore): void {
 		const view = core.goalForDisplay() ?? core.state.goal;
 		const otherCount = otherOpenGoalCount(core.goalsById, core.focusedGoalId);
 		const extra = view && otherCount > 0 ? `\nOther open goals: ${otherCount} (run /goal-list or /goal-focus)` : "";
-		const text = view ? `${detailedSummary(view)}${extra}` : core.openGoals().length > 0 ? buildUnfocusedOpenGoalsSummary(core.openGoals().length) : detailedSummary(null);
+		let text = view ? `${detailedSummary(view)}${extra}` : core.openGoals().length > 0 ? buildUnfocusedOpenGoalsSummary(core.openGoals().length) : detailedSummary(null);
+		if (view) {
+			// E1: goal history (last audit verdict + recent lifecycle events).
+			const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
+			if (history) text += `\n\n${history}`;
+			// E2: effective settings with provenance.
+			text += `\n\n${effectiveSettingsReport(ctx.cwd).join("\n")}`;
+		}
 		ctx.ui.notify(text, "info");
 		core.updateUI(ctx);
 	}
@@ -249,6 +258,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	const SETTING_ROWS: readonly SettingRow[] = [
 		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", section: "Goal behavior", kind: "boolean" },
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
+		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "disableTasks", label: "disableTasks", section: "Task tracking", kind: "boolean" },
 		{ key: "subtaskDepth", label: "subtaskDepth", section: "Task tracking", kind: "positiveInteger" },
 		{ key: "disabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean" },
@@ -258,10 +268,11 @@ export function registerGoalCommands(core: GoalCore): void {
 	];
 
 	function settingsValue(config: GoalSettings, key: keyof GoalSettings): string {
-		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal") {
+		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources") {
 			return config[key] === true ? "true" : "false";
 		}
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
+		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		return config[key] ?? "(default)";
 	}
 
@@ -300,7 +311,8 @@ export function registerGoalCommands(core: GoalCore): void {
 						options.push(`─── ${row.section} ───`);
 						lastSection = row.section;
 					}
-					options.push(`  ${row.label}: ${settingsValue(config, row.key)}`);
+					const envVar = envOverrideFor(row.key);
+					options.push(envVar ? `  ${row.label}: ${settingsValue(config, row.key)} (env: ${envVar} — read-only)` : `  ${row.label}: ${settingsValue(config, row.key)}`);
 				}
 				options.push("Done");
 				const selected = await ctx.ui.select("Goal settings", options);
@@ -314,6 +326,10 @@ export function registerGoalCommands(core: GoalCore): void {
 			const row = SETTING_ROWS.find((r) => r.label === label);
 			if (!row) continue;
 			const key = row.key;
+			if (envOverrideFor(key)) {
+				ctx.ui.notify(`${row.label} is read-only: overridden by the ${envOverrideFor(key)} env var.`, "warning");
+				continue;
+			}
 			if (row.kind === "boolean") {
 				const next = { ...config, [key]: config[key] !== true };
 				saveSettings(next);

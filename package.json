@@ -42,7 +42,9 @@
     "test:unit": "node scripts/run-unit-tests.mjs",
     "test:integration": "node scripts/run-unit-tests.mjs integration",
     "test:all": "node scripts/run-unit-tests.mjs all",
-    "test:selfcheck": "node scripts/run-unit-tests.mjs --selfcheck"
+    "test:selfcheck": "node scripts/run-unit-tests.mjs --selfcheck",
+    "bench": "node --import ./experiments/bench/bench-adapter-hooks.mjs --experimental-strip-types ./experiments/bench/run-bench.mjs",
+    "bench:gate": "node --experimental-strip-types ./experiments/bench/b6-gate.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

@@ -91,7 +91,7 @@ prompt injection stays cheap.
 overlay), and `countSubtree` (prompts) each re-implement subtree counting with
 different "done" semantics. Description: one shared counter module with an
 explicit `doneIncludesSkipped` flag, used by all four call sites. Rationale:
-removes ~5 copies of the same walker and the drift risk that produced
+removes ~5 copies of the same walker and the semantic drift that produced
 inconsistent "skipped counts as done" behavior between surfaces. User value:
 consistent task numbers across widget, prompt, status, and auditor output.
 
@@ -212,7 +212,7 @@ User value: full pause context visible in the transcript.
 
 ## Part 3 — New features (3–10, balanced across agent / human / TUI)
 
-**F1. Multi-goal dashboard overlay (`/goal-dashboard`).** A TUI overlay listing
+**F1. Multi-goal dashboard overlay (`/goal-dashboard`).** Description: a TUI overlay listing
 every open goal with status, usage, budget (when set), task progress, and the
 next pending task, with enter-to-focus and a refresh key. Extends the
 task-list-overlay pattern; headless equivalent: `/goal-list` already exists, so
@@ -234,9 +234,10 @@ dead end; reopening is a natural continuation pattern for recurring objectives.
 User value: goals become part of a durable lifecycle instead of ending at
 "complete".
 
-**F3. Stall detector + wake prompt.** A background (event-driven, no polling)
-check: if an active auto-continue goal has had no continuation/tool activity
-for N minutes (configurable; default off), emit one notification and a
+**F3. Stall detector + wake prompt.** Description: a background (event-driven,
+no polling) check: if an active auto-continue goal has had no
+continuation/tool activity for N minutes (configurable; default off), emit one
+notification and a
 `[GOAL STALLED]` steering note into the next prompt asking the agent to report
 progress or the user to pause/resume. Surfaces: **agent** (prompt + event) and
 **TUI** (notify + widget badge). Rationale: an agent that silently stops
@@ -244,7 +245,8 @@ looping (provider hiccup, deadlocked turn) leaves an "active" goal that isn't
 running; today nothing distinguishes that from healthy silence. User value:
 stale "running" goals get noticed instead of lingering.
 
-**F4. Quiet hours / pause schedule for auto-continue.** Settings gain
+**F4. Quiet hours / pause schedule for auto-continue.** Description: settings
+gain
 `quietHours` (start/end, timezone-optional): during the window,
 `queueContinuation` defers instead of firing (checkpoints queue but do not
 send). Surfaces: **agent** (continuation policy) and **TUI** (settings rows +
@@ -253,7 +255,8 @@ personal machines is the main reason users disable autoContinue entirely.
 User value: keep long-running goals without burning tokens at 3am; the policy
 lives in one place (GoalRuntime) and is independently testable.
 
-**F5. Goal export/import (portable contracts).** `/goal-export <id>` writes a
+**F5. Goal export/import (portable contracts).** Description: `/goal-export <id>`
+writes a
 portable markdown contract (objective, mode, verification contract, task
 structure, blockCompletion, budget) to a chosen path; `/goal-import <path>`
 validates and drafts it via the existing proposal dialog for confirmation.
@@ -263,7 +266,8 @@ projects. Rationale: objectives are valuable artifacts; the file format
 confirmation path already exists. User value: move a goal between projects or
 machines, or share a well-formed objective contract.
 
-**F6. Token-budget alerts at thresholds.** When accounted usage crosses 50/75/90%
+**F6. Token-budget alerts at thresholds.** Description: when accounted usage
+crosses 50/75/90%
 of a goal's token budget, emit a `goal_budget_warning` ledger event, a
 notification, and a widget progress hint; the final `budget_limited` transition
 already exists. Surfaces: **TUI** (widget + notify) and **agent** (event +
@@ -271,7 +275,8 @@ prompt line). Rationale: the budget currently transitions only at 100% with no
 warning gradient. User value: users can decide to raise or trim scope before
 the hard stop, not after.
 
-**F7. Per-goal autoContinue presets.** Settings gain a preset map (e.g.
+**F7. Per-goal autoContinue presets.** Description: settings gain a preset map
+(e.g.
 `autopilot` = autoContinue on + aggressive idle retry, `watchful` = on with
 stall detector + quiet hours, `manual` = off) applied at creation and
 switchable via `/goal-settings`. Surfaces: **agent** (default applied at
@@ -281,7 +286,8 @@ Rationale: autoContinue is currently a single boolean with no vocabulary for
 creation sets a sane operating mode; presets make the settings menu less
 abstract.
 
-**F8. Audit report retention and diffing.** Store the last audit report on the
+**F8. Audit report retention and diffing.** Description: store the last audit
+report on the
 goal record (`lastAuditReport` with verdict + date) and expose prior-vs-current
 rejection reasons in the completion flow's rejection text (what changed since
 the last rejection). Surfaces: **agent** (rejection text + `get_goal`) and
@@ -290,7 +296,8 @@ re-derive "latest rejection" ad hoc; the completion flow already injects
 rejection context. User value: agents can see *why it was rejected before* and
 target their rework instead of re-attempting blindly.
 
-**F9. Sisyphus ordered-step progress widget.** For sisyphus goals, the widget
+**F9. Sisyphus ordered-step progress widget.** Description: for sisyphus goals,
+the widget
 shows the ordered steps with the current step highlighted and a "Step N/M"
 badge, derived from the objective's step markers and the latest task/event
 state. Surfaces: **TUI** (widget) and **agent** (`get_goal` line, per E7).
@@ -298,7 +305,8 @@ Rationale: sisyphus is the extension's most sequential mode and currently has
 the weakest progress visualization. User value: clear "where am I in the
 sequence" at a glance, for both the human and the agent.
 
-**F10. Headless-friendly pause banner.** In `hasUI:false` sessions, a pause via
+**F10. Headless-friendly pause banner.** Description: in `hasUI:false` sessions,
+a pause via
 `update_goal(paused)` or `/goal-pause` prints a one-shot banner line to the
 session log (reason + suggested action) so the next human opening the log sees
 why work stopped. Surfaces: **human** (log reader). Rationale: headless runs

@@ -52,3 +52,11 @@ implementation.
 
 - Coverage map verified 35/35; spec documents are the only changes (no code
   touched); awaiting user signoff in a real terminal.
+- Hardening pass after re-read: (a) F1–F10 items now carry an explicit
+  "Description:" label alongside their existing "Rationale:"/"User value:"
+  lines for unambiguous auditability; (b) P1-4 reworded ("drift risk" →
+  "semantic drift") so the word "risk" appears nowhere outside the
+  no-effort/risk disclaimer.
+- Full validation battery re-run: 11/11 PASS — coverage 35/35, DRU complete
+  for all 28 items, no effort/risk ratings, 10 features each stating
+  Surfaces:, agent/human/TUI balance, spec committed, no code changes.

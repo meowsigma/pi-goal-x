@@ -38,6 +38,7 @@ const CTRL_SHIFT_T = "\x1b[116;6u"; // kitty protocol: 't' with ctrl+shift modif
 
 interface Harness {
 	handlers: Record<string, (event: unknown, ctx: ExtensionContext) => unknown>;
+	tools: Record<string, { execute: (...args: unknown[]) => Promise<unknown> }>;
 	sentMessages: Array<{ customType?: string; details?: unknown }>;
 	notifyCalls: string[];
 	ctx: ExtensionContext;
@@ -54,8 +55,9 @@ function createHarness(cwd: string): Harness {
 	let resolveOverlay: (() => void) | null = null;
 	let overlayShown = false;
 
+	const tools: Record<string, { execute: (...args: unknown[]) => Promise<unknown> }> = {};
 	const mockPi = {
-		registerTool: () => {},
+		registerTool: (def: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => { tools[def.name] = def; },
 		registerCommand: () => {},
 		on: (event: string, handler: (...args: never[]) => unknown) => {
 			handlers[event] = handler as Harness["handlers"][string];
@@ -98,7 +100,7 @@ function createHarness(cwd: string): Harness {
 			setWorkingVisible: () => {},
 			custom: (factory: (...args: unknown[]) => unknown) => new Promise((resolve) => {
 				overlayShown = true;
-				resolveOverlay = () => resolve(undefined);
+				resolveOverlay = () => resolve({ decision: "confirm" } as never);
 				factory(createMockTUI().tui, createMockTheme(), null, resolveOverlay);
 			}),
 			select: async () => null,
@@ -111,6 +113,7 @@ function createHarness(cwd: string): Harness {
 
 	return {
 		handlers,
+		tools,
 		sentMessages,
 		notifyCalls,
 		ctx,
@@ -161,11 +164,26 @@ test("Escape while a goal modal is open never pauses the goal; Escape after it c
 		await startSession(h);
 		assert.ok(h.ctx.hasUI);
 
-		// Ctrl+Shift+T opens the task-list overlay through the real keybinding:
-		// the widget enters the goal modal (depth counter) before showing it.
+		// Ctrl+Shift+T now toggles the unified dashboard expansion (the separate
+		// task-list overlay registration is removed; §10/§19.5). It must be
+		// consumed and must NOT open an overlay or enter a goal modal.
 		const openResult = h.terminalInput(CTRL_SHIFT_T);
 		assert.deepEqual(openResult, { consume: true }, "ctrl+shift+t must be consumed by the widget");
-		assert.ok(h.overlayShown(), "task-list overlay must be shown");
+		assert.equal(h.overlayShown(), false, "ctrl+shift+t must not open the task-list overlay anymore");
+		// Toggle back to compact so the final Escape exercises the pause path
+		// rather than collapsing the expanded dashboard.
+		h.terminalInput(CTRL_SHIFT_T);
+
+		// Open a real goal modal through the real wiring: set_goal_tasks shows
+		// the task-confirmation dialog (ui.custom), entering the goal modal
+		// (depth counter) before showing it.
+		const setTasks = h.tools["set_goal_tasks"];
+		assert.ok(setTasks, "set_goal_tasks tool registered");
+		const toolPromise = setTasks.execute("set-1", {
+			tasks: [{ id: "t1", title: "Task one" }],
+		}, undefined, undefined, h.ctx);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.ok(h.overlayShown(), "task confirmation modal must be shown");
 
 		// Escape while the modal is open: the handler must yield to the dialog
 		// (return undefined) and never pause the goal.
@@ -173,8 +191,9 @@ test("Escape while a goal modal is open never pauses the goal; Escape after it c
 		assert.equal(escapeInModal, undefined, "handler must not consume Escape while a goal modal is open");
 		assert.ok(!h.notifyCalls.includes("Goal paused."), "goal must not be paused while a goal modal is open");
 
-		// Close the overlay via its done callback -> the modal exits (finally).
+		// Close the modal via its done callback -> the modal exits (finally).
 		h.overlayDone();
+		await toolPromise;
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		// Escape with no goal modal open: the normal pause path must work.

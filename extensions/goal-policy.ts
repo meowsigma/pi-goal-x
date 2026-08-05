@@ -284,11 +284,39 @@ export function buildCompletionReport(args: { detailedSummary: string; auditorRe
 	return lines.join("\n");
 }
 
-export function buildGoalCreatedReport(args: { objective: string; detailedSummary?: string | null }): string {
-	const lines = ["Goal confirmed and created.", "", "Finalized goal:", "", args.objective.trim()];
+export interface GoalCreatedReportArgs {
+	objective: string;
+	detailedSummary?: string | null;
+	/**
+	 * Guided-confirmation report (§14): the richer opening line plus expanded
+	 * detail (goal id, active file, task count, verification contract, auditor
+	 * configuration, token budget). Direct creation keeps the default text.
+	 */
+	confirmed?: boolean;
+	goalId?: string;
+	filePath?: string;
+	taskCount?: number;
+	verificationContract?: string;
+	auditorEnabled?: boolean;
+	tokenBudget?: number;
+}
+
+export function buildGoalCreatedReport(args: GoalCreatedReportArgs): string {
+	const opening = args.confirmed
+		? ["✓ Goal created and focused.", "Continuing automatically with the confirmed plan."]
+		: ["Goal confirmed and created."];
+	const lines = [...opening, "", "Finalized goal:", "", args.objective.trim()];
+	const details: string[] = [];
+	if (args.goalId) details.push(`Goal id: ${args.goalId}`);
+	if (args.filePath) details.push(`File: ${args.filePath}`);
+	if (args.taskCount !== undefined) details.push(`Tasks: ${args.taskCount}`);
+	if (args.verificationContract?.trim()) details.push(`Verification: ${args.verificationContract.trim()}`);
+	if (args.auditorEnabled !== undefined) details.push(`Auditor: ${args.auditorEnabled ? "enabled" : "disabled"}`);
+	if (args.tokenBudget !== undefined) details.push(`Token budget: ${args.tokenBudget}`);
 	const summary = args.detailedSummary?.trim();
-	if (summary) {
-		lines.push("", "Goal details:", summary);
+	if (summary) details.push(summary);
+	if (details.length > 0) {
+		lines.push("", "Goal details:", ...details);
 	}
 	return lines.join("\n");
 }

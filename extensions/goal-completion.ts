@@ -218,6 +218,7 @@ if (settings.disabled === true) {
 		recentOutput: [],
 		phase: "running",
 		elapsedMs: 0,
+		auditorLabel,
 	};
 	// Start animation timer for the spinner in the auditor widget
 	core.stopAuditAnimation();
@@ -361,8 +362,11 @@ if (settings.disabled === true) {
 		// Ledger append failure should not block completion
 	}
 	if (!auditor.approved) {
-		// Clear auditor progress to restore normal widget state
+		// Clear auditor progress to restore normal widget state, then show the
+		// §15.4 result card briefly so the required next work is visible before
+		// the normal dashboard returns (the goal stays open).
 		core.auditProgress = null;
+		core.setAuditResult(auditor.error ? "error" : "disapproved", auditor.output || "Auditor produced no output.");
 		core.goalWidgetComponentRef.current?.invalidate();
 		const rejectionText = [
 			"Goal audit rejected.",
@@ -396,6 +400,8 @@ if (settings.disabled === true) {
 		display: true,
 		details: { phase: "approved", goalId: auditTarget.id, auditor: auditor.model },
 	});
+	// §15.4: the approval card shows during the deferred archival window.
+	core.setAuditResult("approved", auditor.output || "Auditor approved completion.");
 	// Account for any remaining elapsed time.
 	// Deferred archival happens inside commitGoalCompletion; archival occurs at
 	// turn_end so the agent can see the auditor approval before the goal is

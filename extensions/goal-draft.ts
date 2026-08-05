@@ -1,4 +1,4 @@
-import type { GoalTask } from "./goal-record.ts";
+import type { GoalTask, GoalTaskList } from "./goal-record.ts";
 import { promptSafeObjective } from "./goal-contract.ts";
 import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
 
@@ -192,4 +192,51 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 		"",
 		...(focus === "sisyphus" ? sisyphusFocusItems : goalFocusItems),
 	].join("\n");
+}
+
+
+// ── §14 durable proposal summary ─────────────────────────────────────────────
+
+export interface ProposalSummaryArgs {
+	objective: string;
+	taskList?: GoalTaskList;
+	verificationContract?: string;
+	autoContinue: boolean;
+	auditorEnabled: boolean;
+}
+
+/**
+ * Durable proposal summary written to the terminal transcript (plan §14):
+ * proposed objective, proposed plan (numbered top-level tasks), verification,
+ * automatic-continuation state, and auditor state. Produced for every proposal
+ * outcome (confirm / continue refining / cancel) so the summary is always part
+ * of the conversation, not only the confirmation dialog.
+ */
+export function buildProposalSummary(args: ProposalSummaryArgs): string {
+	const lines: string[] = ["Proposed objective:", args.objective.trim()];
+	if (args.taskList && args.taskList.tasks.length > 0) {
+		lines.push("", "Proposed plan:");
+		lines.push(...renderProposalPlan(args.taskList.tasks));
+	}
+	if (args.verificationContract?.trim()) {
+		lines.push("", "Verification:", args.verificationContract.trim());
+	}
+	lines.push("", `Automatic continuation: ${args.autoContinue ? "enabled" : "disabled"}`);
+	lines.push(`Independent auditor: ${args.auditorEnabled ? "enabled" : "disabled"}`);
+	return lines.join("\n");
+}
+
+function renderProposalPlan(tasks: GoalTask[]): string[] {
+	const lines: string[] = [];
+	let index = 1;
+	for (const t of tasks) {
+		lines.push(`${index}. ${t.title}`);
+		if (t.subtasks && t.subtasks.length > 0) {
+			for (const child of t.subtasks) {
+				lines.push(`   - ${child.title}`);
+			}
+		}
+		index++;
+	}
+	return lines;
 }

@@ -14,9 +14,11 @@ import assert from "node:assert/strict";
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import goalExtension from "../extensions/goal.ts";
-import { parseGoalFile } from "../extensions/storage/goal-files.ts";
+import { parseGoalFile, writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
 import { readGoalLedger } from "../extensions/goal-ledger.ts";
 import { goalSettingsPath } from "../extensions/goal-settings.ts";
+import { proposalText, type ActiveGoalDraft } from "../extensions/goal-drafting.ts";
+import type { GoalRecord } from "../extensions/goal-record.ts";
 
 interface Harness {
 	ctx: ExtensionContext;
@@ -611,7 +613,7 @@ test("/goal-status reports state without initiating drafting", async () => {
 		// Unfocused with open goals: reports the pool without mutating.
 		await h.commands.get("goal-unfocus")!.handler("", h.ctx);
 		await h.commands.get("goal-status")!.handler("", h.ctx);
-		assert.ok(h.notifications.some((n) => n.includes("No goal is focused") && n.includes("open goal")), "pool summary reported");
+		assert.ok(h.notifications.some((n) => n.includes("open goal") && n.includes("/goal-focus")), "unfocused panel reported");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}
@@ -699,6 +701,275 @@ test("a tweak confirmation persists the auditor choice in the same transaction",
 		assert.ok(after.objective.includes("Revised objective"), "objective updated");
 		assert.equal(after.skipAuditor, true, "skipAuditor mutated in the tweak transaction");
 		assert.ok(ledgerEvents(cwd).some((e) => e.type === "goal_tweaked"), "tweak recorded");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+// ── §14 durable proposal summary and confirmation polish ──────────────────
+
+test("confirmed proposal writes the durable summary and the richer confirmation report", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-summary-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal")!.handler("Add CSV export", h.ctx);
+		const objective = "Add CSV export to the reports page.\nSuccess criteria: exports use active filters.\nVerification contract: Run npm test (0 failures)";
+		const tasks = [
+			{ id: "review", title: "Review the reports page and data source" },
+			{ id: "export", title: "Implement filtered CSV export" },
+			{ id: "download", title: "Add the download control" },
+		];
+		const pending = runProposal(h, proposalParams(objective, { tasks }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		const result = await pending;
+		const text = result.content[0].text;
+		// Durable proposal summary in the transcript (§14).
+		assert.match(text, /Proposed objective:/);
+		assert.match(text, /Add CSV export to the reports page\./);
+		assert.match(text, /Proposed plan:/);
+		assert.match(text, /1\. Review the reports page and data source/);
+		assert.match(text, /2\. Implement filtered CSV export/);
+		assert.match(text, /Verification:/);
+		assert.match(text, /Run npm test \(0 failures\)/);
+		assert.match(text, /Automatic continuation: enabled/);
+		assert.match(text, /Independent auditor: enabled/);
+		// Richer confirmation output (§14).
+		assert.match(text, /✓ Goal created and focused\./);
+		assert.match(text, /Continuing automatically with the confirmed plan\./);
+		assert.match(text, /Goal id: /);
+		assert.match(text, /File: \.pi\/goals\/active_goal_/);
+		assert.match(text, /Tasks: 3/);
+		assert.match(text, /Verification: Run npm test \(0 failures\)/);
+		assert.match(text, /Auditor: enabled/);
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("questionnaire answers are captured in the confirmed-goal report (E5 §14)", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-qa-echo-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal")!.handler("Scope the migration", h.ctx);
+		const questionnaire = h.tools.get("goal_questionnaire");
+		const pendingQ = questionnaire.execute("q-echo", {
+			questions: [{ id: "scope", question: "Which systems?", options: ["A", "B"] }],
+		}, new AbortController().signal, undefined, h.ctx);
+		assert.ok(h.hasDialog());
+		h.dialogResult({
+			questions: [{ id: "scope", question: "Which systems?", options: ["A", "B"], allowCustom: true }],
+			answers: [{ id: "scope", question: "Which systems?", answer: "A", wasCustom: false }],
+			cancelled: false,
+		});
+		await pendingQ;
+		const pending = runProposal(h, proposalParams("Migrate systems A.\nSuccess criteria: all services moved."));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		const result = await pending;
+		// The Q&A echo survives draft clearing and appears in the report.
+		assert.match(result.content[0].text, /Which systems\?/);
+		assert.match(result.content[0].text, /A/);
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("cancel and refine outcomes still carry the durable proposal summary", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-summary-cancel-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal")!.handler("Ship a feature", h.ctx);
+		// Cancel carries the summary.
+		const pendingCancel = runProposal(h, proposalParams("Ship a feature.\nSuccess criteria: tests pass."));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CANCEL_ANSWER, wasCustom: false }], cancelled: false });
+		const cancelled = await pendingCancel;
+		assert.match(cancelled.content[0].text, /Proposed objective:/);
+		assert.match(cancelled.content[0].text, /Draft cancelled/);
+		assert.equal(activeGoalFiles(cwd).length, 0, "cancel must not create a goal");
+		// Refine carries the summary and keeps the draft.
+		await h.commands.get("goal")!.handler("Ship a feature", h.ctx);
+		const pendingRefine = runProposal(h, proposalParams("Ship a feature.\nSuccess criteria: tests pass."));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONTINUE_ANSWER, wasCustom: false }], cancelled: false });
+		const refined = await pendingRefine;
+		assert.match(refined.content[0].text, /Proposed objective:/);
+		assert.match(refined.content[0].text, /Automatic continuation: enabled/);
+		assert.match(refined.content[0].text, /refinement requested/);
+		assert.equal(activeGoalFiles(cwd).length, 0, "refining must not create a goal");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+// ── F2 regression: proposals always show the task list exactly once ──────
+
+function testDraft(mode: ActiveGoalDraft["mode"], originalTopic: string): ActiveGoalDraft {
+	return { mode, originalTopic, startedAt: "2026-08-05T00:00:00.000Z", auditorEnabled: true };
+}
+
+function taskList(tasks: Array<{ id: string; title: string; status?: string }>) {
+	return {
+		tasks: tasks.map((t) => ({ id: t.id, title: t.title, status: (t.status ?? "pending") as "pending" })),
+		blockCompletion: false,
+		proposedAt: "2026-08-05T00:00:00.000Z",
+	};
+}
+
+function currentGoal(objective: string, tasks: Array<{ id: string; title: string; status?: string }>): GoalRecord {
+	return {
+		id: "g1",
+		objective,
+		status: "active",
+		autoContinue: true,
+		sisyphus: false,
+		taskList: taskList(tasks),
+	} as unknown as GoalRecord;
+}
+
+test("a numbered-step objective with no explicit tasks previews the derived task list in the confirmation", () => {
+	// Regression: the F2 preview derived from the boxed confirmation text
+	// (every line prefixed with "│   ") so the ordered-marker regex never
+	// matched and numbered objectives showed NO task list. Deriving from the
+	// raw objective must surface the derived tree in the confirmation.
+	const objective = "Ship the release.\n1) Implement core\n2) Add tests\n3) Write docs";
+	const text = proposalText(testDraft("goal", "Ship the release"), objective, true, undefined, undefined);
+	assert.match(text, /Tasks derived from the objective \(confirm or ask the agent to adjust\):/);
+	assert.match(text, /\[ \] step-1: Implement core/);
+	assert.match(text, /\[ \] step-2: Add tests/);
+	assert.match(text, /\[ \] step-3: Write docs/);
+	assert.doesNotMatch(text, /Tasks proposed for confirmation/);
+	assert.doesNotMatch(text, /Tasks derived from the objective[\s\S]*Tasks derived from the objective/, "derived preview appears exactly once");
+});
+
+test("a new-draft proposal with explicit tasks shows them once and never adds a derived block", () => {
+	const text = proposalText(
+		testDraft("goal", "Build a tool"),
+		"Build a tool.\n1) wire it\n2) test it",
+		true,
+		taskList([{ id: "t1", title: "Explicit task" }]),
+		undefined,
+	);
+	assert.equal((text.match(/Tasks proposed for confirmation:/g) ?? []).length, 1, "explicit list shown exactly once");
+	assert.equal((text.match(/Tasks derived from the objective/g) ?? []).length, 0, "no derived block when tasks are explicit");
+	assert.match(text, /\[ \] t1: Explicit task/);
+});
+
+test("a tweak confirmation renders the explicit task list exactly once", () => {
+	// Regression: buildTweakConfirmationText already renders tasks inside its
+	// ┌─ TASKS ─┐ box; appending a second "Tasks proposed" block duplicated it.
+	const current = currentGoal("Old objective.", [{ id: "old", title: "Old task", status: "complete" }]);
+	const text = proposalText(
+		testDraft("tweak", "Revise the plan"),
+		"New objective.",
+		true,
+		taskList([{ id: "new-1", title: "New task" }]),
+		current,
+	);
+	assert.equal((text.match(/┌─ TASKS ─/g) ?? []).length, 1, "the task box renders exactly once");
+	assert.equal((text.match(/Tasks proposed for confirmation:/g) ?? []).length, 0, "no duplicated appended list");
+	assert.match(text, /\[ \] new-1: New task/);
+	assert.doesNotMatch(text, /Current task list \(retained unchanged\):/, "explicit tasks replace the retained preview");
+});
+
+test("a tweak without explicit tasks previews the retained current list exactly once", () => {
+	const current = currentGoal("Old objective.", [{ id: "keep", title: "Retained task", status: "complete" }]);
+	const text = proposalText(testDraft("tweak", "Clarify wording"), "Clarified objective.", true, undefined, current);
+	assert.equal((text.match(/Current task list \(retained unchanged\):/g) ?? []).length, 1, "retained list shown exactly once");
+	assert.match(text, /\[ \] keep: Retained task/);
+	assert.equal((text.match(/┌─ TASKS ─/g) ?? []).length, 0, "no empty explicit task box");
+	assert.doesNotMatch(text, /Tasks proposed for confirmation:/);
+	assert.doesNotMatch(text, /Tasks derived from the objective/);
+});
+
+// ── §7.5 regression: a tweak never changes the status of persisting steps ─
+
+test("a tweak merges the proposed task list by id, preserving statuses of surviving steps", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-merge-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		// Seed a task list on disk with a completed step, a removable step, and
+		// the current task. /goal-tweak reconciles from disk before drafting.
+		const goal = firstGoal(cwd);
+		writeActiveGoalFile({ cwd }, {
+			...goal,
+			currentTaskId: "ct",
+			taskList: {
+				tasks: [
+					{ id: "keep", title: "Surviving task", status: "complete", evidence: "Done it.", completedAt: "2026-08-05T10:00:00.000Z", verificationContract: "tests pass" },
+					{ id: "drop", title: "Removed task", status: "pending" },
+					{ id: "ct", title: "Current task", status: "pending" },
+				],
+				blockCompletion: false,
+				proposedAt: "2026-08-05T09:00:00.000Z",
+			},
+		});
+		await h.commands.get("goal-tweak")!.handler("Revise the scope", h.ctx);
+		const pending = runProposal(h, proposalParams("Revised objective", {
+			sisyphus: false,
+			tasks: [
+				{ id: "keep", title: "Surviving task (retitled)", verification_contract: "contract v2" },
+				{ id: "fresh", title: "Brand new task" },
+			],
+		}));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+		const after = firstGoal(cwd);
+		const byId = new Map(after.taskList?.tasks.map((t) => [t.id, t]) ?? []);
+		const keep = byId.get("keep");
+		assert.equal(keep?.status, "complete", "persisting step keeps its status across the tweak");
+		assert.equal(keep?.evidence, "Done it.", "evidence preserved");
+		assert.equal(keep?.completedAt, "2026-08-05T10:00:00.000Z", "completedAt preserved");
+		assert.equal(keep?.verificationContract, "contract v2", "structural fields (contract) follow the proposal");
+		assert.equal(keep?.title, "Surviving task (retitled)", "structural fields follow the proposal");
+		assert.equal(byId.has("drop"), false, "removed step is dropped");
+		assert.equal(byId.has("ct"), false, "removed current task is dropped");
+		assert.equal(byId.get("fresh")?.status, "pending", "new step starts pending");
+		assert.equal(after.currentTaskId, undefined, "currentTaskId cleared when its task no longer survives pending");
+		const setEvent = ledgerEvents(cwd).find((e) => e.type === "task_list_set");
+		assert.equal(setEvent?.taskCount, 2, "ledger records the merged task count");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("a tweak with no task list retains the current list and keeps its statuses", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-retain-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		const goal = firstGoal(cwd);
+		writeActiveGoalFile({ cwd }, {
+			...goal,
+			currentTaskId: "do",
+			taskList: {
+				tasks: [
+					{ id: "do", title: "In progress", status: "pending" },
+					{ id: "done", title: "Already done", status: "complete", evidence: "Shipped.", completedAt: "2026-08-05T08:00:00.000Z" },
+				],
+				blockCompletion: false,
+				proposedAt: "2026-08-05T09:00:00.000Z",
+			},
+		});
+		await h.commands.get("goal-tweak")!.handler("Clarify the wording", h.ctx);
+		// No tasks in the proposal: the current list is retained unchanged.
+		const pending = runProposal(h, proposalParams("Clarified objective", { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+		const after = firstGoal(cwd);
+		const byId = new Map(after.taskList?.tasks.map((t) => [t.id, t]) ?? []);
+		assert.equal(byId.get("do")?.status, "pending", "pending task untouched");
+		assert.equal(byId.get("done")?.status, "complete", "completed task untouched");
+		assert.equal(after.currentTaskId, "do", "currentTaskId retained when its task is still pending");
+		assert.equal(ledgerEvents(cwd).some((e) => e.type === "task_list_set"), false, "no task_list_set event when the list is retained");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}

@@ -2,16 +2,16 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
-import { buildDraftConfirmationText, buildTweakConfirmationText, goalDraftingPrompt, type GoalDraftingFocus } from "./goal-draft.ts";
+import { buildDraftConfirmationText, buildProposalSummary, buildTweakConfirmationText, goalDraftingPrompt, type GoalDraftingFocus } from "./goal-draft.ts";
 import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
 import { buildGoalCreatedReport } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { formatQuestionnaireAnswers, runGoalQuestionnaire, shouldAutoConfirmProposal, showProposalDialog, type GoalQuestionnaireQuestion, type ProposalDecision } from "./goal-questionnaire.ts";
-import { nowIso, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
+import { currentTaskIdIsPending, nowIso, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
-import { countTasks, convertFlatTasks, type FlatTaskInput } from "./goal-task-tools.ts";
+import { convertFlatTasks, countTasks, mergeTasksWithExisting, type FlatTaskInput } from "./goal-task-tools.ts";
 import { PROPOSE_DRAFT_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME } from "./goal-tool-names.ts";
 
 export type GoalDraftMode = GoalDraftingFocus | "tweak";
@@ -35,7 +35,7 @@ export interface GoalDraftSession {
 	clearedAt?: string;
 }
 
-interface ActiveGoalDraft {
+export interface ActiveGoalDraft {
 	mode: GoalDraftMode;
 	originalTopic: string;
 	targetGoalId?: string;
@@ -183,24 +183,33 @@ function proposedTaskList(core: GoalCore, ctx: ExtensionContext, tasks: FlatTask
 	return { ok: true, value: { tasks: converted.tasks, blockCompletion: blockCompletion === true, proposedAt: nowIso() } };
 }
 
-function proposalText(draft: ActiveGoalDraft, objective: string, autoContinue: boolean, taskList: GoalTaskList | undefined, current?: GoalRecord): string {
+export function proposalText(draft: ActiveGoalDraft, objective: string, autoContinue: boolean, taskList: GoalTaskList | undefined, current?: GoalRecord): string {
 	const base = draft.mode === "tweak" && current
 		? buildTweakConfirmationText({ currentObjective: current.objective, newObjective: objective, changeSummary: draft.originalTopic || "Goal revised through guided drafting.", sisyphus: current.sisyphus, tasks: taskList?.tasks })
 		: buildDraftConfirmationText({ focus: draft.mode === "sisyphus" ? "sisyphus" : "goal", originalTopic: draft.originalTopic, objective, autoContinue });
-	// F2 (option A, user-approved 2026-08-05): when a new draft has no proposed
-	// task list but the objective has ≥2 checklist/ordered markers, preview the
-	// derived tree in the confirmation so the human can adjust it before the
-	// goal exists. Plain objectives render byte-identical to 383ae52.
+	// The task list is always shown exactly once in a proposal: explicitly
+	// proposed tasks, or (new drafts) tasks derived from the RAW objective, or
+	// (tweaks) the current goal's list when it is retained unchanged. Deriving
+	// from the boxed base text would never match: formatPrefixedLines prefixes
+	// every objective line with "│   " so checklist/ordered markers are hidden.
 	let tasksText = "";
-	if (taskList && taskList.tasks.length > 0) {
+	if (draft.mode === "tweak") {
+		// buildTweakConfirmationText already renders explicit tasks exactly once
+		// inside its ┌─ TASKS ─┐ box; never append a second render. When no
+		// explicit list is proposed the current list is retained on apply
+		// (taskResult.value ?? goal.taskList), so preview it for confirmation.
+		if (!taskList && current?.taskList && current.taskList.tasks.length > 0) {
+			tasksText = "\n\nCurrent task list (retained unchanged):\n" + renderConfirmationTasks(current.taskList.tasks, 0).join("\n");
+		}
+	} else if (taskList && taskList.tasks.length > 0) {
 		tasksText = "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
-	} else if (draft.mode !== "tweak") {
-		const derived = deriveTasksFromObjective(base);
+	} else {
+		const derived = deriveTasksFromObjective(objective);
 		if (derived && derived.length > 0) {
 			tasksText = "\n\nTasks derived from the objective (confirm or ask the agent to adjust):\n" + renderConfirmationTasks(derived, 0).join("\n");
 		}
 	}
-	return !taskList && draft.mode === "tweak" ? base : base + tasksText;
+	return base + tasksText;
 }
 
 function flatTaskSchema() {
@@ -319,9 +328,21 @@ export function registerDraftingTools(core: GoalCore): void {
 					core.exitGoalModal();
 				}
 			}
+			const settings = loadGoalSettings(ctx.cwd);
+			const extracted = settings.disableContracts ? { objective, verificationContract: undefined } : extractVerificationContract(objective);
+			// §14: the durable proposal summary is part of the transcript for
+			// EVERY outcome (confirm / continue refining / cancel), so the user
+			// can review the proposal after the dialog closes.
+			const summary = buildProposalSummary({
+				objective: extracted.objective,
+				taskList: taskResult.value,
+				verificationContract: extracted.verificationContract,
+				autoContinue: params.auto_continue !== false,
+				auditorEnabled: draft.auditorEnabled,
+			});
 			if (confirmation.decision === "cancel") {
 				clearGoalDrafting(core, ctx);
-				return { content: [{ type: "text", text: "Draft cancelled; no goal was created. Run /goal or /sisyphus to start a new draft." }], details: goalDetails(core.state.goal) };
+				return { content: [{ type: "text", text: `${summary}\n\nDraft cancelled; no goal was created. Run /goal or /sisyphus to start a new draft.` }], details: goalDetails(core.state.goal) };
 			}
 			if (confirmation.decision !== "confirm") {
 				// Continue refining: preserve the user's auditor choice for the
@@ -331,11 +352,12 @@ export function registerDraftingTools(core: GoalCore): void {
 					activeDrafts.set(core, next);
 					draftSessionEntry(core, { version: 1, mode: next.mode, seed: next.originalTopic, targetGoalId: next.targetGoalId, startedAt: next.startedAt, auditorEnabled: next.auditorEnabled });
 				}
-				return { content: [{ type: "text", text: "Goal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again." }], details: goalDetails(core.state.goal) };
+				return { content: [{ type: "text", text: `${summary}\n\nGoal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.` }], details: goalDetails(core.state.goal) };
 			}
 			const skipAuditor = confirmation.auditorEnabled === false;
-			const settings = loadGoalSettings(ctx.cwd);
-			const extracted = settings.disableContracts ? { objective, verificationContract: undefined } : extractVerificationContract(objective);
+			// §14: capture the questionnaire answers BEFORE clearing draft state so
+			// the confirmed-goal report can include them reliably (E5).
+			const qaEcho = draft.questionnaireEcho;
 			if (draft.mode !== "tweak") {
 				// F2: if the confirmation carried no task plan but the objective has
 				// structure, bootstrap the derived tree so the goal starts trackable.
@@ -345,24 +367,48 @@ export function registerDraftingTools(core: GoalCore): void {
 				})();
 				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: effectiveTaskList, skipAuditor }, ctx, true, extracted.verificationContract);
 				clearGoalDrafting(core, ctx);
-				// E5: echo the questionnaire Q&A in the created-goal report so the
-				// user can verify their input survived the clarification loop.
-				const qaEcho = activeDraft(core)?.questionnaireEcho;
-				return { content: [{ type: "text", text: buildGoalCreatedReport({ objective: extracted.objective, detailedSummary: qaEcho }) }], details: goalDetails(core.state.goal), terminate: true };
+				const created = core.state.goal;
+				return { content: [{ type: "text", text: `${summary}\n\n${buildGoalCreatedReport({
+					objective: extracted.objective,
+					detailedSummary: qaEcho,
+					confirmed: true,
+					goalId: created?.id,
+					filePath: created?.activePath,
+					taskCount: created?.taskList ? countTasks(created.taskList.tasks) : undefined,
+					verificationContract: created?.verificationContract,
+					auditorEnabled: !skipAuditor,
+					tokenBudget: created?.tokenBudget,
+				})}` }], details: goalDetails(core.state.goal), terminate: true };
 			}
 			if (!target) return { content: [{ type: "text", text: "The goal changed while drafting; review it and start /goal-tweak again." }], details: goalDetails(core.state.goal) };
 			const token = core.focusedOperationToken(target.id);
 			const now = nowIso();
+			// §7.5 merge: a goal tweak must never change the status of steps that
+			// persist across the tweak. The proposed list merges into the goal's
+			// existing tree by id (same semantics as set_goal_tasks): surviving ids
+			// keep status/evidence/completedAt/skippedAt/skipReason, new ids start
+			// pending, removed ids drop. currentTaskId survives only while its task
+			// is still pending in the merged tree.
 			const result = core.goalService.apply(ctx, {
 				reconcile: false, focusToken: token, refreshFromDisk: true,
-				mutate: (goal) => ({ ...goal, objective: extracted.objective, verificationContract: extracted.verificationContract ?? goal.verificationContract, taskList: taskResult.value ?? goal.taskList, skipAuditor, updatedAt: now }),
-				ledger: (written) => [{ type: "goal_tweaked", goalId: written.id, changeSummary: "Goal revised through /goal-tweak drafting.", at: written.updatedAt }, ...(taskResult.value ? [{ type: "task_list_set" as const, goalId: written.id, taskCount: countTasks(taskResult.value.tasks), blockCompletion: taskResult.value.blockCompletion, at: written.updatedAt }] : [])],
+				mutate: (goal) => {
+					const proposed = taskResult.value;
+					const mergedTaskList = proposed && goal.taskList
+						? { ...proposed, tasks: mergeTasksWithExisting(goal.taskList.tasks, proposed.tasks) }
+						: proposed;
+					const taskList = mergedTaskList ?? goal.taskList;
+					const currentTaskId = mergedTaskList && goal.currentTaskId && !currentTaskIdIsPending(mergedTaskList.tasks, goal.currentTaskId)
+						? undefined
+						: goal.currentTaskId;
+					return { ...goal, objective: extracted.objective, verificationContract: extracted.verificationContract ?? goal.verificationContract, taskList, currentTaskId, skipAuditor, updatedAt: now };
+				},
+				ledger: (written) => [{ type: "goal_tweaked", goalId: written.id, changeSummary: "Goal revised through /goal-tweak drafting.", at: written.updatedAt }, ...(taskResult.value ? [{ type: "task_list_set" as const, goalId: written.id, taskCount: countTasks(written.taskList?.tasks), blockCompletion: taskResult.value.blockCompletion, at: written.updatedAt }] : [])],
 			});
 			if (!result.ok) return { content: [{ type: "text", text: "Goal tweak was not applied: " + result.message }], details: goalDetails(core.state.goal) };
 			core.clearContinuationState();
 			core.updateUI(ctx);
 			clearGoalDrafting(core, ctx);
-			return { content: [{ type: "text", text: "Goal tweak confirmed and applied." }], details: goalDetails(result.goal), terminate: true };
+			return { content: [{ type: "text", text: `${summary}\n\nGoal tweak confirmed and applied.` }], details: goalDetails(result.goal), terminate: true };
 		},
 		renderCall(args, theme) { return new Text(theme.fg("toolTitle", "propose_goal_draft ") + theme.fg("muted", args?.objective ?? ""), 0, 0); },
 		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },

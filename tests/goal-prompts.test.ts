@@ -314,3 +314,38 @@ test("active prompts no longer reference removed tools", () => {
 		assert.ok(prompt.includes("set_goal_tasks") || prompt.includes("update_goal_task"), "prompt must mention the task tools");
 	}
 });
+
+test("taskListBlock surfaces the persisted current task with its contract", () => {
+	const g = goal({ id: "focus-goal" });
+	g.taskList = {
+		tasks: [
+			{ id: "t1", title: "Task one", status: "pending" },
+			{ id: "t2", title: "Task two", status: "pending", verificationContract: "Run the check." },
+		],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	g.currentTaskId = "t2";
+	const block = taskListBlock(g);
+	assert.match(block, /Current: t2 · Task two \(contract: Run the check\.\)/);
+	// No focus: no Current line.
+	g.currentTaskId = undefined;
+	assert.doesNotMatch(taskListBlock(g), /Current:/);
+	// Focus on a contract-less task: no contract suffix.
+	g.currentTaskId = "t1";
+	assert.match(taskListBlock(g), /Current: t1 · Task one\n/);
+});
+
+test("prompt cache key changes when currentTaskId changes", () => {
+	const g = goal({ id: "cache-goal" });
+	g.taskList = {
+		tasks: [{ id: "t1", title: "Task one", status: "pending" }],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const before = continuationPrompt(g);
+	g.currentTaskId = "t1";
+	const after = continuationPrompt(g);
+	assert.match(after, /Current: t1 · Task one/);
+	assert.doesNotMatch(before, /Current:/);
+});

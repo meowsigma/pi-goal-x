@@ -1,12 +1,10 @@
-import {
-	statusLabel,
-	truncateText,
-} from "../goal-core.ts";
+import { statusLabel, truncateText } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-contract.ts";
 import type { GoalRecord, GoalTask, TaskStatus } from "../goal-record.ts";
 import { countTaskSubtree } from "../goal-task-count.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 import { budgetLine } from "../goal-accounting.ts";
+import { findTaskInTree } from "../goal-policy.ts";
 
 /** Hard cap for the complete injected prompt fragment (TECH Stage 6). */
 export const MAX_PROMPT_FRAGMENT_CHARS = 10_000;
@@ -65,11 +63,21 @@ export function taskListBlock(goal: GoalRecord, settings?: GoalSettings): string
 	const { total, complete, skipped, pending, pendingTasks } = countTaskSubtree(goal.taskList.tasks, { collectPending: true });
 	const lines: string[] = [];
 	lines.push(`[TASK LIST — ${complete}/${total} tasks complete${skipped > 0 ? ` (${skipped} skipped)` : ""}]`);
+	// §8.1: surface the persisted execution focus (current task), with its
+	// verification contract when present, so the next continuation prompt
+	// carries the contract of the task the agent is working on.
+	if (goal.currentTaskId) {
+		const current = findTaskInTree(goal.taskList.tasks, goal.currentTaskId);
+		if (current) {
+			const contract = current.verificationContract ? ` (contract: ${current.verificationContract})` : "";
+			lines.push(`  Current: ${current.id} · ${current.title}${contract}`);
+		}
+	}
 	const rendered = { count: 0, stop: false };
 	lines.push(...renderPendingTasks(goal.taskList.tasks, 0, rendered));
 	const hiddenPending = (pending ?? 0) - rendered.count;
 	if (hiddenPending > 0) {
-		lines.push(`  (+${hiddenPending} more pending — see the task overlay, Ctrl+Shift+T)`);
+		lines.push(`  (+${hiddenPending} more pending — expand the dashboard with Ctrl+Shift+T)`);
 	}
 	if (goal.taskList.blockCompletion && pending! > 0) {
 		lines.push("  TASK GATE: do not request completion while tasks remain in [ ] pending state");
@@ -144,6 +152,8 @@ function promptCacheKey(goal: GoalRecord, settings?: GoalSettings): string {
 	return JSON.stringify([
 		goal.id, goal.revision, goal.updatedAt, goal.status, goal.autoContinue, goal.sisyphus,
 		goal.usage.tokensUsed, goal.usage.activeSeconds,
+		// §7.1/§8.1: execution focus changes the Current: line in the task block.
+		goal.currentTaskId,
 		settings?.disableTasks, settings?.disableContracts,
 	]);
 }

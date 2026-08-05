@@ -1,0 +1,54 @@
+# Milestones: Extension review plan (plan-only)
+
+## Plan
+
+Read the extension in full (every module, no exceptions), verify the module
+list against the tree, write a committed spec (`specs/2026-08-04-extension-review-plan/`)
+containing a coverage map plus three prioritized sections (optimisation,
+feature enhancements, 3–10 new features) with description + rationale + user
+value per item and no effort/risk ratings, then get user signoff. No
+implementation.
+
+## Log
+
+### 1. Full audit (coverage map)
+
+- Enumerated the tree: 35 modules under `extensions/` (~9,538 lines), 24 test
+  files under `tests/`, experiment cases B1–B2 / C1–C26, the scroll-repro
+  harness, four docs.
+- Read every extension module end-to-end (goal.ts, goal-state.ts,
+  goal-service.ts, goal-events.ts, goal-commands.ts, goal-core-tools.ts,
+  goal-task-tools.ts, goal-completion.ts, goal-auditor.ts, goal-drafting.ts,
+  goal-questionnaire.ts, goal-widget.ts + widgets/, goal-runtime.ts,
+  goal-policy.ts, goal-record.ts, goal-ledger.ts, goal-pool.ts,
+  goal-compaction.ts, goal-accounting.ts, goal-format.ts, goal-core.ts,
+  goal-settings.ts, goal-contract.ts, goal-draft.ts, goal-tool-names.ts,
+  goal-tools.ts, auditor-selector.ts, storage/, prompts/).
+- Key audit findings: goal-state.ts monolith (870 lines, ~50-member
+  interface); full-dir pool scan per reconcile; full ledger JSONL parse up to
+  2×/turn; sync settings read on hot paths; synchronous lock sleeps on the
+  main thread; 4+ task-counting implementations; duplicated
+  extractVerificationContract / renderConfirmationTasks / dialog scaffolds;
+  entire task tree rendered into every continuation prompt; debug surface
+  shipped in the production bundle; ledger-failure diagnostic boilerplate at
+  5 sites.
+- Verified map completeness programmatically: 35/35 modules named (five rows
+  use the `storage/`/`widgets/`/`prompts/` path-prefixed form).
+
+### 2. Plan sections
+
+- Optimisation: 10 items (P1-1..P1-10) — settings/pool/ledger caching,
+  counting consolidation, deduplication, async locks, batch ledger appends,
+  prompt-tree trimming, goal-state decomposition, debug-surface pruning.
+- Enhancements: 8 items (E1..E8) — history in status, widget task depth,
+  effective-settings visibility, auditor skill reuse, budget awareness,
+  drafting-answer echo, sisyphus step progress, pause-reason detail line.
+- New features: 10 items (F1..F10) — dashboard, archive/reopen, stall
+  detector, quiet hours, export/import, budget alerts, autoContinue presets,
+  audit retention/diffing, sisyphus step widget, headless pause banner;
+  balance check maps each to agent/human/TUI surfaces.
+
+### 3. Validation + signoff
+
+- Coverage map verified 35/35; spec documents are the only changes (no code
+  touched); awaiting user signoff in a real terminal.

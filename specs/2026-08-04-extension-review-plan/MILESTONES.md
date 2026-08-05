@@ -137,3 +137,37 @@ implementation.
   run), and B9 (committed baseline table + per-feature wall-clock budgets as
   targets for the next run); Part 4 framing and B6's gate scope (B1–B9)
   updated.
+
+---
+
+## Implementation log — branch `implement/review-plan-2026-08-04`
+
+### Milestone 1 — branch + docs move (task 1, 2026-08-04)
+Branch created from `6b42045` (0.22.0 release); the 11 plan-docs commits
+(`3e4127a`..`cc7d7e4`) cherry-picked onto it (`e31a0fb`..`eaec52e`); local
+main reset to `6b42045` == origin/main, zero `extension-review-plan` files on
+main. Both histories verified via `git log`/`git ls-tree`.
+
+### Milestone 2 — agent-free benchmark harness + BEFORE baselines (task 2, 2026-08-04)
+Built `experiments/bench/` per PLAN.md Part 4:
+- B8 guard layer: `bench-adapter-hooks.mjs` (registerHooks) redirects the pi
+  packages to the test stubs (`createAgentSession` throws) and
+  `node:fs`/`node:net`/`node:http`/`node:https`/`node:child_process` to
+  counting/throwing wrappers; `assertNoViolations` gates every run.
+- B1 I/O micro-benches with 25ms/op latency injection; B2 synthetic
+  read/mutation turn accounting (fs ops + ms); B3 ledger scale 1k/5k/10k;
+  B4 prompt token counts (chars/4 estimate + documented prefill heuristic,
+  no live measurement); B5 startup (1/10/50 goals) + two-process lock
+  contention + completion dispatch to pre-audit gate with stubbed auditor;
+  B7 feature-wide matrix (69 rows) over the Part 0 module map; B6 gate
+  script; B9 emitter (`run-bench.mjs`).
+- `npm run bench -- before` = 69 rows in 62s, **0 agent/network/spawn
+  violations**; baselines committed at `experiments/bench/baseline-before.json`
+  and `specs/2026-08-04-extension-review-plan/BENCH-BEFORE.md`.
+
+BEFORE headline evidence (this machine):
+- pool scan @25ms/op: 124ms/1 goal, 688ms/10, 3206ms/50 (vs 0.1/0.5/1.6ms
+  local) — P1-1/P1-7 lever; contended lock 2832ms frozen main thread — P1-5;
+  ledger parse 0.5→5.1ms 1k→10k (O(n)) — P1-2; read turn 6 fs ops @1 goal,
+  24 @10 — P1-1; one task mutation 28 fs ops — P1-3; continuation prompt
+  2505 est tokens @50 tasks — P1-4.

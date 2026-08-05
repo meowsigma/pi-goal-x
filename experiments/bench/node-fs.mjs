@@ -54,9 +54,24 @@ export const unlinkSync = wrapSync("unlinkSync");
 export const mkdtempSync = wrapSync("mkdtempSync");
 export const rmSync = wrapSync("rmSync");
 
-// Passthrough for anything else a consumer might use (constants, promises,
-// watch, etc.) — never patched, but present so imports do not break.
-export const promises = real.promises;
+// Async promises API: wrapped for counting + latency injection too (P1-7's
+// parallel startup reader uses fs.promises; without wrapping, injected
+// latency would silently bypass the measured path).
+function wrapPromiseMethod(name, original) {
+	return async function patchedAsync(...args) {
+		state.fsOpCount++;
+		if (state.latencyMs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, state.latencyMs));
+		}
+		return original.apply(this, args);
+	};
+}
+const wrappedPromises = {};
+for (const key of Object.keys(real.promises)) {
+	const member = real.promises[key];
+	wrappedPromises[key] = typeof member === "function" ? wrapPromiseMethod(key, member) : member;
+}
+export const promises = wrappedPromises;
 export const constants = real.constants;
 export const watch = real.watch;
 export const watchFile = real.watchFile;

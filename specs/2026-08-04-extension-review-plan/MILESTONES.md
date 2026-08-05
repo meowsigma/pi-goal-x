@@ -307,3 +307,25 @@ clean. Surfaces per feature:
 Also fixed during F5/F6: `loadGoalSettings` was dropping the new
 `auditorProjectResources`/`stallTimeoutMinutes` fields from its returned
 object (E3's setting was silently inert) — both now carried through.
+
+### Milestone 6 — BENCH-AFTER + B9 budgets (task 6, 2026-08-05)
+Full agent-free after-run: 72 rows in ~35s, **0 B8 violations**. B6 gate:
+**PASS** (no regressions, all claim-specific invariants). Committed artifacts:
+`experiments/bench/baseline-after.json`,
+`specs/2026-08-04-extension-review-plan/BENCH-AFTER.md`,
+`specs/2026-08-04-extension-review-plan/BENCH-DIFF.md` (before→after + B9
+budgets). Also wrapped `fs.promises` in the bench node-fs wrapper so the
+parallel-startup path is counted + latency-injected (P1-7 verified honestly).
+
+Headline verified magnitudes:
+- lock contended wait 2831.9→248.3ms (**11x** fail-fast, P1-5)
+- ledger parse 5.1ms@10k → ~0ms, flat across sizes (P1-2 O(1))
+- taskListBlock 2154→387 est tokens (**5.6x**, P1-4); continuationPrompt
+  2505→1083 (2.3x)
+- startup @25ms/op: 50 goals 29.5ms vs the sync scan's 3206ms (**~100x**,
+  P1-7); local startup 0.3→0.6ms (async overhead on tiny reads)
+- pool scan @25ms/op 688→350ms (10 goals), 3206→1643ms (50 goals) (~2x,
+  P1-1; stats remain serial in the sync reader)
+- settings load @25ms/op 60.9→33.8ms; per-turn read ops 6→4 / 24→13
+- 5 in-turn task mutations 140→38 fs ops (P1-3)
+- warm-auditor dispatch 1.3→1.2ms (win is session warm-start, not dispatch)

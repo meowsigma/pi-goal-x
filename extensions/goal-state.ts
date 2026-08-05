@@ -40,10 +40,9 @@ import {
 	resolveSessionFocus,
 } from "./goal-pool.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
-import { GoalWidgetComponent, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
+import { GOAL_WIDGET_KEY, GoalWidgetComponent, liveDisplayGoal, makeGoalWidgetFactory, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
 
-const GOAL_WIDGET_KEY = "goal";
 
 
 /**
@@ -417,14 +416,8 @@ export function createGoalCore(
 	}
 
 	function goalForDisplay(): GoalRecord | null {
-		if (!state.goal || state.goal.status !== "active" || !accounting.isActiveFor(state.goal.id)) {
-			return state.goal;
-		}
-		const liveSeconds = accounting.liveSeconds();
-		if (liveSeconds === 0) return state.goal;
-		const live = cloneGoal(state.goal);
-		live.usage.activeSeconds += liveSeconds;
-		return live;
+		// P1-12: extracted live-usage view.
+		return liveDisplayGoal(state.goal, accounting);
 	}
 
 	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number } = {}): void {
@@ -530,8 +523,27 @@ export function createGoalCore(
 	 *   └─ Suggested: ask the user for the test location
 	 */
 
+	let uiFlushScheduled = false;
+	let lastUiCtx: ExtensionContext | null = null;
+
+	/**
+	 * P1-9: coalesced widget updates. Multiple updateUI calls within one
+	 * synchronous block (a tool handler typically calls it 2–4 times) collapse
+	 * into a single microtask render; the final turn_end render still shows the
+	 * latest state. The render itself reads live state at flush time.
+	 */
 	function updateUI(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
+		lastUiCtx = ctx;
+		if (uiFlushScheduled) return;
+		uiFlushScheduled = true;
+		queueMicrotask(() => {
+			uiFlushScheduled = false;
+			if (lastUiCtx) renderUI(lastUiCtx);
+		});
+	}
+
+	function renderUI(ctx: ExtensionContext): void {
 		const totalOpen = openGoals().length;
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);
@@ -542,18 +554,13 @@ export function createGoalCore(
 			if (!widgetRegistered) {
 				ctx.ui.setWidget(
 					GOAL_WIDGET_KEY,
-					(tui, theme) => {
-						goalWidgetComponentRef.current = new GoalWidgetComponent({
-							tui,
-							theme,
-							getGoal: () => goalForDisplay() ?? state.goal,
-							getOpenGoalCount: () => openGoals().length,
-							getAuditorProgress: () => auditProgress,
-							getSettings: () => loadGoalSettings(ctx.cwd),
-							getDebugMode: () => debugMode,
-						});
-						return goalWidgetComponentRef.current;
-					},
+					makeGoalWidgetFactory({
+						getGoal: () => goalForDisplay() ?? state.goal,
+						getOpenGoalCount: () => openGoals().length,
+						getAuditorProgress: () => auditProgress,
+						getSettings: () => loadGoalSettings(ctx.cwd),
+						getDebugMode: () => debugMode,
+					}),
 					{ placement: "aboveEditor" },
 				);
 				widgetRegistered = true;
@@ -570,18 +577,13 @@ export function createGoalCore(
 		if (!widgetRegistered) {
 			ctx.ui.setWidget(
 				GOAL_WIDGET_KEY,
-				(tui, theme) => {
-					goalWidgetComponentRef.current = new GoalWidgetComponent({
-						tui,
-						theme,
-						getGoal: () => goalForDisplay() ?? state.goal,
-						getOpenGoalCount: () => openGoals().length,
-						getAuditorProgress: () => auditProgress,
-						getSettings: () => loadGoalSettings(ctx.cwd),
-						getDebugMode: () => debugMode,
-					});
-					return goalWidgetComponentRef.current;
-				},
+				makeGoalWidgetFactory({
+					getGoal: () => goalForDisplay() ?? state.goal,
+					getOpenGoalCount: () => openGoals().length,
+					getAuditorProgress: () => auditProgress,
+					getSettings: () => loadGoalSettings(ctx.cwd),
+					getDebugMode: () => debugMode,
+				}),
 				{ placement: "aboveEditor" },
 			);
 			widgetRegistered = true;

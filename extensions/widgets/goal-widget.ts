@@ -8,7 +8,7 @@ import {
 	truncateText,
 	type GoalDisplayRecordLike,
 } from "../goal-core.ts";
-import type { GoalTask, GoalTaskList, TaskStatus } from "../goal-record.ts";
+import type { GoalRecord, GoalTask, GoalTaskList, TaskStatus } from "../goal-record.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
@@ -23,6 +23,46 @@ export interface GoalWidgetRecord extends GoalDisplayRecordLike {
 	pauseSuggestedAction?: string;
 	taskList?: GoalTaskList | null;
 	verificationContract?: string;
+}
+
+export const GOAL_WIDGET_KEY = "goal";
+
+/**
+ * Live display record for the widget/status line: the accounted usage view
+ * (clone with live elapsed seconds) when accounting is active for the goal,
+ * otherwise the goal as-is (P1-12 extraction from goal-state).
+ */
+export function liveDisplayGoal(goal: GoalRecord | null, accounting: { isActiveFor(goalId: string): boolean; liveSeconds(): number }): GoalRecord | null {
+	if (!goal || goal.status !== "active" || !accounting.isActiveFor(goal.id)) return goal;
+	const liveSeconds = accounting.liveSeconds();
+	if (liveSeconds === 0) return goal;
+	return {
+		...goal,
+		usage: { ...goal.usage, activeSeconds: goal.usage.activeSeconds + liveSeconds },
+	};
+}
+
+/**
+ * The above-editor widget registration factory (P1-12 extraction): builds the
+ * GoalWidgetComponent factory the host UI calls at render time. Reads live
+ * state through getters so renders always see the current goal.
+ */
+export function makeGoalWidgetFactory(opts: {
+	getGoal: () => GoalWidgetRecord | null;
+	getOpenGoalCount: () => number;
+	getAuditorProgress: () => AuditorWidgetProgress | null;
+	getSettings: () => GoalSettings;
+	getDebugMode: () => boolean;
+}) {
+	return (tui: TUI, theme: Theme) => new GoalWidgetComponent({
+		tui,
+		theme,
+		getGoal: opts.getGoal,
+		getOpenGoalCount: opts.getOpenGoalCount,
+		getAuditorProgress: opts.getAuditorProgress,
+		getSettings: opts.getSettings,
+		getDebugMode: opts.getDebugMode,
+	});
 }
 
 export interface AuditorWidgetProgress {

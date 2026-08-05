@@ -100,6 +100,9 @@ export function buildGoalAuditorPrompt(args: {
 	detailedSummary: string;
 	completionSummary?: string | null;
 	settings?: GoalSettings;
+	/** P1-6: parent-rendered evidence (ledger tail + turn trail) so the audit
+	 * starts warm instead of re-deriving what the parent session already holds. */
+	warmContext?: string | null;
 }): string {
 	return [
 		"You are the independent completion auditor for pi-goal.",
@@ -135,6 +138,13 @@ export function buildGoalAuditorPrompt(args: {
 			"<verification_contract>",
 			args.goal.verificationContract.trim(),
 			"</verification_contract>",
+		] : []),
+		...(args.warmContext?.trim() ? [
+			"",
+			"Warm parent context (already-rendered evidence from the executor session — inspect, do not re-derive):",
+			"<warm_context>",
+			args.warmContext.trim(),
+			"</warm_context>",
 		] : []),
 		"",
 		"Audit checklist:",
@@ -255,6 +265,8 @@ export async function runGoalCompletionAuditor(args: {
 	detailedSummary: string;
 	completionSummary?: string | null;
 	settings?: GoalSettings;
+	/** P1-6: parent-rendered evidence (ledger tail + turn trail). */
+	warmContext?: string | null;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
 	/**

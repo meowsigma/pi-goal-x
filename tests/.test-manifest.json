@@ -3,6 +3,8 @@
   "note": "Expected test-entry manifest for the runner self-check (npm run test:selfcheck). Regenerate with: node scripts/run-unit-tests.mjs --write-manifest",
   "unitFiles": [
     ".tests/goal-accounting-runtime.test.ts",
+    ".tests/goal-activity.test.ts",
+    ".tests/goal-audit-dashboard.test.ts",
     ".tests/goal-auditor-selector.test.ts",
     ".tests/goal-auditor.test.ts",
     ".tests/goal-budget.test.ts",
@@ -10,6 +12,8 @@
     ".tests/goal-compaction.test.ts",
     ".tests/goal-core-tools.test.ts",
     ".tests/goal-core.test.ts",
+    ".tests/goal-dashboard-golden.test.ts",
+    ".tests/goal-dashboard-model.test.ts",
     ".tests/goal-deferred-archival.test.ts",
     ".tests/goal-draft.test.ts",
     ".tests/goal-drafting.test.ts",
@@ -32,7 +36,9 @@
     ".tests/goal-service.test.ts",
     ".tests/goal-settings.test.ts",
     ".tests/goal-stale-continuation-golden.test.ts",
+    ".tests/goal-status.test.ts",
     ".tests/goal-surface-baseline.test.ts",
+    ".tests/goal-task-lifecycle.test.ts",
     ".tests/goal-task-tools.test.ts",
     ".tests/goal-tasks.test.ts",
     ".tests/goal-tool-names.test.ts",
@@ -49,5 +55,8 @@
   ],
   "integrationFiles": [
     ".tests/integration/extension.test.ts"
+  ],
+  "e2eFiles": [
+    ".tests/e2e/goal-lifecycle-dashboard.test.ts"
   ]
 }

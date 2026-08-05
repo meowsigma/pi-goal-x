@@ -187,18 +187,12 @@ function proposalText(draft: ActiveGoalDraft, objective: string, autoContinue: b
 	const base = draft.mode === "tweak" && current
 		? buildTweakConfirmationText({ currentObjective: current.objective, newObjective: objective, changeSummary: draft.originalTopic || "Goal revised through guided drafting.", sisyphus: current.sisyphus, tasks: taskList?.tasks })
 		: buildDraftConfirmationText({ focus: draft.mode === "sisyphus" ? "sisyphus" : "goal", originalTopic: draft.originalTopic, objective, autoContinue });
-	let tasksText = "";
-	if (taskList && taskList.tasks.length > 0) {
-		tasksText = "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
-	} else if (draft.mode !== "tweak") {
-		// F2: bootstrap a proposed task tree from the objective's own structure
-		// so the human can see (and the agent can confirm) it before the goal exists.
-		const derived = deriveTasksFromObjective(base);
-		if (derived && derived.length > 0) {
-			tasksText = "\n\nTasks derived from the objective (confirm or ask the agent to adjust):\n" + renderConfirmationTasks(derived, 0).join("\n");
-		}
-	}
-	return !taskList && draft.mode === "tweak" ? base : base + tasksText;
+	// Note (2026-08-05): F2's confirmation-dialog preview line ("Tasks derived
+	// from the objective ...") was reverted to keep the accept-goal dialog
+	// byte-identical to 383ae52 (goal contract constraint). The bootstrap itself
+	// is untouched: the derived tree still seeds the goal at creation below, and
+	// the agent path still surfaces the derivation via set_goal_tasks guidance.
+	return !taskList || draft.mode === "tweak" ? base : base + "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
 }
 
 function flatTaskSchema() {

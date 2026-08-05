@@ -345,3 +345,23 @@ Headline verified magnitudes:
 - Benchmarks: BEFORE (69 rows) and AFTER (72 rows) agent-free baselines
   committed; B6 gate PASS; BENCH-DIFF.md + B9 budgets committed.
 - Remaining: user signoff in a real terminal.
+
+### F2 dialog-surface decision (tracking note, 2026-08-05)
+F2 originally appended a "Tasks derived from the objective (confirm or ask the
+agent to adjust):" preview section to the accept-goal confirmation proposal
+text (shown only when a new draft has no proposed task list and the objective
+contains ≥2 checklist/ordered markers). That is a byte-level change to one of
+the four goal dialogs, which the goal contract requires to stay byte-identical
+to `383ae52` (except the two existing guards) with any such change flagged to
+the user first. The change was flagged to the user on 2026-08-05 (option A =
+keep, option B = revert); no answer was received before the checkpoint
+continuation, so the constraint-safe default was applied: **the preview line
+is reverted** and `proposalText` is byte-identical to `383ae52` again (verified
+by diff: 0 dialog-output differences in `goal-drafting.ts`).
+
+The rest of F2 is untouched and fully functional: the derived tree still seeds
+the goal at creation (`goal-drafting.ts` `effectiveTaskList`), the agent path
+still surfaces the derivation via `set_goal_tasks` guidance
+(`goal-core-tools.ts`), and `goal-task-derive.ts` + its tests remain. If the
+user prefers option A, restoring the preview line is a ~6-line change confined
+to `proposalText`.

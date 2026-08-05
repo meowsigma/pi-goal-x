@@ -23,6 +23,7 @@ export interface GoalWidgetRecord extends GoalDisplayRecordLike {
 	pauseSuggestedAction?: string;
 	taskList?: GoalTaskList | null;
 	verificationContract?: string;
+	tokenBudget?: number;
 }
 
 export const GOAL_WIDGET_KEY = "goal";
@@ -287,6 +288,15 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const titleWidth = Math.max(12, safeWidth - 8);
 	const objective = truncateText(displayObjectiveTitle(goal.objective), titleWidth);
 	body.push(`${theme.fg("accent", "⟡")} ${theme.fg("text", objective)}`);
+
+	// E4: live budget progress (used/total, remaining) once a budget is set.
+	if (typeof goal.tokenBudget === "number" && goal.tokenBudget > 0) {
+		const used = Math.max(0, goal.usage.tokensUsed);
+		const pct = Math.max(0, Math.round((used / goal.tokenBudget) * 100));
+		const remaining = Math.max(0, goal.tokenBudget - used);
+		const color = pct >= 90 ? "warning" : pct >= 50 ? "accent" : "muted";
+		body.push(`${theme.fg(color, "⛽")} ${theme.fg("muted", `Budget: ${formatTokenValue(used)}/${formatTokenValue(goal.tokenBudget)} (${pct}% used · ${formatTokenValue(remaining)} remaining)`)}`);
+	}
 
 	if (!options.disableTasks && goal.taskList && goal.taskList.tasks.length > 0) {
 		const { total, done } = countFlatTasks(goal.taskList.tasks);

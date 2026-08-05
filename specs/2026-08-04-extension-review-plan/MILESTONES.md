@@ -171,3 +171,99 @@ BEFORE headline evidence (this machine):
   ledger parse 0.5→5.1ms 1k→10k (O(n)) — P1-2; read turn 6 fs ops @1 goal,
   24 @10 — P1-1; one task mutation 28 fs ops — P1-3; continuation prompt
   2505 est tokens @50 tasks — P1-4.
+
+### Milestone 3 — Part 1 optimisations P1-1..P1-13 (task 3, 2026-08-05)
+All 13 items implemented; `npm test` 502 pass (499 baseline + 3 new
+buffered-turn tests), `npm run check` clean. After-measurements land in the
+BENCH-AFTER run (task 6); preliminary verified numbers in parentheses.
+
+- **P1-1 cache-first reads** — `goal-settings.ts` mtime+size-keyed settings
+  cache (save invalidates); `storage/goal-files.ts` per-file parse cache
+  (mtime+size) + dir-listing cache (dir mtime) with invalidation on write/
+  unlink; every parse call site (pool scan, reconcile, merge-from-disk)
+  shares it. Verified: pool scan 22→11 fs ops warm; settings 2→1.
+- **P1-2 incremental ledger tail** — `readGoalLedger` byte-tail cache keyed
+  (size, mtimeMs, char offset); torn-line safe; truncation falls back to full
+  parse; steady-state = 1 statSync.
+- **P1-3 one transaction per turn** — GoalService turn buffer
+  (`beginTurn`/`flushTurn`/`endTurn`): apply/updateTask/persist/appendEvents
+  accumulate in memory during a turn; reconcile overlays the buffered goal;
+  flush = one lock + one (archive-aware) write + one batched ledger append at
+  turn_end; explicit flush boundaries: before audit dispatch (update_goal),
+  pause/stop, focus change, session reload (start/compact/tree). Verified:
+  5 in-turn task mutations 140→38 fs ops total; 3 new tests
+  (`tests/goal-turn-transaction.test.ts`).
+- **P1-4 prompt memo + task-tree trim** — `taskListBlock` renders pending
+  first (cap 10, "+N more pending" hint); completed/skipped collapse to the
+  header counts; goalPrompt/continuationPrompt memoized keyed on
+  id/revision/updatedAt/status/usage/settings (LRU 100). Verified:
+  taskListBlock 50t 2154→293 est tokens (7.3x), continuationPrompt 50t
+  2505→960 (2.6x); 4 prompt tests updated to the deliberate new behavior.
+- **P1-5 bounded lock** — default acquire window 100×25ms≈2.5s → 8×25ms≈200ms;
+  persist bound 10×25→4×25≈100ms; contended writes fail fast with the typed
+  error instead of freezing the TUI (revision check remains the real guard);
+  B5 bench now measures the fail-fast path.
+- **P1-6 warm auditor** — completion flow builds a warm-context block from
+  the ledger tail (latest 8 events for the goal, with task evidence) and
+  passes it into `buildGoalAuditorPrompt` as `<warm_context>`; the audit
+  starts with the parent session's already-rendered evidence instead of a
+  cold re-derivation.
+- **P1-7 parallel startup** — `readActiveGoalPoolAsync` (fs.promises readdir +
+  per-file stat/read in Promise.all, seeding the P1-1 parse cache);
+  `loadState` async; session_start/session_tree await it; B5 bench measures
+  the async path.
+- **P1-8 batch ledger appends** — `appendGoalEvents` (one temp-write→read→
+  append for an event block, same durability as single append);
+  goal-service create/appendEvents batch-first with per-event diagnostic
+  fallback on batch failure (observable behavior unchanged).
+- **P1-9 coalesced widget renders** — `updateUI` microtask-debounced into
+  `renderUI`; per-handler bursts collapse to one render; turn_end renders the
+  final state.
+- **P1-10 single task counter** — new `goal-task-count.ts`
+  `countTaskSubtree` (explicit `doneIncludesSkipped` flag, default false =
+  prior behavior) + `countAllTasks`; goal-policy, goal-auditor,
+  task-list-overlay, goal-prompts, goal-task-tools all delegate.
+- **P1-11 dedup** — new `widgets/dialog-scaffold.ts` (dialogInnerWidth,
+  borderedLine, horizontalRule) used by escape dialog, task-list
+  confirmation, and task overlay (byte-identical output — surface-baseline
+  tests green); goal-draft's duplicated extractVerificationContract/
+  promptSafeObjective/renderConfirmationTasks removed (imports from
+  goal-contract/goal-task-confirmation; dead CONVENTIONAL_SECTION_NAMES
+  dropped).
+- **P1-12 goal-state decomposition** — live-usage display view
+  (`liveDisplayGoal`) + widget registration factory (`makeGoalWidgetFactory`)
+  + `GOAL_WIDGET_KEY` extracted to `widgets/goal-widget.ts`; the two
+  duplicated inline factories in updateUI collapsed to one helper.
+- **P1-13 debug prune** — debug keybindings + createDebugGoal/injectDebugTasks/
+  startMockAudit/openDebugProposal gated behind `PI_GOAL_DEBUG` (inert by
+  default; defense-in-depth guards on every helper).
+
+### Milestone 4 — Part 2 enhancements E1..E7 (task 4, 2026-08-05)
+All 7 implemented; `npm test` 509 pass (502 + 7 new enhancement tests),
+`npm run check` clean.
+
+- **E1 goal history in status** — `buildGoalHistoryBlock` (goal-format) shows
+  the last audit verdict + report and the recent lifecycle events (ledger,
+  capped 6); wired into `get_goal` and `/goal-status`.
+- **E2 effective-settings visibility** — `effectiveSettingsReport` +
+  `envOverrideFor` (goal-settings) report provenance (env > file > default);
+  `/goal-status` shows the block; `/goal-settings` marks env-overridden rows
+  "(env: PI_GOAL_X — read-only)" and refuses edits with a hint.
+- **E3 auditor project resources (opt-in)** — new `auditorProjectResources`
+  setting (off by default = the empty isolation loader); when on, the
+  auditor session asks the runtime for its own project-resource loader
+  (noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles false).
+- **E4 budget awareness** — widget budget progress line
+  (⛽ used/total, % used, remaining; warning ≥90%, accent ≥50%) when
+  tokenBudget set; budget-limited steering now states remaining-vs-overshoot
+  (e.g. "— 5k over the budget").
+- **E5 drafting answer echo** — `ActiveGoalDraft.questionnaireEcho` captures
+  `formatQuestionnaireAnswers`; the created-goal report appends it as
+  "Goal details:" so the user can verify their input survived.
+- **E6 sisyphus step progress** — `countOrderedSteps` +
+  `sisyphusStepProgress` (goal-policy); `get_goal` shows "At step: N of M"
+  for sisyphus goals.
+- **E7 pause/abort reason preview** — `GoalStateEntry.resultDetail` +
+  `goalDetails(goal, detail)`; paused/blocked flows populate it; collapsed
+  headings byte-identical (no resultDetail/expanded → unchanged render),
+  expanded view adds the full reason + suggested action.

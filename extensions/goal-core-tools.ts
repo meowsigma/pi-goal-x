@@ -7,6 +7,9 @@ import { detailedSummary, goalDetails, renderGoalResult } from "./goal-format.ts
 import { budgetLine } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, buildTaskSummary, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
+import { readGoalLedger } from "./goal-ledger.ts";
+import { buildGoalHistoryBlock } from "./goal-format.ts";
+import { sisyphusStepProgress } from "./goal-policy.ts";
 import { nowIso, validateTokenBudgetInput } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
 
@@ -47,6 +50,11 @@ pi.registerTool(defineTool({
 		const lines: string[] = [view.objective, ""];
 		lines.push(`Status: ${statusLabel(view)}`);
 		lines.push(`Mode: ${view.sisyphus ? "sisyphus" : "regular"}`);
+		if (view.sisyphus) {
+			// E6: sisyphus ordered-step progress.
+			const steps = sisyphusStepProgress(view);
+			if (steps) lines.push(`At step: ${steps.current} of ${steps.total}`);
+		}
 		const usageBits: string[] = [];
 		if (view.usage.activeSeconds > 0) usageBits.push(formatDuration(view.usage.activeSeconds));
 		if (view.usage.tokensUsed > 0) usageBits.push(formatTokenValue(view.usage.tokensUsed));
@@ -64,6 +72,9 @@ pi.registerTool(defineTool({
 		if (otherCount > 0) lines.push(`Other open goals: ${otherCount} (user can run /goal-list or /goal-focus)`);
 		lines.push("");
 		lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Call update_goal({status: \"blocked\"}) only after the same blocker recurs on three consecutive goal turns. User commands handle pause/resume/clear/focus.");
+		// E1: goal history (last audit verdict + recent lifecycle events).
+		const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
+		if (history) lines.push("", history);
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details: goalDetails(view),
@@ -73,7 +84,7 @@ pi.registerTool(defineTool({
 		return new Text(theme.fg("toolTitle", "get_goal"), 0, 0);
 	},
 	renderResult(result, _options, theme) {
-		return renderGoalResult(result, theme);
+		return renderGoalResult(result, _options, theme);
 	},
 }));
 
@@ -140,7 +151,7 @@ pi.registerTool(defineTool({
 		return new Text(theme.fg("toolTitle", prefix) + theme.fg("muted", args?.objective ?? ""), 0, 0);
 	},
 	renderResult(result, _options, theme) {
-		return renderGoalResult(result, theme);
+		return renderGoalResult(result, _options, theme);
 	},
 }));
 
@@ -243,7 +254,7 @@ async function runGoalAgentPauseFlow(ctx: ExtensionContext, reason: string | und
 	const suggestion = trimmedAction ? ` Suggested next step: ${trimmedAction}` : "";
 	return {
 		content: [{ type: "text", text: `Goal paused by the agent: ${trimmedReason}.${suggestion} Stop now; the user can resume with /goal-resume or revise with /goal-tweak.` }],
-		details: goalDetails(core.state.goal),
+		details: goalDetails(core.state.goal, `Pause reason: ${trimmedReason}${trimmedAction ? `\nSuggested action: ${trimmedAction}` : ""}`), // E7
 		terminate: true,
 	};
 }
@@ -284,7 +295,7 @@ pi.registerTool(defineTool({
 		return new Text(theme.fg("toolTitle", "update_goal ") + theme.fg("muted", args?.status ?? ""), 0, 0);
 	},
 	renderResult(result, _options, theme) {
-		return renderGoalResult(result, theme);
+		return renderGoalResult(result, _options, theme);
 	},
 }));
 }

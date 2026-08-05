@@ -14,8 +14,9 @@ import {
 import { buildCompactionSummary } from "./goal-compaction.ts";
 import { latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
+import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
-import { budgetLine } from "./goal-accounting.ts";
+import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
 import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
 import { goalSelectorLabel } from "./goal-pool.ts";
 import {
@@ -334,8 +335,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (core.state.goal?.status === "budget_limited") {
 			const limitedGoal = core.state.goal;
 			const budgetText = budgetLine(limitedGoal);
+			// E4: surface the remaining-vs-overshoot fact in the wrap-up steering.
+			const remaining = budgetRemaining(limitedGoal);
+			const balanceText = typeof remaining === "number"
+				? remaining < 0
+					? ` — ${formatTokenValue(-remaining)} over the budget`
+					: ` — ${formatTokenValue(remaining)} remaining`
+				: "";
 			const reminder = core.runtime.consumePostBudgetReminder()
-				? `\n\n[TOKEN BUDGET REACHED goalId=${limitedGoal.id}]\nThe goal's token budget has been reached${budgetText ? ` (${budgetText})` : ""}. Wrap up the current work in one final response: summarize what was accomplished and what remains, do not start new substantive work, and do not claim the goal is complete unless it actually is. To continue, the user must raise or remove the budget and resume the goal.`
+				? `\n\n[TOKEN BUDGET REACHED goalId=${limitedGoal.id}]\nThe goal's token budget has been reached${budgetText ? ` (${budgetText}${balanceText})` : ""}. Wrap up the current work in one final response: summarize what was accomplished and what remains, do not start new substantive work, and do not claim the goal is complete unless it actually is. To continue, the user must raise or remove the budget and resume the goal.`
 				: "";
 			return {
 				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL BUDGET LIMITED goalId=${limitedGoal.id}]\n${untrustedObjectiveBlock(limitedGoal)}${budgetText ? `\n${budgetText}` : ""}${reminder}`,

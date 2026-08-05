@@ -27,6 +27,8 @@ export interface GoalSettings {
 	thinkingLevel?: ThinkingLevel;
 	disabled?: boolean;
 	autoSelectSingleGoal?: boolean;
+	/** E3: load the project's own skills/extensions into auditor sessions (off by default = isolation). */
+	auditorProjectResources?: boolean;
 }
 
 export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
@@ -58,6 +60,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"thinking_level",
 	"disabled",
 	"autoSelectSingleGoal",
+	"auditorProjectResources",
 ]);
 
 /**
@@ -123,6 +126,7 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	if (thinkingLevel !== undefined) settings.thinkingLevel = thinkingLevel;
 	if (record.disabled === true || record.disabled === "true") settings.disabled = true;
 	if (record.autoSelectSingleGoal === true || record.autoSelectSingleGoal === "true") settings.autoSelectSingleGoal = true;
+	if (record.auditorProjectResources === true || record.auditorProjectResources === "true") settings.auditorProjectResources = true;
 	return settings;
 }
 
@@ -180,6 +184,48 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
  * Determine whether the auditor should be enabled by default based on settings.
  * The auditor is enabled by default unless settings.disabled === true.
  */
+/**
+ * E2: which env var (if any) overrides a settings key's effective value.
+ * Returns the env var name when it is set and affects the key, else null.
+ */
+export function envOverrideFor(key: keyof GoalSettings | "settingsFile", env: NodeJS.ProcessEnv = process.env): string | null {
+	if (key === "disableTasks" && env.PI_GOAL_DISABLE_TASKS !== undefined) return "PI_GOAL_DISABLE_TASKS";
+	if (key === "disableContracts" && env.PI_GOAL_DISABLE_CONTRACTS !== undefined) return "PI_GOAL_DISABLE_CONTRACTS";
+	if (key === "settingsFile" && env[PI_GOAL_SETTINGS_FILE_ENV] !== undefined) return PI_GOAL_SETTINGS_FILE_ENV;
+	return null;
+}
+
+/**
+ * E2: effective-settings report with provenance (env vs file vs default),
+ * surfaced by /goal-status.
+ */
+export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
+	const fileConfig = loadGoalSettingsFileConfig(cwd, env);
+	const effective = loadGoalSettings(cwd, env);
+	const lines = ["Settings (provenance):"];
+	const rows: Array<{ key: keyof GoalSettings; label: string; format: (v: GoalSettings) => string }> = [
+		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", format: (v) => (v.autoSelectSingleGoal === true ? "true" : "false") },
+		{ key: "disableContracts", label: "disableContracts", format: (v) => (v.disableContracts === true ? "true" : "false") },
+		{ key: "disableTasks", label: "disableTasks", format: (v) => (v.disableTasks === true ? "true" : "false") },
+		{ key: "subtaskDepth", label: "subtaskDepth", format: (v) => String(v.subtaskDepth ?? 1) },
+		{ key: "disabled", label: "auditor disabled", format: (v) => (v.disabled === true ? "true" : "false") },
+		{ key: "provider", label: "provider", format: (v) => v.provider ?? "(default)" },
+		{ key: "model", label: "model", format: (v) => v.model ?? "(default)" },
+		{ key: "thinkingLevel", label: "thinking_level", format: (v) => v.thinkingLevel ?? "(default)" },
+		{ key: "auditorProjectResources", label: "auditor project resources", format: (v) => (v.auditorProjectResources === true ? "true" : "false") },
+	];
+	for (const row of rows) {
+		const envVar = envOverrideFor(row.key, env);
+		const value = row.format(effective);
+		const source = envVar ? `env (${envVar})` : row.key in fileConfig ? "file" : "default";
+		lines.push(`  ${row.label}: ${value} (${source})`);
+	}
+	lines.push(`  settings file: ${goalSettingsPath(cwd, env)}`);
+	const fileOverride = envOverrideFor("settingsFile", env);
+	if (fileOverride) lines.push(`  (settings file overridden by ${fileOverride})`);
+	return lines;
+}
+
 export function isAuditorEnabledByDefault(settings: GoalSettings): boolean {
 	return settings.disabled !== true;
 }
@@ -200,6 +246,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (disableContracts === true) clean.disableContracts = true;
 	if (subtaskDepth !== undefined) clean.subtaskDepth = subtaskDepth;
 	if (settings.autoSelectSingleGoal === true) clean.autoSelectSingleGoal = true;
+	if (settings.auditorProjectResources === true) clean.auditorProjectResources = true;
 	const configPath = goalSettingsPath(cwd);
 	fs.mkdirSync(path.dirname(configPath), { recursive: true });
 	settingsFileCache.delete(configPath);
@@ -212,6 +259,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (clean.disableContracts) persisted.disableContracts = true;
 	if (clean.subtaskDepth !== undefined) persisted.subtaskDepth = clean.subtaskDepth;
 	if (settings.autoSelectSingleGoal === true) persisted.autoSelectSingleGoal = true;
+	if (settings.auditorProjectResources === true) persisted.auditorProjectResources = true;
 	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
 	return clean;
 }

@@ -40,6 +40,8 @@ interface ActiveGoalDraft {
 	targetGoalId?: string;
 	startedAt: string;
 	auditorEnabled: boolean;
+	/** E5: formatted questionnaire Q&A to echo in the created-goal report. */
+	questionnaireEcho?: string;
 }
 
 const activeDrafts = new WeakMap<GoalCore, ActiveGoalDraft>();
@@ -221,7 +223,7 @@ export function registerDraftingTools(core: GoalCore): void {
 			}
 		},
 		renderCall() { return new Text("goal_question", 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, theme); },
+		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
 	}));
 
 	pi.registerTool(defineTool({
@@ -245,13 +247,17 @@ export function registerDraftingTools(core: GoalCore): void {
 			core.enterGoalModal();
 			try {
 				const result = await runGoalQuestionnaire(ctx, questions);
+				if (!result.cancelled) {
+					const active = activeDraft(core);
+					if (active) active.questionnaireEcho = formatQuestionnaireAnswers(result); // E5
+				}
 				return { content: [{ type: "text", text: result.cancelled ? "The user cancelled the questionnaire. Continue drafting conversationally." : formatQuestionnaireAnswers(result) }], details: goalDetails(core.state.goal) };
 			} finally {
 				core.exitGoalModal();
 			}
 		},
 		renderCall() { return new Text("goal_questionnaire", 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, theme); },
+		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
 	}));
 
 	pi.registerTool(defineTool({
@@ -319,7 +325,10 @@ export function registerDraftingTools(core: GoalCore): void {
 			if (draft.mode !== "tweak") {
 				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: taskResult.value, skipAuditor }, ctx, true, extracted.verificationContract);
 				clearGoalDrafting(core, ctx);
-				return { content: [{ type: "text", text: buildGoalCreatedReport({ objective: extracted.objective }) }], details: goalDetails(core.state.goal), terminate: true };
+				// E5: echo the questionnaire Q&A in the created-goal report so the
+				// user can verify their input survived the clarification loop.
+				const qaEcho = activeDraft(core)?.questionnaireEcho;
+				return { content: [{ type: "text", text: buildGoalCreatedReport({ objective: extracted.objective, detailedSummary: qaEcho }) }], details: goalDetails(core.state.goal), terminate: true };
 			}
 			if (!target) return { content: [{ type: "text", text: "The goal changed while drafting; review it and start /goal-tweak again." }], details: goalDetails(core.state.goal) };
 			const token = core.focusedOperationToken(target.id);
@@ -336,6 +345,6 @@ export function registerDraftingTools(core: GoalCore): void {
 			return { content: [{ type: "text", text: "Goal tweak confirmed and applied." }], details: goalDetails(result.goal), terminate: true };
 		},
 		renderCall(args, theme) { return new Text(theme.fg("toolTitle", "propose_goal_draft ") + theme.fg("muted", args?.objective ?? ""), 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, theme); },
+		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
 	}));
 }

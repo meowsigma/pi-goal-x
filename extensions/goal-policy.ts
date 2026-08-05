@@ -293,6 +293,32 @@ export function buildGoalCreatedReport(args: { objective: string; detailedSummar
 	return lines.join("\n");
 }
 
+/** Count the ordered steps in a sisyphus objective (numbered items or "Step N"). */
+export function countOrderedSteps(objective: string): number {
+	const numbered = objective.match(/^\s*\d{1,2}\s*[.):]/gm)?.length ?? 0;
+	const stepMarkers = objective.match(/^\s*step\s+\d+/gim)?.length ?? 0;
+	return Math.max(numbered, stepMarkers);
+}
+
+/**
+ * E6/F4: where the goal is in its ordered sisyphus sequence. M = ordered steps
+ * in the objective; N = completed top-level tasks + 1 (clamped), falling back
+ * to 1 when no task tracking exists. Returns null for non-sisyphus goals or
+ * objectives without ordered markers.
+ */
+export function sisyphusStepProgress(goal: { sisyphus: boolean; objective: string; taskList?: { tasks?: Array<{ status: string }> } | null }): { current: number; total: number } | null {
+	if (!goal.sisyphus) return null;
+	const total = countOrderedSteps(goal.objective);
+	if (total === 0) return null;
+	let current = 1;
+	const tasks = goal.taskList?.tasks;
+	if (tasks && tasks.length > 0) {
+		const completedTop = tasks.filter((t) => t.status === "complete").length;
+		current = Math.min(total, completedTop + 1);
+	}
+	return { current, total };
+}
+
 export function shouldQueueContinuation(goal: Pick<GoalPolicyRecordLike, "status" | "autoContinue"> | null): boolean {
 	return !!goal && goal.status === "active" && goal.autoContinue;
 }

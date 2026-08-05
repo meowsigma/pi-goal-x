@@ -328,12 +328,18 @@ export async function runGoalCompletionAuditor(args: {
 			},
 		});
 
+		const projectResources = args.settings?.auditorProjectResources === true;
 		const { session } = await createSession({
 			cwd: args.ctx.cwd,
 			model,
 			thinkingLevel,
 			...resolveAuditorSessionModelOptions(args.ctx),
-			resourceLoader: makeAuditorResourceLoader(),
+			// E3: default = the empty isolated loader (deliberate isolation);
+			// when auditorProjectResources is on, let the runtime build its own
+			// loader so the project's skills/extensions reach the auditor.
+			...(projectResources
+				? { resourceLoaderOptions: { noExtensions: false, noSkills: false, noPromptTemplates: false, noThemes: false, noContextFiles: false } }
+				: { resourceLoader: makeAuditorResourceLoader() }),
 			sessionManager: SessionManager.inMemory(args.ctx.cwd),
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
 			tools: ["read", "grep", "find", "ls", "bash", REPORT_AUDITOR_PROGRESS_TOOL_NAME],

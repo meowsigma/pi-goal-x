@@ -60,3 +60,18 @@ implementation.
 - Full validation battery re-run: 11/11 PASS — coverage 35/35, DRU complete
   for all 28 items, no effort/risk ratings, 10 features each stating
   Surfaces:, agent/human/TUI balance, spec committed, no code changes.
+
+### 4. User steering: narrow features to 1–3, task-focused, no new commands
+
+- User direction (2026-08-04): the new-features section should be 1–3
+  features focused on making the task system better, with **no additional
+  slash commands**; the existing 10-candidate set is fine but moves to a
+  parked file.
+- Moved the full original F1–F10 set (verbatim, incl. its balance rationale)
+  to `PARKED.md`; nothing from that set was implemented.
+- Rewrote PLAN.md Part 3 with three task-focused features, each stating its
+  user surface(s), prioritized: F1 task evidence worklog (TUI + agent),
+  F2 objective→task bootstrap at creation (human + agent + TUI), F3
+  interactive task toggling in the Ctrl+Shift+T overlay (TUI). All reuse
+  existing surfaces; no new slash commands.
+- PLAN header amended to record the steered scope.

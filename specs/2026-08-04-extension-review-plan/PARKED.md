@@ -162,8 +162,9 @@ stopped gets the answer in the first lines of the log, without opening
 ## Parked optimisation candidates (non-clock-time)
 
 Moved out of PLAN.md Part 1 on 2026-08-04 when the optimisation plan was
-refocused on user-felt clock time (order-of-magnitude improvements). These
-remain valid maintainability/correctness wins; they were never implemented.
+refocused on user-felt clock time, then **restored to PLAN.md Part 1B on the
+same day** at the user's direction ("we want things clean and fast"). Kept
+here only as a historical record; the authoritative copy is PLAN.md.
 
 **P1-4. Single task-counting implementation.** `buildTaskSummary` (policy),
 `countAuditorTasks` (auditor), `countAllTasks`/`countAllWithStatus` (widget +

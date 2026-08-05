@@ -2,7 +2,7 @@
 
 Date: 2026-08-04 · Scope: the full extension, every part, no exceptions ·
 Deliverable: this plan (optimisation + feature enhancements + new
-features), prioritized, each item with description + rationale + user value.
+features + benchmarking), prioritized, each item with description + rationale + user value.
 No effort/risk ratings by design. No implementation in this plan. New-feature
 section scope steered by the user on 2026-08-04: task-focused features plus
 the most useful UI feature changes (6 features total), with no new slash
@@ -64,12 +64,15 @@ The extension ships as one installer (`extensions/goal.ts`, 33 lines) plus
 
 Framing: per-turn wall clock is dominated by model inference, but the
 extension controls the *overhead around it* — synchronous I/O, context size,
-and stalls. The items below are ordered by the clock time the user actually
-feels, and each states its order-of-magnitude effect where it applies (slow
-storage / long sessions / contention). Four maintainability items from the
-original Part 1 (task-counter consolidation, renderer dedup, goal-state
-decomposition, debug-surface pruning) are parked in `PARKED.md` — they are
-real improvements but not clock-time wins.
+and stalls. Part 1A lists the clock-time items the user actually feels,
+ordered by impact, each stating its order-of-magnitude effect where it
+applies (slow storage / long sessions / contention). Part 1B restores the
+maintainability items at the user's direction — "we want things clean and
+fast": they do not move clock time but keep the codebase clean while 1A makes
+it fast. Every P1 item ships with a before/after benchmark (Part 4); nothing
+lands unmeasured.
+
+### 1A — User-felt clock time (priority order)
 
 **P1-1. Cache-first read layer for settings, goal pool, and the focused goal.** Description:
 one shared read layer with mtime-keyed caching covering the settings file,
@@ -153,6 +156,46 @@ per event; spinner cadence and dialogs unchanged. Rationale: render is cheap,
 but per-event rebuild plus the render-time settings read (see P1-1) add up in
 turns with many tool calls. User value: steadier TUI during long turns and
 fewer sync reads on the render path.
+
+### 1B — Maintainability & cleanliness (priority order)
+
+**P1-10.Single task-counting implementation.** `buildTaskSummary` (policy),
+`countAuditorTasks` (auditor), `countAllTasks`/`countAllWithStatus` (widget +
+overlay), and `countSubtree` (prompts) each re-implement subtree counting with
+different "done" semantics. Description: one shared counter module with an
+explicit `doneIncludesSkipped` flag, used by all four call sites. Rationale:
+removes ~5 copies of the same walker and the semantic drift that produced
+inconsistent "skipped counts as done" behavior between surfaces. User value:
+consistent task numbers across widget, prompt, status, and auditor output.
+
+**P1-11.Deduplicate contract extraction and confirmation-task rendering.**
+`extractVerificationContract` exists in both `goal-contract.ts` and
+`goal-draft.ts`; `renderConfirmationTasks` exists in both `goal-task-confirmation.ts`
+and `goal-draft.ts`; the bordered dialog scaffold (`line()`, truncation,
+header/footer) is copy-pasted across `goal-escape-dialog.ts`,
+`goal-task-confirmation.ts`, and `widgets/task-list-overlay.ts`. Description:
+collapse to one module each. Rationale: identical logic diverging in three
+places is a correctness hazard (escape dialog vs confirmation dialog widths
+already differ slightly). User value: fewer subtle rendering inconsistencies;
+smaller surface to maintain.
+
+**P1-12.Decompose `goal-state.ts`.** The 870-line core mixes state, UI, and
+lifecycle. Description: extract the widget/status glue (`updateUI`,
+`clearGoalWidget`, `goalForDisplay`) and the focus-setter trio into focused
+helpers on the same core, shrinking the interface. Rationale: the 50-member
+interface is the biggest maintainability cost in the extension. User value:
+indirect (fewer regressions, faster iteration) — no user-visible behavior
+change.
+
+**P1-13.Prune debug-only surface from the shipped bundle.** The debug
+keybindings/helpers in `goal-widget.ts` and the debug panel in
+`widgets/goal-widget.ts` ship to every install. Description: gate them behind
+an env flag (e.g. `PI_GOAL_DEBUG`) so the default bundle excludes dead code
+(`openDebugProposal` is already effectively inert). Rationale: reduces shipped
+code and removes module-level mutable debug state from production.
+User value: smaller surface; fewer accidental trigger paths.
+
+---
 
 ## Part 2 — Feature-enhancement plan (prioritized)
 
@@ -306,3 +349,61 @@ parity with `update_goal_task`. The raised UI features F4–F6 are ordered by
 visibility value: sisyphus progress (F4) extends the just-approved widget
 story, stall detection (F5) catches silent stalls, budget alerts (F6) surface
 cost pressure before the limit.
+
+## Part 4 — Benchmarking plan (before/after, every optimisation measured)
+
+Framing: each P1 item ships with a before/after measurement that verifies its
+claimed magnitude — no optimisation lands unmeasured. Baselines are captured
+on the same machine and storage before changes, and both local-SSD and
+slow-storage numbers are reported wherever the magnitude claim depends on
+storage (the pattern follows the existing `experiments/scroll-repro`
+before/after harness). Items are prioritized by what they prove first.
+
+**B1. I/O hot-path micro-bench harness with slow-storage emulation.** Description:
+`experiments/bench/` micro-benchmarks over synthetic goal fixtures for the
+paths touched by P1-1/P1-2/P1-3/P1-5/P1-8 — settings load, pool scan, ledger
+parse vs tail resume, lock acquire, append — re-run under latency injection
+(a delayed-read wrapper simulating NFS/iCloud round trips of ~1–100ms).
+Rationale: the order-of-magnitude claims are storage-dependent; only a
+deterministic harness can verify them without waiting for real slow home
+directories. User value: every claimed 10x on the I/O items becomes a measured
+number on both fast and slow storage.
+
+**B2. Real-session per-turn I/O accounting.** Description: instrument a real
+session (one focused goal, normal tool flow) to count sync reads/writes and
+milliseconds per turn before/after P1-1/P1-3/P1-9 — the top-line "extension
+overhead per turn" number the user actually feels. Rationale: micro-benchmarks
+prove the parts; this proves the whole: 5–10 reads/turn → 1, N mutations/turn
+→ 1, N renders/turn → 1. User value: the plan's headline metric is tracked
+across the optimisation work instead of being assumed.
+
+**B3. Long-session ledger simulation.** Description: generate synthetic ledgers
+at 1k/5k/10k events and time full-parse vs tail-resume per call; assert cost
+is flat (O(1)) and memory bounded after P1-2. Rationale: P1-2's claim is that
+per-turn cost stops growing with session age — only a scaled simulation proves
+it. User value: a guarantee that long-running goals never degrade turn by
+turn.
+
+**B4. Prompt/context size and prefill measurement.** Description: measure the
+goal-block token count before/after P1-4 on a representative 50-task tree,
+then measure one real continuation turn's prefill latency delta. Rationale:
+P1-4 claims a 5–10x smaller block with proportional prefill savings — the
+first half is mechanical, the second needs one instrumented turn. User value:
+the compounding per-turn saving becomes a verified number (tokens and wall
+clock per turn).
+
+**B5. Startup, contention, and auditor timing.** Description: time session start
+with 1/10/50 open goals (P1-7), lock-acquire worst case with two processes
+contending (P1-5), and auditor time-to-verdict warm vs cold on a real
+completion fixture (P1-6). Rationale: these three claims sit outside the
+micro-bench substrate and need dedicated harnesses (two-process spawn, real
+completion fixture). User value: startup, contention stalls, and audit
+latency each get a before/after number instead of an estimate.
+
+**B6. Regression gate.** Description: one bounded script (target <2 min) that
+replays B1–B5 baselines and fails when a shipped optimisation regresses below
+its recorded magnitude; run on demand and in CI. Rationale: without a gate,
+optimisations silently decay in later refactors — the "fast" half of "clean
+and fast" needs a watchdog. User value: the plan's gains are locked in;
+regressions surface the turn they land, not months later.
+

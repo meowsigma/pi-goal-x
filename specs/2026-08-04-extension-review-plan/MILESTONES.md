@@ -116,3 +116,13 @@ implementation.
   widget renders. Four non-clock-time items (task-counter consolidation,
   renderer dedup, goal-state decomposition, debug-surface pruning) were moved
   to `PARKED.md` as parked optimisation candidates.
+- Eighth steering pass (2026-08-04): user: "we also need to add full
+  benchmarking (before and after). Maintainability items should also be added
+  — we want things clean and fast." Part 1 was split into 1A (user-felt
+  clock time, P1-1–P1-9) and 1B (maintainability, P1-10–P1-13 — the four
+  parked items restored and renumbered); a new Part 4 (benchmarking, B1–B6)
+  was added: B1 I/O micro-bench harness with slow-storage latency injection,
+  B2 real-session per-turn I/O accounting, B3 long-session ledger simulation,
+  B4 prompt-size + prefill measurement, B5 startup/contention/auditor timing,
+  B6 regression gate; header updated; PARKED.md section annotated as a
+  historical record.

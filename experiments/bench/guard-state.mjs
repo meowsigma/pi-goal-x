@@ -18,13 +18,17 @@ export const state = {
 	latencyMs: 0,
 	childProcessAllowed: false,
 	violations: [],
+	trace: null,
 };
 
 export function beginFsCount() {
 	state.fsOpCount = 0;
+	state.trace = process.env.PI_GOAL_BENCH_TRACE ? [] : null;
 }
 
 export function endFsCount() {
+	const trace = state.trace;
+	state.trace = null;
 	return state.fsOpCount;
 }
 

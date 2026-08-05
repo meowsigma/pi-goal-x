@@ -1,9 +1,11 @@
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { borderedLine, dialogInnerWidth, horizontalRule } from "./dialog-scaffold.ts";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { displayObjectiveTitle, statusLabel } from "../goal-core.ts";
 import { openGoalsFromPool } from "../goal-pool.ts";
 import type { GoalRecord, GoalTask } from "../goal-record.ts";
+import { countAllTasks, countTaskSubtree } from "../goal-task-count.ts";
 
 // ── Structured line entries ──────────────────────────────────────────
 
@@ -76,7 +78,7 @@ export async function showTaskListOverlay(
 
 					// Task summary & task list
 					if (goal.taskList && goal.taskList.tasks.length > 0) {
-						const { total, complete, skipped } = countAllWithStatus(goal.taskList.tasks);
+						const { total, complete, skipped } = countTaskSubtree(goal.taskList.tasks);
 						const summary = `${complete}/${total} done${skipped > 0 ? ` (${skipped} skipped)` : ""}`;
 						entries.push({ type: "task-summary", text: summary });
 
@@ -198,14 +200,10 @@ export async function showTaskListOverlay(
 					lastRenderWidth = width;
 
 					const termWidth = Math.min(width, 100);
-					const innerWidth = Math.min(termWidth, 90) - 2;
+					const innerWidth = dialogInnerWidth(termWidth, 90);
 					const p = "  ";
 
-					function line(content: string): string {
-						const vis = visibleWidth(content);
-						const fill = innerWidth - vis;
-						return accent("│") + content + (fill > 0 ? " ".repeat(fill) : "") + accent("│");
-					}
+					const line = (content: string): string => borderedLine(accent, innerWidth, content);
 
 					// ── Render all entries into flat text lines ────────────
 					const renderedLines: string[] = [];
@@ -215,7 +213,7 @@ export async function showTaskListOverlay(
 					}
 					renderedLineCount = renderedLines.length;
 
-					const horiz = "─".repeat(innerWidth);
+					const horiz = horizontalRule(innerWidth);
 					const out: string[] = [];
 
 					out.push(accent(`┌${horiz}┐`));
@@ -335,32 +333,6 @@ export async function showTaskListOverlay(
 }
 
 // ── Task counting ─────────────────────────────────────────────────────
-
-function countAllTasks(tasks: GoalTask[]): number {
-	let n = 0;
-	for (const t of tasks) {
-		n += 1 + countAllTasks(t.subtasks ?? []);
-	}
-	return n;
-}
-
-function countAllWithStatus(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: number } {
-	let total = 0;
-	let complete = 0;
-	let skipped = 0;
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete") complete++;
-		else if (t.status === "skipped") skipped++;
-		if (t.subtasks) {
-			const child = countAllWithStatus(t.subtasks);
-			total += child.total;
-			complete += child.complete;
-			skipped += child.skipped;
-		}
-	}
-	return { total, complete, skipped, pending: total - complete - skipped };
-}
 
 // ── Tree entry collection ─────────────────────────────────────────────
 

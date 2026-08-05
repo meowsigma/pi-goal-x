@@ -79,6 +79,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.advanceTurnSeq();
 		core.goalWorkToolCalledThisTurn = false;
 		core.beginAccounting();
+		core.goalService.beginTurn(ctx, core.focusedGoalId); // P1-3 transaction buffer
 		core.updateUI(ctx);
 	});
 
@@ -185,6 +186,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		) {
 			core.queueContinuation(ctx);
 		}
+		core.goalService.endTurn(ctx); // P1-3: single flush (lock + write + ledger batch)
 	});
 
 	pi.on("message_end", async (event, ctx) => {
@@ -234,6 +236,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {
+		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		if (core.state.goal) core.persist(ctx);
 		core.beginAccounting();
 		// Arm a deterministic compaction summary for the next agent turn.
@@ -245,6 +248,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
+		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		core.loadState(ctx);
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);

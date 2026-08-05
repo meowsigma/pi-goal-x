@@ -269,6 +269,9 @@ pi.registerTool(defineTool({
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		// P1-3: persist any buffered in-turn mutations now so the auditor and
+		// status transitions observe the current task/state, not the stale disk.
+		core.flushGoalTransaction(ctx);
 		if (params.status === "blocked") {
 			return runGoalBlockedFlow(ctx);
 		}

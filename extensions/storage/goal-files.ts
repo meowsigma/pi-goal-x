@@ -19,6 +19,36 @@ import {
 export const GOALS_DIR = ".pi/goals";
 export const ARCHIVED_GOALS_DIR = ".pi/goals/archived";
 
+/**
+ * Per-file parse cache (P1-1): keyed by (absolute path, mtime, size), so
+ * steady-state parses of goal files cost one lstat instead of lstat+read+
+ * JSON-parse. Every parse call site (pool scan, reconcile, merge-from-disk)
+ * shares this cache; writers invalidate the entries they touch.
+ */
+interface GoalFileParseCacheEntry {
+	mtimeMs: number;
+	size: number;
+	parsed: GoalRecord | null;
+}
+
+const goalFileParseCache = new Map<string, GoalFileParseCacheEntry>();
+
+/** Directory listing cache (names only): keyed by (absolute path, dir mtime). */
+interface GoalDirListingCacheEntry {
+	mtimeMs: number;
+	names: string[];
+}
+
+const goalDirListingCache = new Map<string, GoalDirListingCacheEntry>();
+
+function invalidateGoalPathCaches(filePath: string): void {
+	goalFileParseCache.delete(filePath);
+}
+
+function invalidateGoalDirCache(root: string): void {
+	goalDirListingCache.delete(root);
+}
+
 export interface GoalFileContext {
 	cwd: string;
 }
@@ -93,11 +123,17 @@ export function atomicWriteGoalFile(ctx: GoalFileContext, rootRel: string, relPa
 	const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	fs.writeFileSync(tempPath, content, "utf8");
 	fs.renameSync(tempPath, filePath);
+	invalidateGoalPathCaches(filePath);
+	invalidateGoalDirCache(path.resolve(ctx.cwd, rootRel));
 }
 
 export function safeUnlinkGoalFile(ctx: GoalFileContext, rootRel: string, relPath: string): void {
 	const filePath = resolveGoalPath(ctx, rootRel, relPath);
-	if (fs.existsSync(filePath) && !fs.lstatSync(filePath).isSymbolicLink()) fs.unlinkSync(filePath);
+	if (fs.existsSync(filePath) && !fs.lstatSync(filePath).isSymbolicLink()) {
+		fs.unlinkSync(filePath);
+		invalidateGoalPathCaches(filePath);
+		invalidateGoalDirCache(path.resolve(ctx.cwd, rootRel));
+	}
 }
 
 export function makeActiveGoalPath(goal: GoalRecord): string {
@@ -211,9 +247,20 @@ export function extractObjectiveFromBody(body: string): string | undefined {
 }
 
 export function parseGoalFile(filePath: string): GoalRecord | null {
+	let stat: fs.Stats;
+	try {
+		stat = fs.lstatSync(filePath);
+	} catch {
+		goalFileParseCache.delete(filePath);
+		return null;
+	}
+	if (stat.isSymbolicLink()) return null;
+	const cached = goalFileParseCache.get(filePath);
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+		return cached.parsed;
+	}
 	let content: string;
 	try {
-		if (fs.lstatSync(filePath).isSymbolicLink()) return null;
 		content = fs.readFileSync(filePath, "utf8");
 	} catch {
 		return null;
@@ -227,7 +274,9 @@ export function parseGoalFile(filePath: string): GoalRecord | null {
 		return null;
 	}
 	const objective = extractObjectiveFromBody(content.slice(end + 1)) ?? raw.objective;
-	return normalizeGoalRecord({ ...raw, objective });
+	const parsed = normalizeGoalRecord({ ...raw, objective });
+	goalFileParseCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, parsed });
+	return parsed;
 }
 
 export function writeActiveGoalFile(ctx: GoalFileContext, current: GoalRecord): GoalRecord {
@@ -265,14 +314,21 @@ export function readActiveGoalFiles(ctx: GoalFileContext): GoalRecord[] {
 	const root = path.resolve(ctx.cwd, GOALS_DIR);
 	let entries: string[];
 	try {
-		if (fs.lstatSync(root).isSymbolicLink()) return [];
-		entries = fs.readdirSync(root);
+		const rootStat = fs.lstatSync(root);
+		if (rootStat.isSymbolicLink()) return [];
+		const cachedListing = goalDirListingCache.get(root);
+		if (cachedListing && cachedListing.mtimeMs === rootStat.mtimeMs) {
+			entries = cachedListing.names;
+		} else {
+			entries = fs.readdirSync(root)
+				.filter((name) => /^active_goal_.*\.md$/.test(name))
+				.sort((a, b) => a.localeCompare(b));
+			goalDirListingCache.set(root, { mtimeMs: rootStat.mtimeMs, names: entries });
+		}
 	} catch {
 		return [];
 	}
 	return entries
-		.filter((name) => /^active_goal_.*\.md$/.test(name))
-		.sort((a, b) => a.localeCompare(b))
 		.map((name) => {
 			const relPath = `${GOALS_DIR}/${name}`;
 			if (!isSafeActivePath(ctx, relPath)) return null;

@@ -19,6 +19,7 @@ function wrapSync(name) {
 	if (typeof original !== "function") return original;
 	return function patched(...args) {
 		state.fsOpCount++;
+		if (state.trace) state.trace.push(name + ":" + String(args[0] ?? "").split("/").slice(-2).join("/"));
 		if (state.latencyMs > 0) sleepMs(state.latencyMs);
 		return original.apply(this, args);
 	};

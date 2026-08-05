@@ -114,6 +114,7 @@ export interface GoalCore {
 	stopActiveGoal(status: Exclude<GoalStatus, "active">, reason: StopReason | undefined, ctx: ExtensionContext): void;
 	pauseActiveGoal(ctx: ExtensionContext): void;
 	queueContinuation(ctx: ExtensionContext, force?: boolean): void;
+	flushGoalTransaction(ctx: ExtensionContext): void;
 	replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow?: boolean, verificationContract?: string, tokenBudget?: number): void;
 }
 
@@ -366,6 +367,7 @@ export function createGoalCore(
 		opts: { recordLedger?: boolean } = {},
 	): void {
 		const previousGoalId = focusedGoalId;
+		if (previousGoalId !== goalId) goalService.flushTurn(ctx); // P1-3: persist the old buffer before switching focus
 		assignFocusedGoalId(goalId && goalsById.has(goalId) ? goalId : null);
 		if (previousGoalId !== focusedGoalId) {
 			clearContinuationState();
@@ -398,6 +400,7 @@ export function createGoalCore(
 	}
 
 	function removeFocusedGoal(ctx: ExtensionContext, reason: GoalFocusReason): void {
+		goalService.flushTurn(ctx); // P1-3: persist pending mutations before the goal leaves the session
 		if (focusedGoalId) goalsById.delete(focusedGoalId);
 		assignFocusedGoalId(null);
 		clearStoppedRuntimeState();
@@ -686,6 +689,7 @@ export function createGoalCore(
 			// accrue time, and the UI must reflect the new status immediately.
 			clearContinuationState();
 			clearActiveAccounting();
+			goalService.flushTurn(ctx); // P1-3: user-visible status change persists now, not at turn end
 			updateUI(ctx);
 		}
 	}
@@ -697,6 +701,10 @@ export function createGoalCore(
 		state.goal = { ...state.goal, autoContinue: false, pauseReason: undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);
 		ctx.ui.notify("Goal paused.", "info");
+	}
+
+	function flushGoalTransaction(ctx: ExtensionContext): void {
+		goalService.flushTurn(ctx);
 	}
 
 	function queueContinuation(ctx: ExtensionContext, force = false): void {
@@ -865,6 +873,7 @@ export function createGoalCore(
 		stopActiveGoal,
 		pauseActiveGoal,
 		queueContinuation,
+		flushGoalTransaction,
 		replaceGoal,
 	};
 }

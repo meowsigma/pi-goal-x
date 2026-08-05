@@ -1,5 +1,5 @@
 import { cloneGoal, nowIso, type GoalFocusReason, type GoalRecord, type GoalTask, type GoalUsage } from "./goal-record.ts";
-import { appendGoalEvent, type GoalLedgerEvent } from "./goal-ledger.ts";
+import { appendGoalEvent, type GoalLedgerEvent , appendGoalEvents } from "./goal-ledger.ts";
 import { findTaskInTree, updateTaskInTree } from "./goal-policy.ts";
 import {
 	GOALS_DIR,
@@ -137,6 +137,90 @@ export class GoalService {
 	 */
 	private lastPersistedUsage: { goalId: string; tokensUsed: number; activeSeconds: number } | null = null;
 
+	/**
+	 * Per-turn transaction buffer (P1-3): task/status/usage mutations and
+	 * ledger events accumulate in memory during a turn and flush once — one
+	 * lock acquire, one goal-file write, one ledger batch — at turn end or at
+	 * an explicit flush boundary (audit dispatch, pause/stop, focus change,
+	 * session reload). Reads during the turn overlay the buffered goal so
+	 * in-turn mutations are always visible; the optimistic revision check runs
+	 * at flush time.
+	 */
+	private turn: { active: boolean; goalId: string | null; goal: GoalRecord | null; archive: boolean; ledger: GoalLedgerEvent[] } = {
+		active: false,
+		goalId: null,
+		goal: null,
+		archive: false,
+		ledger: [],
+	};
+
+	/** Open (or reopen) the per-turn transaction for the focused goal. */
+	beginTurn(ctx: GoalServiceContext, goalId: string | null): void {
+		if (this.turn.active) this.flushTurn(ctx);
+		this.turn = { active: true, goalId, goal: null, archive: false, ledger: [] };
+	}
+
+	/**
+	 * Flush the buffered transaction: one lock acquire, one (archived or
+	 * active) goal-file write with a revision bump, one batched ledger append.
+	 * No-op when nothing was buffered. Returns the written record or null.
+	 */
+	flushTurn(ctx: GoalServiceContext): GoalRecord | null {
+		if (!this.turn.active) return null;
+		this.turn.active = false;
+		const goal = this.turn.goal;
+		if (!goal) return null;
+		let lock: GoalLock;
+		try {
+			lock = acquireGoalLock(ctx, goal.id);
+		} catch {
+			// Another writer holds the lock; skip this flush (same policy as persist).
+			return null;
+		}
+		try {
+			const freshDisk = this.readFreshDiskGoal(ctx, goal);
+			const base = freshDisk ?? goal;
+			const next = sanitizeGoalPaths(ctx, { ...goal, revision: (base.revision ?? 0) + 1 });
+			const written = this.turn.archive || next.status === "complete"
+				? archiveGoalFile(ctx, next)
+				: writeActiveGoalFile(ctx, next);
+			if (this.turn.ledger.length > 0) {
+				const batch = appendGoalEvents(ctx, this.turn.ledger);
+				if (!batch.ok) {
+					// Fall back to per-event appends so each failure still surfaces
+					// through the diagnostic hook with its original granularity.
+					for (const event of this.turn.ledger) {
+						const append = appendGoalEvent(ctx, event);
+						if (!append.ok) {
+							this.ref.onDiagnostic({
+								severity: "warning",
+								source: "ledger",
+								goalId: "goalId" in event ? event.goalId : undefined,
+								eventType: event.type,
+								message: `Ledger append failed for ${event.type}${("goalId" in event) ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
+							});
+						}
+					}
+				}
+			}
+			this.trackBaseline(written.id, written.usage);
+			this.ref.setFocused(written);
+			return written;
+		} finally {
+			lock.release();
+		}
+	}
+
+	/** End the turn: flush any pending transaction (safe to call always). */
+	endTurn(ctx: GoalServiceContext): void {
+		this.flushTurn(ctx);
+	}
+
+	/** True while the transaction buffer is open. */
+	isTurnBuffered(): boolean {
+		return this.turn.active;
+	}
+
 	constructor(ref: GoalServiceRef) {
 		this.ref = ref;
 	}
@@ -165,6 +249,9 @@ export class GoalService {
 	reconcileFocused(ctx: GoalServiceContext, opts: { preserveMemoryUsage?: boolean } = {}): boolean {
 		const current = this.ref.getFocused();
 		const fresh = readActiveGoalPool(ctx);
+		// P1-3: overlay the buffered goal so in-turn mutations are visible to
+		// every read (reconcile, get_goal, prompts) without a disk round trip.
+		if (this.turn.active && this.turn.goal) fresh.set(this.turn.goal.id, this.turn.goal);
 		const focusedGoalId = this.ref.getFocusedGoalId();
 		if (!focusedGoalId) {
 			this.ref.replacePool(fresh);
@@ -241,6 +328,51 @@ export class GoalService {
 		}
 		if (spec.focusToken && !this.ref.isTokenCurrent(spec.focusToken)) {
 			return { ok: false, message: `Mutation cancelled because goal ${spec.focusToken.goalId} is no longer focused in this session. The shared goal was not modified.` };
+		}
+
+		// 2b. P1-3: during a turn the mutation is buffered in memory (no lock, no
+		//     disk write yet); the flush acquires the lock, writes, and appends
+		//     the ledger once per turn. Outside a turn the immediate path below
+		//     (lock + optimistic revision check) is unchanged.
+		if (this.turn.active) {
+			if (this.turn.goalId !== null && current.id !== this.turn.goalId) {
+				// Focus changed mid-turn: persist the previous buffer first.
+				this.flushTurn(ctx);
+				this.turn.active = true;
+				this.turn.goalId = current.id;
+				this.turn.goal = current;
+				this.turn.archive = false;
+				this.turn.ledger = [];
+			}
+			if (!this.turn.goal) {
+				this.turn.goal = current;
+				this.turn.goalId = current.id;
+			}
+			const base = current;
+			const mutated = sanitizeGoalPaths(ctx, {
+				...spec.mutate(cloneGoal(base)),
+				revision: (current.revision ?? 0) + 1,
+			});
+			if (spec.ledger) {
+				try {
+					const events = typeof spec.ledger === "function" ? spec.ledger(mutated) : spec.ledger;
+					this.turn.ledger.push(...events);
+				} catch {
+					// Ledger spec error: nothing appended (same swallow as the write path).
+				}
+			}
+			this.turn.goal = mutated;
+			this.turn.archive = spec.archive === true;
+			const previousGoalId = current.id;
+			const commitFocused = spec.commitFocused !== false;
+			if (commitFocused) {
+				this.ref.setFocused(mutated);
+				this.trackBaseline(mutated.id, mutated.usage);
+			}
+			const goalId = commitFocused ? mutated.id : this.ref.getFocusedGoalId();
+			const focusChanged = commitFocused && previousGoalId !== mutated.id;
+			if (focusChanged) this.ref.onFocusChanged(previousGoalId, mutated.id);
+			return { ok: true, goal: mutated, previousGoalId, goalId, focusChanged };
 		}
 
 		// 2b. exclusive per-goal lock + optimistic revision check (follow-up Stage 4).
@@ -324,6 +456,53 @@ export class GoalService {
  * instead of throwing.
  */
 		updateTask(ctx: GoalServiceContext, spec: GoalTaskUpdateSpec): GoalTaskUpdateOutcome {
+		// P1-3: during a turn, apply to the buffered goal in memory (validation
+		// still runs against the current in-turn state); the flush writes once.
+		if (this.turn.active) {
+			const current = this.turn.goal ?? this.ref.getFocused();
+			if (!current) {
+				return { ok: false, message: "No focused goal to mutate." };
+			}
+			if (spec.focusToken && !this.ref.isTokenCurrent(spec.focusToken)) {
+				return { ok: false, message: `Mutation cancelled because goal ${spec.focusToken.goalId} is no longer focused in this session. The shared goal was not modified.` };
+			}
+			if (!current.taskList) {
+				return { ok: false, message: "The goal has no task list." };
+			}
+			const task = findTaskInTree(current.taskList.tasks, spec.taskId);
+			if (!task) {
+				return { ok: false, message: `Task "${spec.taskId}" not found.` };
+			}
+			if (spec.validate) {
+				const gate = spec.validate(task);
+				if (!gate.ok) return gate;
+			}
+			const updated = spec.update(task);
+			if (typeof updated === "object" && "ok" in updated && !updated.ok) return updated;
+			const updatedTask = updated as GoalTask;
+			const updatedTasks = updateTaskInTree(current.taskList.tasks, spec.taskId, () => updatedTask);
+			const mutated = sanitizeGoalPaths(ctx, {
+				...current,
+				taskList: { ...current.taskList, tasks: updatedTasks },
+				updatedAt: nowIso(),
+				revision: (current.revision ?? 0) + 1,
+			});
+			if (spec.ledger) {
+				try {
+					this.turn.ledger.push(...spec.ledger(mutated, updatedTask));
+				} catch (err) {
+					this.ref.onDiagnostic({
+						severity: "warning",
+						source: "ledger",
+						goalId: spec.taskId,
+						message: `Ledger spec error during task update: ${String(err)}`,
+					});
+				}
+			}
+			this.turn.goal = mutated;
+			this.ref.setFocused(mutated);
+			return { ok: true, goal: mutated, task: updatedTask };
+		}
 		return this.updateTaskAttempt(ctx, spec, 1);
 	}
 
@@ -433,6 +612,14 @@ export class GoalService {
 	persist(ctx: GoalServiceContext): GoalRecord | null {
 		const current = this.ref.getFocused();
 		if (!current) return null;
+		// P1-3: within a turn the persist is buffered; the flush at turn end
+		// performs the single write + ledger batch.
+		if (this.turn.active) {
+			const next = { ...current, updatedAt: nowIso() };
+			this.turn.goal = next;
+			this.ref.setFocused(next);
+			return next;
+		}
 		const capturedRevision = current.revision ?? 0;
 		let lock: GoalLock;
 		try {
@@ -478,18 +665,24 @@ export class GoalService {
 	create(ctx: GoalServiceContext, spec: { goal: GoalRecord; ledger?: GoalLedgerEvent[] }): GoalMutationResult {
 		const previousGoalId = this.ref.getFocused()?.id ?? null;
 		const written = writeActiveGoalFile(ctx, sanitizeGoalPaths(ctx, spec.goal));
-		if (spec.ledger) {
-			for (const event of spec.ledger) {
-				const append = appendGoalEvent(ctx, event);
-				if (!append.ok) {
-					// Best-effort ledger; creation still succeeds.
-					this.ref.onDiagnostic({
-						severity: "warning",
-						source: "ledger",
-						goalId: "goalId" in event ? event.goalId : undefined,
-						eventType: event.type,
-						message: `Ledger append failed for ${event.type}${"goalId" in event ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
-					});
+		if (spec.ledger && spec.ledger.length > 0) {
+			// Batch append (P1-8): one write+append for the whole event block.
+			const batch = appendGoalEvents(ctx, spec.ledger);
+			if (!batch.ok) {
+				// Fall back to per-event appends so each failure still surfaces
+				// through the diagnostic hook with its original granularity.
+				for (const event of spec.ledger) {
+					const append = appendGoalEvent(ctx, event);
+					if (!append.ok) {
+						// Best-effort ledger; creation still succeeds.
+						this.ref.onDiagnostic({
+							severity: "warning",
+							source: "ledger",
+							goalId: "goalId" in event ? event.goalId : undefined,
+							eventType: event.type,
+							message: `Ledger append failed for ${event.type}${"goalId" in event ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
+						});
+					}
 				}
 			}
 		}
@@ -502,6 +695,16 @@ export class GoalService {
 
 	/** Append ledger events best-effort (audit flow / focus changes happen mid-turn, outside apply). */
 	appendEvents(ctx: GoalServiceContext, events: GoalLedgerEvent[]): void {
+		// P1-3: within a turn the events join the transaction's ledger batch.
+		if (this.turn.active) {
+			this.turn.ledger.push(...events);
+			return;
+		}
+		if (events.length > 1) {
+			// Batch append (P1-8): one write+append for the whole event block.
+			const batch = appendGoalEvents(ctx, events);
+			if (batch.ok) return;
+		}
 		for (const event of events) {
 			const append = appendGoalEvent(ctx, event);
 			if (!append.ok) {

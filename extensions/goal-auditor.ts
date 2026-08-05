@@ -13,6 +13,7 @@ import {
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
+import { countTaskSubtree } from "./goal-task-count.ts";
 import { loadGoalSettings, type GoalSettings, type ThinkingLevel } from "./goal-settings.ts";
 
 export interface AuditorProgress {
@@ -84,27 +85,9 @@ function renderAuditorTaskTree(tasks: GoalTask[], indent: number): string[] {
 	return lines;
 }
 
-function countAuditorTasks(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: number } {
-	let total = 0;
-	let complete = 0;
-	let skipped = 0;
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete") complete++;
-		else if (t.status === "skipped") skipped++;
-		if (t.subtasks && t.subtasks.length > 0) {
-			const child = countAuditorTasks(t.subtasks);
-			total += child.total;
-			complete += child.complete;
-			skipped += child.skipped;
-		}
-	}
-	return { total, complete, skipped, pending: total - complete - skipped };
-}
-
 function taskSummaryBlock(taskList?: GoalTaskList | null): string {
 	if (!taskList || taskList.tasks.length === 0) return "";
-	const { total, complete, skipped, pending } = countAuditorTasks(taskList.tasks);
+	const { total, complete, skipped, pending } = countTaskSubtree(taskList.tasks);
 	const lines: string[] = [`Tasks: ${complete}/${total} complete${skipped > 0 ? `, ${skipped} skipped` : ""}`];
 	lines.push(...renderAuditorTaskTree(taskList.tasks, 0));
 	const gate = taskList.blockCompletion && pending > 0 ? " | TASK GATE: pending tasks block completion" : "";

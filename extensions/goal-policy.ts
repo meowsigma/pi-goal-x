@@ -1,5 +1,6 @@
 import { statusLabel, type GoalDisplayRecordLike } from "./goal-core.ts";
 import type { GoalTask, GoalTaskList, TaskStatus } from "./goal-record.ts";
+import { countTaskSubtree } from "./goal-task-count.ts";
 
 export type GoalStatusLike = "active" | "paused" | "blocked" | "budget_limited" | "complete";
 export type StopReasonLike = "user" | "agent";
@@ -81,26 +82,8 @@ export function clearGoalCommandMessage(args: { archived: boolean }): string {
 }
 
 /** Count tasks in subtree recursively */
-function countSubtreeTasks(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: number } {
-	let total = 0;
-	let complete = 0;
-	let skipped = 0;
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete") complete++;
-		else if (t.status === "skipped") skipped++;
-		if (t.subtasks && t.subtasks.length > 0) {
-			const child = countSubtreeTasks(t.subtasks);
-			total += child.total;
-			complete += child.complete;
-			skipped += child.skipped;
-		}
-	}
-	return { total, complete, skipped, pending: total - complete - skipped };
-}
-
 export function buildTaskSummary(taskList: GoalTaskList): string {
-	const { total, complete, skipped } = countSubtreeTasks(taskList.tasks);
+	const { total, complete, skipped } = countTaskSubtree(taskList.tasks);
 	if (total === 0) return "No tasks";
 	const parts: string[] = [`${complete}/${total} tasks complete`];
 	if (skipped > 0) parts.push(`(${skipped} skipped)`);
@@ -109,7 +92,7 @@ export function buildTaskSummary(taskList: GoalTaskList): string {
 
 export function taskCompletionBlockWarning(taskList: GoalTaskList): string | null {
 	if (!taskList.blockCompletion) return null;
-	const { pending } = countSubtreeTasks(taskList.tasks);
+	const { pending } = countTaskSubtree(taskList.tasks);
 	if (pending === 0) return null;
 	return `${pending} task${pending > 1 ? "s" : ""} still pending with blockCompletion enabled. Complete or skip all pending tasks before finishing the goal.`;
 }

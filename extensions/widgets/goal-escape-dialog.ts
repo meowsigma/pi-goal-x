@@ -1,6 +1,7 @@
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { borderedLine, dialogInnerWidth, horizontalRule } from "./dialog-scaffold.ts";
 
 /**
  * Result of the Escape dialog during audit.
@@ -66,16 +67,11 @@ export async function showEscapeDialog(
 
 				render(width: number): string[] {
 					const termWidth = Math.min(width, 80);
-					const innerWidth = Math.min(termWidth, 64) - 2; // inner content width between ││
+					const innerWidth = dialogInnerWidth(termWidth);
 
-					/** Build a bordered line: fits exactly `innerWidth` visible chars between ││ */
-					function line(leftContent: string): string {
-						const vis = visibleWidth(leftContent);
-						const fill = innerWidth - vis;
-						return accent("│") + leftContent + (fill > 0 ? " ".repeat(fill) : "") + accent("│");
-					}
+					const line = (leftContent: string): string => borderedLine(accent, innerWidth, leftContent);
 
-					const horizLine = "─".repeat(innerWidth);
+					const horizLine = horizontalRule(innerWidth);
 					const lines: string[] = [];
 					const p = "  "; // left padding inside the border
 

@@ -17,6 +17,12 @@ const DEBUG_GOALS_DIR = ".pi/goals/debug";
 let debugGoalCounter = 0;
 let debugMockAuditTimer: ReturnType<typeof setInterval> | null = null;
 
+/** Debug helpers are inert unless PI_GOAL_DEBUG is set (P1-13). */
+function isDebugEnabled(): boolean {
+	const value = process.env.PI_GOAL_DEBUG;
+	return value === "true" || value === "1";
+}
+
 /** Render task lines for the debug proposal dialog. */
 function formatModeLabelDebug(sisyphus: boolean): string {
 	return sisyphus ? "Sisyphus (prompt/criteria style)" : "Normal goal";
@@ -72,6 +78,9 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				return { consume: true };
 			}
 
+			// Debug keybindings are inert unless PI_GOAL_DEBUG is set (P1-13).
+			if (!isDebugEnabled()) return undefined;
+
 			// ── Debug mode keybindings (hidden from normal view) ────────────────
 
 			// Ctrl+Shift+X — toggle debug mode on/off
@@ -114,6 +123,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 
 		/** Toggle a test goal: create (first press) or remove (second press) */
 		function createDebugGoal(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			const prev = core.state.goal;
 			if (prev && prev.id.startsWith("debug-")) {
 				// Toggle off — remove debug goal entirely (no archive, full delete)
@@ -149,6 +159,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 
 		/** Inject 3-4 sample tasks into the current goal */
 		function injectDebugTasks(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			if (!core.state.goal) {
 				ctx.ui.notify("No goal to inject tasks into; create one first (Ctrl+Shift+N)", "warning");
 				return;
@@ -193,6 +204,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 
 		/** Start a mock completion audit that transitions through phases */
 		function startMockAudit(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			stopMockAuditTimer();
 			const startedAt = Date.now();
 			const phases: { phase: AuditorWidgetProgress["phase"]; atMs: number; label: string; percentage: number }[] = [
@@ -263,6 +275,7 @@ function renderDebugTaskLines(tasks: GoalTask[], indent = 0): string[] {
 
 		/** Show the proposal dialog using real goal state — no hardcoded text */
 		function openDebugProposal(ctx: ExtensionContext): void {
+			if (!isDebugEnabled()) return;
 			// Build a fresh debug goal + tasks in memory for the dialog
 			debugGoalCounter++;
 			const goal = createGoal({

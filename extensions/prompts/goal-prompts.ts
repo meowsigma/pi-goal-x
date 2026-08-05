@@ -4,6 +4,7 @@ import {
 } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-contract.ts";
 import type { GoalRecord, GoalTask, TaskStatus } from "../goal-record.ts";
+import { countTaskSubtree } from "../goal-task-count.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 import { budgetLine } from "../goal-accounting.ts";
 
@@ -17,28 +18,6 @@ function taskMarker(status: TaskStatus): string {
 	if (status === "complete") return "[x]";
 	if (status === "skipped") return "[~]";
 	return "[ ]";
-}
-
-/** Count tasks in subtree recursively */
-function countSubtree(tasks: GoalTask[]): { total: number; complete: number; skipped: number; pending: GoalTask[] } {
-	let total = 0;
-	let complete = 0;
-	let skipped = 0;
-	const pending: GoalTask[] = [];
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete") complete++;
-		else if (t.status === "skipped") skipped++;
-		else pending.push(t);
-		if (t.subtasks && t.subtasks.length > 0) {
-			const child = countSubtree(t.subtasks);
-			total += child.total;
-			complete += child.complete;
-			skipped += child.skipped;
-			pending.push(...child.pending);
-		}
-	}
-	return { total, complete, skipped, pending };
 }
 
 /** Render task subtree recursively */
@@ -65,15 +44,15 @@ function renderTaskTree(tasks: GoalTask[], indent: number): string[] {
 export function taskListBlock(goal: GoalRecord, settings?: GoalSettings): string {
 	if (settings?.disableTasks) return "";
 	if (!goal.taskList || goal.taskList.tasks.length === 0) return "";
-	const { total, complete, skipped, pending } = countSubtree(goal.taskList.tasks);
+	const { total, complete, skipped, pending, pendingTasks } = countTaskSubtree(goal.taskList.tasks, { collectPending: true });
 	const lines: string[] = [];
 	lines.push(`[TASK LIST — ${complete}/${total} tasks complete${skipped > 0 ? ` (${skipped} skipped)` : ""}]`);
 	lines.push(...renderTaskTree(goal.taskList.tasks, 0));
-	if (goal.taskList.blockCompletion && pending.length > 0) {
+	if (goal.taskList.blockCompletion && pendingTasks!.length > 0) {
 		lines.push("  TASK GATE: do not request completion while tasks remain in [ ] pending state");
 	}
-	if (pending.length > 0) {
-		lines.push(`  Next pending: ${pending[0]!.id} — ${pending[0]!.title}`);
+	if (pendingTasks!.length > 0) {
+		lines.push(`  Next pending: ${pendingTasks![0]!.id} — ${pendingTasks![0]!.title}`);
 	}
 	return lines.join("\n");
 }

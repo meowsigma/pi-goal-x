@@ -112,33 +112,147 @@ export function appendGoalEvent(ctx: GoalLedgerContext, event: GoalLedgerEvent):
   return { ok: true };
 }
 
+/**
+ * Append several ledger events as one line block with the existing
+ * temp-write→read→append durability (P1-8): one mkdir, one temp write, one
+ * append, one unlink instead of N× the same sequence.
+ */
+export function appendGoalEvents(ctx: GoalLedgerContext, events: GoalLedgerEvent[]): GoalLedgerAppendResult {
+  if (events.length === 0) return { ok: true };
+  const filePath = goalLedgerPath(ctx);
+  const dir = path.dirname(filePath);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    return { ok: false, error: err };
+  }
+
+  const lines = events.map((event) => JSON.stringify(event) + "\n").join("");
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  let appended = false;
+  try {
+    fs.writeFileSync(tempPath, lines, { flag: "wx", encoding: "utf8" });
+    fs.appendFileSync(filePath, fs.readFileSync(tempPath, "utf8"), "utf8");
+    appended = true;
+  } catch (err) {
+    // If temp write fails, try direct append as fallback.
+    if (!appended) {
+      try {
+        fs.appendFileSync(filePath, lines, "utf8");
+        appended = true;
+      } catch (fallbackErr) {
+        try {
+          fs.unlinkSync(tempPath);
+        } catch {
+          // Temp file may not exist; ignore cleanup failure.
+        }
+        return { ok: false, error: fallbackErr };
+      }
+    }
+  } finally {
+    if (appended) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        // Temp file may not exist; ignore cleanup failure.
+      }
+    }
+  }
+  return { ok: true };
+}
+
 export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
   const filePath = goalLedgerPath(ctx);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    ledgerCache.delete(filePath);
+    return { events: [], malformed: 0 };
+  }
+  const cached = ledgerCache.get(filePath);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    // Unchanged on disk: O(1) — one statSync, no read, no parse (P1-2).
+    return { events: cached.events, malformed: cached.malformed };
+  }
+
   let content: string;
   try {
     content = fs.readFileSync(filePath, "utf8");
   } catch {
-    return { events: [], malformed: 0 };
+    // Read failure: serve the last known-good cache rather than failing.
+    return cached ? { events: cached.events, malformed: cached.malformed } : { events: [], malformed: 0 };
   }
 
-  const events: GoalLedgerEvent[] = [];
-  let malformed = 0;
-  for (const line of content.split("\n")) {
+  // Parse only the tail we have not parsed yet. `chars` is a monotonic
+  // character offset into the file; truncation/rewrite (content shorter than
+  // the cached offset) falls back to a full parse.
+  const base = cached && content.length >= cached.chars ? cached : null;
+  const tail = base ? content.slice(base.chars) : content;
+
+  let parseText: string;
+  let consumedChars: number;
+  if (base) {
+    // Tail read: advance only past COMPLETE lines (ending in \n). A torn
+    // final line (another process appending concurrently) stays unparsed so
+    // the next read re-parses it instead of losing the event.
+    const nl = tail.lastIndexOf("\n");
+    if (nl === -1) {
+      parseText = "";
+      consumedChars = 0;
+    } else {
+      parseText = tail.slice(0, nl + 1);
+      consumedChars = nl + 1;
+    }
+  } else {
+    parseText = tail;
+    consumedChars = tail.length;
+  }
+
+  const newEvents: GoalLedgerEvent[] = [];
+  let newMalformed = 0;
+  for (const line of parseText.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
       const parsed = JSON.parse(trimmed) as unknown;
       if (isValidLedgerEvent(parsed)) {
-        events.push(sanitizeEvent(parsed));
+        newEvents.push(sanitizeEvent(parsed));
       } else {
-        malformed++;
+        newMalformed++;
       }
     } catch {
-      malformed++;
+      newMalformed++;
     }
   }
+
+  const events = base ? [...base.events, ...newEvents] : newEvents;
+  const malformed = (base?.malformed ?? 0) + newMalformed;
+  ledgerCache.set(filePath, {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    chars: (base?.chars ?? 0) + consumedChars,
+    events,
+    malformed,
+  });
   return { events, malformed };
 }
+
+/**
+ * Incremental ledger tail cache (P1-2): keyed by (size, mtimeMs) with a
+ * monotonic character offset. Steady-state reads are one statSync; appends
+ * parse only the appended bytes; truncation/rewrite falls back to a full
+ * parse automatically.
+ */
+interface LedgerCacheEntry {
+  size: number;
+  mtimeMs: number;
+  chars: number;
+  events: GoalLedgerEvent[];
+  malformed: number;
+}
+
+const ledgerCache = new Map<string, LedgerCacheEntry>();
 
 function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

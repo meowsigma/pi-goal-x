@@ -16,11 +16,14 @@ export type GoalLedgerEvent =
   | { type: "audit_result"; goalId: string; verdict: "approved" | "disapproved" | "error"; report: string; at: string }
   | { type: "audit_skipped"; goalId: string; reason: "disabled" | "user_aborted"; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "goal_completed"; goalId: string; archivePath?: string; at: string }
+  | { type: "goal_archived"; goalId: string; archivePath: string; at: string }
+  | { type: "goal_archive_failed"; goalId: string; message: string; at: string }
   | { type: "goal_aborted"; goalId: string; reason: string; archivePath?: string; at: string }
   | { type: "task_list_set"; goalId: string; taskCount: number; blockCompletion: boolean; at: string }
   | { type: "task_complete"; goalId: string; taskId: string; evidence?: string; at: string }
   | { type: "task_skipped"; goalId: string; taskId: string; reason: string; at: string }
   | { type: "task_reopened"; goalId: string; taskId: string; at: string }
+  | { type: "task_started"; goalId: string; taskId: string; at: string }
   | { type: "goal_budget_limited"; goalId: string; budget: number; tokensUsed: number; at: string }
   | { type: "goal_budget_warning"; goalId: string; budget: number; tokensUsed: number; pct: number; at: string }
   | { type: "goal_stalled"; goalId: string; reason: string; at: string }
@@ -285,6 +288,10 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
       return typeof obj.goalId === "string" && (obj.reason === "disabled" || obj.reason === "user_aborted") && (obj.provider === undefined || typeof obj.provider === "string") && (obj.model === undefined || typeof obj.model === "string") && (obj.thinkingLevel === undefined || typeof obj.thinkingLevel === "string");
     case "goal_completed":
       return typeof obj.goalId === "string" && (obj.archivePath === undefined || typeof obj.archivePath === "string");
+    case "goal_archived":
+      return typeof obj.goalId === "string" && typeof obj.archivePath === "string";
+    case "goal_archive_failed":
+      return typeof obj.goalId === "string" && typeof obj.message === "string";
     case "goal_aborted":
       return typeof obj.goalId === "string" && typeof obj.reason === "string" && (obj.archivePath === undefined || typeof obj.archivePath === "string");
     case "task_list_set":
@@ -294,6 +301,8 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
     case "task_skipped":
       return typeof obj.goalId === "string" && typeof obj.taskId === "string" && typeof obj.reason === "string";
     case "task_reopened":
+      return typeof obj.goalId === "string" && typeof obj.taskId === "string";
+    case "task_started":
       return typeof obj.goalId === "string" && typeof obj.taskId === "string";
     case "goal_budget_limited":
       return typeof obj.goalId === "string" && typeof obj.budget === "number" && typeof obj.tokensUsed === "number";
@@ -330,6 +339,10 @@ function sanitizeEvent(event: GoalLedgerEvent): GoalLedgerEvent {
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_completed":
       return { ...event, goalId: safeGoalId(event.goalId) };
+    case "goal_archived":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "goal_archive_failed":
+      return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_aborted":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "task_list_set":
@@ -339,6 +352,8 @@ function sanitizeEvent(event: GoalLedgerEvent): GoalLedgerEvent {
     case "task_skipped":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "task_reopened":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "task_started":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_budget_limited":
       return { ...event, goalId: safeGoalId(event.goalId) };

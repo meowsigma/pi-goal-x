@@ -76,7 +76,14 @@ function createHarness(options: HarnessOptions) {
 		abort: () => {},
 	} as unknown as ExtensionContext;
 	goalExtension(pi as any, { runCompletionAuditor: options.runCompletionAuditor });
-	return { handlers, commands, tools, ctx, get activeTools() { return [...activeTools]; } };
+	return {
+		handlers,
+		commands,
+		tools,
+		ctx,
+		get activeTools() { return [...activeTools]; },
+		get core() { return (pi as unknown as { _goalCore: any })._goalCore; },
+	};
 }
 
 function makeFixture(opts: { objective?: string; tokenBudget?: number; pauseReason?: string; status?: string } = {}) {
@@ -268,6 +275,8 @@ test("update_goal(complete) runs the auditor without a verification-summary para
 		const events = ledgerEvents(f.cwd);
 		assert.ok(events.some((e) => e.type === "audit_result" && (e as any).verdict === "approved"), "audit_result ledger event");
 		assert.ok(events.some((e) => e.type === "goal_completed"), "goal_completed ledger event");
+		// §15.4: approval shows the result card during deferred completion.
+		assert.equal(h.core.auditResult?.verdict, "approved", "approval sets the result card verdict");
 	} finally {
 		f.cleanup();
 	}
@@ -290,6 +299,10 @@ test("update_goal(complete) with a rejection keeps the goal open with feedback",
 		assert.equal(activeGoalFiles(f.cwd).length, 1, "goal stays open");
 		const events = ledgerEvents(f.cwd);
 		assert.ok(events.some((e) => e.type === "audit_result" && (e as any).verdict === "disapproved"), "disapproved audit recorded");
+		// §15.4: the result card state is set for the widget, then clears.
+		assert.deepEqual(h.core.auditResult?.verdict, "disapproved", "rejection sets the result card verdict");
+		h.core.clearAuditResult();
+		assert.equal(h.core.auditResult, null, "clearAuditResult restores the normal dashboard state");
 	} finally {
 		f.cleanup();
 	}

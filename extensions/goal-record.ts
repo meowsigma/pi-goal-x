@@ -56,6 +56,13 @@ export interface GoalRecord {
 	revision?: number;
 	/** Optional token budget (whole tokens). When accounted usage reaches it, the runtime marks the goal budget_limited. */
 	tokenBudget?: number;
+	/**
+	 * Execution focus: the id of the task (or subtask) the agent is working on.
+	 * Optional for backward compatibility; normalized at load (only an existing
+	 * pending task id is accepted; cleared on complete/skip/removal). Describes
+	 * execution focus, not completion state — TaskStatus is unchanged.
+	 */
+	currentTaskId?: string;
 	taskList?: GoalTaskList;
 	/** Plain-text description of what verification evidence is required before completing this goal. */
 	verificationContract?: string;
@@ -264,6 +271,22 @@ export function normalizePositiveSafeInteger(value: unknown): number | undefined
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : undefined;
 }
 
+/**
+ * §7.4: a persisted currentTaskId is accepted only when it references an
+ * existing PENDING task (top-level or nested). It is cleared when the task is
+ * complete, skipped, or no longer exists; absent for historical files. The
+ * caller decides whether to persist the normalized value — normalization
+ * itself never rewrites old files.
+ */
+export function currentTaskIdIsPending(tasks: readonly GoalTask[] | undefined, id: string | undefined): boolean {
+	if (!id || !tasks) return false;
+	for (const t of tasks) {
+		if (t.id === id) return t.status === "pending";
+		if (t.subtasks && currentTaskIdIsPending(t.subtasks, id)) return true;
+	}
+	return false;
+}
+
 export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 	const raw = asRecord(value);
 	if (!raw) return null;
@@ -287,6 +310,14 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 	const autoContinue = typeof raw.autoContinue === "boolean" ? raw.autoContinue : true;
 	const usage = normalizeUsage(raw.usage);
 	const sisyphus = raw.sisyphus === true;
+	const taskList = normalizeTaskList(raw.taskList);
+	// §7.4: accept a persisted currentTaskId only when it references an existing
+	// pending task; otherwise leave it absent. Historical files stay absent and
+	// are never rewritten just because the field is missing.
+	const currentTaskId =
+		typeof raw.currentTaskId === "string" && currentTaskIdIsPending(taskList?.tasks, raw.currentTaskId.trim())
+			? raw.currentTaskId.trim()
+			: undefined;
 
 	return {
 		id: typeof raw.id === "string" && raw.id ? safeIdPart(raw.id) : newGoalId(),
@@ -305,7 +336,8 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		skipAuditor: raw.skipAuditor === true ? true : undefined,
 		revision: Number.isSafeInteger(raw.revision) && (raw.revision as number) >= 0 ? (raw.revision as number) : 0,
 		tokenBudget: normalizePositiveSafeInteger(raw.tokenBudget),
-		taskList: normalizeTaskList(raw.taskList),
+		taskList,
+		currentTaskId,
 		verificationContract: typeof raw.verificationContract === "string" ? raw.verificationContract : undefined,
 	};
 }

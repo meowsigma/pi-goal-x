@@ -31,6 +31,7 @@ import {
 	sanitizeGoalPaths,
 } from "./storage/goal-files.ts";
 import { GoalService } from "./goal-service.ts";
+import { readGoalLedger } from "./goal-ledger.ts";
 import { GoalAccounting } from "./goal-accounting.ts";
 import { GoalRuntime } from "./goal-runtime.ts";
 import {
@@ -41,6 +42,7 @@ import {
 } from "./goal-pool.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { GOAL_WIDGET_KEY, GoalWidgetComponent, liveDisplayGoal, makeGoalWidgetFactory, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
+import type { AuditVerdict } from "./widgets/auditor-dashboard-model.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
 
 
@@ -63,6 +65,10 @@ export interface GoalCore {
 	auditProgress: AuditorWidgetProgress | null;
 	auditAnimationTimer: ReturnType<typeof setInterval> | null;
 	auditAbortController: AbortController | null;
+	/** §15.4: finished audit result card shown briefly before the dashboard returns. */
+	auditResult: { verdict: AuditVerdict; report: string; at: string } | null;
+	setAuditResult(verdict: AuditVerdict, report: string): void;
+	clearAuditResult(): void;
 	goalModalDepth: number;
 	enterGoalModal(): void;
 	exitGoalModal(): void;
@@ -93,6 +99,10 @@ export interface GoalCore {
 	isStaleCheckpointBlockedToolCall(toolName: string): boolean;
 	clearStoppedRuntimeState(): void;
 	openGoals(): GoalRecord[];
+	/** §10: toggle the unified dashboard between compact and expanded modes. */
+	toggleDashboardExpanded(): void;
+	/** §10: whether the unified dashboard is currently expanded. */
+	isDashboardExpanded(): boolean;
 	reconcileFocusedGoalFromDisk(ctx: ExtensionContext, opts?: { preserveMemoryUsage?: boolean }): boolean;
 	appendFocusEntry(goalId: string | null, reason: GoalFocusReason): void;
 	setFocusedGoalId(goalId: string | null, ctx: ExtensionContext, reason: GoalFocusReason, opts?: { recordLedger?: boolean }): void;
@@ -210,11 +220,36 @@ export function createGoalCore(
 	let terminalInputUnsubscribe: (() => void) | null = null;
 	let auditProgress: AuditorWidgetProgress | null = null;
 	let auditAnimationTimer: ReturnType<typeof setInterval> | null = null;
+	let auditResult: { verdict: AuditVerdict; report: string; at: string } | null = null;
+	let auditResultClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function setAuditResult(verdict: AuditVerdict, report: string): void {
+		auditResult = { verdict, report, at: nowIso() };
+		if (auditResultClearTimer) clearTimeout(auditResultClearTimer);
+		// Short-lived foreground display (§2.5): the card is visible while the
+		// user reads it, then the normal dashboard returns automatically.
+		auditResultClearTimer = setTimeout(() => {
+			auditResult = null;
+			auditResultClearTimer = null;
+			goalWidgetComponentRef.current?.invalidate();
+		}, 6000);
+		auditResultClearTimer.unref?.();
+		goalWidgetComponentRef.current?.invalidate();
+	}
+
+	function clearAuditResult(): void {
+		if (auditResultClearTimer) clearTimeout(auditResultClearTimer);
+		auditResultClearTimer = null;
+		auditResult = null;
+	}
 	let auditAbortController: AbortController | null = null;
 	let auditAborted = false;
 
 	let goalModalDepth = 0;
 	let debugMode = false;
+	// §10: unified dashboard expansion state (compact vs expanded task view),
+	// owned by the core so it survives host-side widget re-instantiation.
+	let dashboardExpanded = false;
 
 	// Per-turn flags reset in turn_start (#4, C9 fix).
 	// goalWorkToolCalledThisTurn: tracks whether a real goal-work tool was called.
@@ -621,6 +656,9 @@ export function createGoalCore(
 						getSettings: () => loadGoalSettings(ctx.cwd),
 						getDebugMode: () => debugMode,
 						getStalled: () => stallNotified,
+						getExpanded: () => dashboardExpanded,
+						getLedgerEvents: () => readGoalLedger(ctx).events,
+						getAuditResult: () => auditResult,
 					}),
 					{ placement: "aboveEditor" },
 				);
@@ -645,6 +683,9 @@ export function createGoalCore(
 					getSettings: () => loadGoalSettings(ctx.cwd),
 					getDebugMode: () => debugMode,
 					getStalled: () => stallNotified,
+					getExpanded: () => dashboardExpanded,
+					getLedgerEvents: () => readGoalLedger(ctx).events,
+					getAuditResult: () => auditResult,
 				}),
 				{ placement: "aboveEditor" },
 			);
@@ -846,6 +887,14 @@ export function createGoalCore(
 		set auditProgress(value: AuditorWidgetProgress | null) {
 			auditProgress = value;
 		},
+		get auditResult() {
+			return auditResult;
+		},
+		set auditResult(value: { verdict: AuditVerdict; report: string; at: string } | null) {
+			auditResult = value;
+		},
+		setAuditResult,
+		clearAuditResult,
 		get auditAnimationTimer() {
 			return auditAnimationTimer;
 		},
@@ -893,6 +942,13 @@ export function createGoalCore(
 		},
 		set terminalInputUnsubscribe(value: (() => void) | null) {
 			terminalInputUnsubscribe = value;
+		},
+		toggleDashboardExpanded() {
+			dashboardExpanded = !dashboardExpanded;
+			goalWidgetComponentRef.current?.invalidate();
+		},
+		isDashboardExpanded() {
+			return dashboardExpanded;
 		},
 		goalWidgetComponentRef,
 		goalService,

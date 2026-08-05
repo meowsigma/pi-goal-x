@@ -126,3 +126,14 @@ implementation.
   B4 prompt-size + prefill measurement, B5 startup/contention/auditor timing,
   B6 regression gate; header updated; PARKED.md section annotated as a
   historical record.
+- Ninth steering pass (2026-08-04): user extended benchmarking to *all*
+  extension features with agent time excluded completely ("no live agents in
+  benchmarking"), to drive wall clock down on the next run. Part 4 gained
+  B7 (feature-wide wall-clock matrix — every feature gets a deterministic
+  agent-free case, Part 0 module map doubles as benchmark coverage map,
+  fixture sizes 1/10/50 goals, 1k/5k/10k events, 10/50 tasks), B8
+  (agent-exclusion harness — auditor stubbed at the pre-audit gate, drafting/
+  continuation via scripted fake turns, no-model/no-network assertion per
+  run), and B9 (committed baseline table + per-feature wall-clock budgets as
+  targets for the next run); Part 4 framing and B6's gate scope (B1–B9)
+  updated.

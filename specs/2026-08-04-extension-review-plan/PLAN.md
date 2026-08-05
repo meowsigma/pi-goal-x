@@ -353,11 +353,16 @@ cost pressure before the limit.
 ## Part 4 — Benchmarking plan (before/after, every optimisation measured)
 
 Framing: each P1 item ships with a before/after measurement that verifies its
-claimed magnitude — no optimisation lands unmeasured. Baselines are captured
-on the same machine and storage before changes, and both local-SSD and
-slow-storage numbers are reported wherever the magnitude claim depends on
-storage (the pattern follows the existing `experiments/scroll-repro`
-before/after harness). Items are prioritized by what they prove first.
+claimed magnitude — no optimisation lands unmeasured. Coverage extends to
+*every* extension feature (the Part 0 module map doubles as the benchmark
+coverage map), not just the P1 hot paths. Agent time is excluded by
+construction: no live model calls and no agent-session spawns in any
+benchmark (B8 enforces this). Baselines are captured on the same machine and
+storage before changes, and both local-SSD and slow-storage numbers are
+reported wherever the magnitude claim depends on storage (the pattern follows
+the existing `experiments/scroll-repro` before/after harness). Items are
+prioritized by what they prove first; B1–B5 prove the optimisation items,
+B7–B9 prove everything else and turn baselines into budgets for the next run.
 
 **B1. I/O hot-path micro-bench harness with slow-storage emulation.** Description:
 `experiments/bench/` micro-benchmarks over synthetic goal fixtures for the
@@ -401,9 +406,51 @@ completion fixture). User value: startup, contention stalls, and audit
 latency each get a before/after number instead of an estimate.
 
 **B6. Regression gate.** Description: one bounded script (target <2 min) that
-replays B1–B5 baselines and fails when a shipped optimisation regresses below
+replays B1–B9 baselines and fails when a shipped optimisation regresses below
 its recorded magnitude; run on demand and in CI. Rationale: without a gate,
 optimisations silently decay in later refactors — the "fast" half of "clean
 and fast" needs a watchdog. User value: the plan's gains are locked in;
 regressions surface the turn they land, not months later.
 
+**B7. Feature-wide wall-clock matrix (all extension features, agent-free).** Description:
+every extension feature gets a deterministic benchmark case, not just the P1
+I/O paths: tool handlers (goal create/focus/status/list, task tools,
+`update_goal` complete/blocked/paused transitions), dialog renders
+(questionnaire, accept-goal confirmation, task-list confirmation, escape
+dialog, settings palette, task-list overlay), widget render + spinner cadence,
+prompt/context block construction, ledger/pool/settings/lock/persist ops,
+lifecycle events (activation `loadState`, focus switch, compact rebuild,
+drafts rehydrate), continuation-gating and policy decisions,
+accounting/usage-merge, stale-checkpoint detection, and notifications. Each
+case names the Part 0 module(s) it exercises and runs over fixture sizes
+(1/10/50 goals, 1k/5k/10k events, 10/50 tasks). Rationale: P1 targets the hot
+paths, but the next run needs every feature's measured cost to find the next
+order-of-magnitude — wall clock hides in unmeasured features. User value: a
+per-feature wall-clock baseline for every module, so the next run's
+optimisation priorities come from measurement rather than guesses.
+
+**B8. Agent-exclusion harness (no live agents in benchmarking).** Description:
+the harness never calls a live model and never spawns an agent session: the
+auditor is stubbed (completion-flow cases measure extension-side dispatch,
+state changes, and ledger writes, ending at the pre-audit gate); drafting and
+continuation are invoked with scripted fake turns; every other case is pure
+function calls over fixtures. A "no model, no network" assertion guards each
+run (spawn/session calls are forbidden and outbound requests counted as
+zero). Rationale: benchmark numbers must be deterministic, fast, and
+CI-runnable — live agent calls make runs minutes long, non-deterministic, and
+flaky, and agent time is out of scope by definition: we are benchmarking the
+extension, not the model. User value: bounded, repeatable benchmarks that
+isolate extension wall clock from model inference so the two are never
+conflated.
+
+**B9. Baseline table + per-feature wall-clock budgets.** Description: the first
+run emits a committed baseline table — per operation, p50/p95/max ms, op
+counts, fixture size, storage class — from which per-operation-class budgets
+are set (e.g., per-turn extension overhead, dialog open-to-render, widget
+render, task-update round-trip, overlay open/to-toggle) as targets for the
+next run; the table is re-emitted after changes and diffed. Rationale: "get
+wall clock down on the next run" needs a target: budgets turn the baseline
+from a report into a spec — any feature over its budget becomes a candidate,
+and regressions trip B6. User value: the next implementation run starts with
+concrete per-feature reduction targets and a measuring stick to prove each
+one.

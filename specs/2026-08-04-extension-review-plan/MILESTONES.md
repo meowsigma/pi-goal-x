@@ -75,3 +75,9 @@ implementation.
   interactive task toggling in the Ctrl+Shift+T overlay (TUI). All reuse
   existing surfaces; no new slash commands.
 - PLAN header amended to record the steered scope.
+- Second steering pass (2026-08-04): user liked the idea of seeing *more task
+  detail*; F1 was promoted from a worklog into a full task-detail capability
+  (untruncated text, verification contract, transition trail with timestamps
+  and actor, evidence, subtree position) delivered via the overlay detail
+  pane and `get_goal`, explicitly paired with enhancement E2 (widget depth)
+  into a graduated detail story. Priority 1 retained.

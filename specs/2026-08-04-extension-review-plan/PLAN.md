@@ -222,17 +222,26 @@ reuses existing surfaces: the task-list overlay (Ctrl+Shift+T), the goal
 widget, `get_goal`, the proposal/confirmation dialogs, and the `goal-service`
 mutation boundary with its existing lock + revision + ledger guarantees.
 
-**F1. Task evidence worklog (priority 1).** Description: every task transition
-already writes a ledger event, and completions of verification-contract tasks
-already carry evidence; surface that recorded history instead of discarding
-it — an expandable detail pane in the task-list overlay shows each task's
-trail (created → updated → completed, by whom, with its evidence line), and
-`get_goal` gains the same trail for the pending/next task (last N transitions).
+**F1. Task detail pane — full depth, contract, evidence, and history (priority 1).** Description:
+every task record already carries more than the UI shows: full description,
+verification-contract lines, status + lightweight flag, a transition trail
+(created → updated → completed with timestamps and the actor: agent, human, or
+auditor), and the evidence recorded at each completion. Surface all of it in a
+dedicated detail view opened from the task-list overlay (select a task →
+Enter), showing the untruncated task text, its contract, its complete history
+and evidence, and its position in the subtree (children/siblings); mirror the
+same detail for the pending/next task in `get_goal`. Together with E2 (widget
+depth, always visible) this gives a graduated detail story: glanceable depth in
+the widget, full depth on demand in the overlay, and the same depth for the
+agent.
 Surfaces: **TUI** (overlay detail pane) and **agent** (`get_goal`). Rationale:
-the audit found evidence is captured and then invisible — nothing in the UI
-says *why* a task is in its state, and only the completion auditor ever reads
-the evidence. User value: humans and agents can ground rework decisions in the
-actual trail instead of re-deriving it or re-doing completed steps.
+the audit found task records already hold everything this needs (descriptions,
+contracts, evidence, ledger events), but every surface truncates to one line
+and the trail is written to the ledger and then never read — the only reader of
+evidence today is the completion auditor. User value: "seeing more task detail"
+stops being a missing capability — humans can inspect why a task is done and
+what it required, and agents can ground rework in the recorded evidence
+instead of re-deriving it or re-doing completed steps.
 
 **F2. Objective→task bootstrap at creation (priority 2).** Description: when a
 goal is created (draft confirmation or `create_goal`) with no task list and the

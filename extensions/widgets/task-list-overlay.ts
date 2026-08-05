@@ -13,7 +13,7 @@ type LineEntry =
 	| { type: "separator" }
 	| { type: "goal-header"; icon: string; title: string; status: string }
 	| { type: "task-summary"; text: string }
-	| { type: "task"; prefix: string; title: string }
+	| { type: "task"; goalId: string; taskId: string; status: "pending" | "complete" | "skipped"; prefix: string; title: string }
 	| { type: "empty-message"; text: string };
 
 // ── Public API ───────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ export async function showTaskListOverlay(
 	ctx: ExtensionContext,
 	goalsById: Map<string, GoalRecord>,
 	focusedGoalId: string | null,
+	opts: { onToggleTask?: (goalId: string, taskId: string) => Promise<{ ok: boolean; message?: string }> } = {},
 ): Promise<void> {
 	if (!ctx.hasUI) return;
 
@@ -44,6 +45,9 @@ export async function showTaskListOverlay(
 			let entries: LineEntry[] = [];
 			let totalOpenGoals = 0;
 			let totalTaskCount = 0;
+			// F3: interactive cursor over task rows; Enter toggles the task.
+			let cursorEntryIndex = -1;
+			let cursorMessage = "";
 
 			function rebuildEntries(): void {
 				entries = [];
@@ -85,7 +89,7 @@ export async function showTaskListOverlay(
 						const tasks = goal.taskList.tasks;
 						for (let i = 0; i < tasks.length; i++) {
 							const isLast = i === tasks.length - 1;
-							collectTaskEntries(tasks[i], 1, isLast, entries);
+							collectTaskEntries(tasks[i], 1, isLast, entries, goal.id);
 						}
 					} else {
 						entries.push({ type: "empty-message", text: "(no tasks)" });
@@ -93,6 +97,10 @@ export async function showTaskListOverlay(
 
 					totalOpenGoals++;
 				}
+
+				// F3: reset the cursor to the first task row after a rebuild.
+				cursorEntryIndex = entries.findIndex((e) => e.type === "task");
+				cursorMessage = "";
 			}
 
 			// Build initial entries
@@ -260,8 +268,12 @@ export async function showTaskListOverlay(
 
 					out.push(accent(`├${horiz}┤`));
 					const toggleHint = showAllGoals ? "show current" : "show all";
-					const footer = dim(`↑↓/jk scroll  ·  'a' to ${toggleHint}  ·  Esc close`);
+					const interactive = opts.onToggleTask ? "  ·  Enter toggle task" : "";
+					const footer = dim(`↑↓/jk scroll  ·  'a' to ${toggleHint}  ·  Esc close${interactive}`);
 					out.push(line(p + footer));
+					if (cursorMessage) {
+						out.push(line(p + theme.fg("warning", cursorMessage)));
+					}
 					out.push(accent(`└${horiz}┘`));
 
 					return out;
@@ -275,11 +287,23 @@ export async function showTaskListOverlay(
 
 					if (matchesKey(data, "up") || matchesKey(data, "k")) {
 						scrollOffset = Math.max(0, scrollOffset - 1);
+						if (opts.onToggleTask) {
+							let prev = -1;
+							for (let i = cursorEntryIndex - 1; i >= 0; i--) {
+								if (entries[i]?.type === "task") { prev = i; break; }
+							}
+							if (prev >= 0) cursorEntryIndex = prev;
+						}
 						tui.requestRender();
 						return;
 					}
 					if (matchesKey(data, "down") || matchesKey(data, "j")) {
 						scrollOffset = Math.min(maxO, scrollOffset + 1);
+						if (opts.onToggleTask) {
+							for (let i = cursorEntryIndex + 1; i < entries.length; i++) {
+								if (entries[i]?.type === "task") { cursorEntryIndex = i; break; }
+							}
+						}
 						tui.requestRender();
 						return;
 					}
@@ -309,6 +333,28 @@ export async function showTaskListOverlay(
 						rebuildEntries();
 						scrollOffset = 0;
 						tui.requestRender();
+						return;
+					}
+					if (matchesKey(data, "enter") && opts.onToggleTask) {
+						const cursorEntry = entries[cursorEntryIndex];
+						if (cursorEntry && cursorEntry.type === "task") {
+							void (async () => {
+								const result = await opts.onToggleTask!(cursorEntry.goalId, cursorEntry.taskId);
+								if (result.ok) {
+									rebuildEntries();
+									tui.requestRender();
+								} else {
+									cursorMessage = result.message ?? "Toggle failed.";
+									tui.requestRender();
+									setTimeout(() => {
+										cursorMessage = "";
+										tui.requestRender();
+									}, 2500);
+								}
+							})();
+							return;
+						}
+						done();
 						return;
 					}
 					if (matchesKey(data, "escape") || matchesKey(data, "enter")) {
@@ -345,17 +391,18 @@ function collectTaskEntries(
 	depth: number,
 	isLast: boolean,
 	entries: LineEntry[],
+	goalId: string,
 ): void {
 	const branch = isLast ? BRANCH_LAST : BRANCH;
 	const statusIcon = STATUS_ICONS[task.status] ?? STATUS_ICONS.pending;
 
 	const indent = "   " + "  ".repeat(depth - 1);
 	const prefix = `${indent} ${branch} ${statusIcon}`;
-	entries.push({ type: "task", prefix, title: task.title });
+	entries.push({ type: "task", goalId, taskId: task.id, status: task.status, prefix, title: task.title });
 
 	if (task.subtasks && task.subtasks.length > 0) {
 		for (let i = 0; i < task.subtasks.length; i++) {
-			collectTaskEntries(task.subtasks[i], depth + 1, i === task.subtasks.length - 1, entries);
+			collectTaskEntries(task.subtasks[i], depth + 1, i === task.subtasks.length - 1, entries, goalId);
 		}
 	}
 }

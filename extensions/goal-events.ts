@@ -81,6 +81,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.goalWorkToolCalledThisTurn = false;
 		core.beginAccounting();
 		core.goalService.beginTurn(ctx, core.focusedGoalId); // P1-3 transaction buffer
+		core.touchGoalActivity(); // F5
 		core.updateUI(ctx);
 	});
 
@@ -117,12 +118,14 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("tool_execution_end", async (_event, ctx) => {
+		core.touchGoalActivity(); // F5
 		core.accountProgress(ctx);
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
 		const message = event.message as AssistantMessageLike;
 		const tokens = assistantTurnTokens(message);
+		core.touchGoalActivity(); // F5
 		core.accountProgress(ctx, { completedTurnTokens: tokens });
 
 		if (isAbortedAssistantMessage(message)) {
@@ -352,6 +355,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		const activeGoal = core.state.goal;
 		const settings = loadGoalSettings(ctx.cwd);
 		let prompt = goalPrompt(activeGoal, settings);
+		// F5: [GOAL STALLED] steering note when the detector fired.
+		const stalledNote = core.checkStall(ctx);
+		if (stalledNote) prompt += stalledNote;
 		// Inject durable auditor feedback if the latest result was a rejection
 		try {
 			const ledger = readGoalLedger(ctx);

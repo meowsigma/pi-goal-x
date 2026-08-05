@@ -1,6 +1,8 @@
 import { matchesKey } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
+import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
+import { loadGoalSettings } from "./goal-settings.ts";
 import { serializeGoalFile } from "./storage/goal-files.ts";
 import { showTaskListOverlay } from "./widgets/task-list-overlay.ts";
 import type { AuditorWidgetProgress } from "./widgets/goal-widget.ts";
@@ -48,6 +50,65 @@ function formatSectionDebug(title: string, content: string): string[] {
 }
 
 
+/**
+ * F3: toggle one task through the goal-service mutation boundary with the
+ * same gates as update_goal_task: completing a pending task requires its
+ * subtasks complete first and (unless contracts are disabled) evidence when
+ * it carries a verification contract — the evidence is collected through the
+ * UI input dialog; completing a complete task reopens it to pending (a
+ * deliberate TUI-only relaxation of the tool surface's immutability, for
+ * explicit human corrections).
+ */
+export async function toggleTaskViaService(core: GoalCore, ctx: ExtensionContext, goalId: string, taskId: string): Promise<{ ok: boolean; message?: string }> {
+	const goal = core.goalsById.get(goalId);
+	if (!goal) return { ok: false, message: `Goal ${goalId} not found in this session.` };
+	if (goal.status !== "active") return { ok: false, message: `Task updates apply only to an active goal (current status: ${goal.status}).` };
+	if (!goal.taskList) return { ok: false, message: "The goal has no task list." };
+	const settings = loadGoalSettings(ctx.cwd);
+	const task = findTaskInTree(goal.taskList.tasks, taskId);
+	if (!task) return { ok: false, message: `Task "${taskId}" not found.` };
+	const now = nowIso();
+
+	if (task.status === "pending") {
+		let evidence: string | undefined;
+		if (!settings.disableContracts && task.verificationContract) {
+			const input = await ctx.ui.input(`Evidence for task ${taskId}`, "");
+			if (input === undefined || !input.trim()) {
+				return { ok: false, message: `Task "${taskId}" has a verification contract; provide evidence to complete it.` };
+			}
+			evidence = input.trim().slice(0, 200);
+		}
+		const subtaskGate = checkSubtasksComplete(task);
+		if (subtaskGate) return { ok: false, message: subtaskGate };
+		const result = core.goalService.updateTask(ctx, {
+			focusToken: core.focusedOperationToken(goalId),
+			taskId,
+			validate: (t) => {
+				if (t.status === "complete") return { ok: false, message: `Task "${taskId}" is already complete.` };
+				return { ok: true };
+			},
+			update: (t) => ({ ...t, status: "complete" as const, completedAt: now, evidence }),
+			ledger: (written) => [{ type: "task_complete", goalId: written.id, taskId, evidence, at: written.updatedAt }],
+		});
+		if (!result.ok) return { ok: false, message: result.message };
+		return { ok: true };
+	}
+
+	if (task.status === "complete") {
+		const result = core.goalService.updateTask(ctx, {
+			focusToken: core.focusedOperationToken(goalId),
+			taskId,
+			validate: () => ({ ok: true }),
+			update: (t) => ({ ...t, status: "pending" as const, completedAt: undefined, evidence: undefined }),
+			ledger: (written) => [{ type: "task_reopened", goalId: written.id, taskId, at: written.updatedAt }],
+		});
+		if (!result.ok) return { ok: false, message: result.message };
+		return { ok: true };
+	}
+
+	return { ok: false, message: `Task "${taskId}" is skipped; change it with /goal-tweak or update_goal_task.` };
+}
+
 export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 		core.terminalInputUnsubscribe?.();
@@ -71,10 +132,13 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				return { consume: true };
 			}
 
-			// Ctrl+Shift+T — show task list overlay for all open goals
+			// Ctrl+Shift+T — show task list overlay for all open goals (F3:
+			// interactive: Enter toggles a task through goal-service).
 			if (matchesKey(data, "ctrl+shift+t")) {
 				core.enterGoalModal();
-				showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId).finally(() => core.exitGoalModal());
+				showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId, {
+					onToggleTask: (goalId, taskId) => toggleTaskViaService(core, ctx, goalId, taskId),
+				}).finally(() => core.exitGoalModal());
 				return { consume: true };
 			}
 

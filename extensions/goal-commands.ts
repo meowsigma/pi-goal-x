@@ -258,6 +258,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	const SETTING_ROWS: readonly SettingRow[] = [
 		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", section: "Goal behavior", kind: "boolean" },
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
+		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "disableTasks", label: "disableTasks", section: "Task tracking", kind: "boolean" },
 		{ key: "subtaskDepth", label: "subtaskDepth", section: "Task tracking", kind: "positiveInteger" },
 		{ key: "disabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean" },
@@ -271,6 +272,7 @@ export function registerGoalCommands(core: GoalCore): void {
 			return config[key] === true ? "true" : "false";
 		}
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
+		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		return config[key] ?? "(default)";
 	}
 

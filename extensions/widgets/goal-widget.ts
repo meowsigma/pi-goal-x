@@ -10,6 +10,7 @@ import {
 } from "../goal-core.ts";
 import type { GoalRecord, GoalTask, GoalTaskList, TaskStatus } from "../goal-record.ts";
 import type { GoalSettings } from "../goal-settings.ts";
+import { sisyphusStepProgress } from "../goal-policy.ts";
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
 
@@ -54,6 +55,7 @@ export function makeGoalWidgetFactory(opts: {
 	getAuditorProgress: () => AuditorWidgetProgress | null;
 	getSettings: () => GoalSettings;
 	getDebugMode: () => boolean;
+	getStalled: () => boolean;
 }) {
 	return (tui: TUI, theme: Theme) => new GoalWidgetComponent({
 		tui,
@@ -63,6 +65,7 @@ export function makeGoalWidgetFactory(opts: {
 		getAuditorProgress: opts.getAuditorProgress,
 		getSettings: opts.getSettings,
 		getDebugMode: opts.getDebugMode,
+		getStalled: opts.getStalled,
 	});
 }
 
@@ -87,6 +90,8 @@ export interface GoalWidgetOptions {
 	getAuditorProgress?: () => AuditorWidgetProgress | null;
 	getSettings?: () => GoalSettings;
 	getDebugMode?: () => boolean;
+	/** F5: stalled badge (active auto-continue goal with no recent activity). */
+	getStalled?: () => boolean;
 }
 
 function fit(value: string, width: number): string {
@@ -138,6 +143,43 @@ function countFlatTasks(tasks: GoalTask[]): { total: number; done: number } {
 	return { total, done };
 }
 
+/** F1: collect pending tasks in tree order with their depth. */
+function collectPendingWithDepth(tasks: GoalTask[], depth = 0): Array<{ task: GoalTask; depth: number }> {
+	const out: Array<{ task: GoalTask; depth: number }> = [];
+	for (const t of tasks) {
+		if (t.status === "pending") out.push({ task: t, depth });
+		if (t.subtasks && t.subtasks.length > 0) out.push(...collectPendingWithDepth(t.subtasks, depth + 1));
+	}
+	return out;
+}
+
+/** F1: most recent completed tasks carrying evidence (tree order, capped). */
+function recentCompletedWithEvidence(tasks: GoalTask[], cap: number): Array<{ id: string; evidence?: string; title: string }> {
+	const out: Array<{ id: string; evidence?: string; title: string }> = [];
+	for (const t of tasks) {
+		if (t.status === "complete") out.push({ id: t.id, evidence: t.evidence, title: t.title });
+		if (t.subtasks && t.subtasks.length > 0) out.push(...recentCompletedWithEvidence(t.subtasks, cap - out.length));
+		if (out.length >= cap) break;
+	}
+	return out.slice(0, cap);
+}
+
+/** F4: first N ordered-step titles from the objective. */
+function orderedStepTitles(objective: string, count: number): string[] {
+	const titles: string[] = [];
+	const lines = objective.split(/\r?\n/);
+	for (const raw of lines) {
+		const line = raw.trim();
+		const numbered = line.match(/^(\d{1,2})\s*[.):]\s*(.*)$/);
+		const step = line.match(/^step\s+(\d+)\s*:?\s*(.*)$/i);
+		const m = numbered ?? step;
+		if (!m) continue;
+		const no = Number(m[1]);
+		titles[no - 1] = (m[2] || "").trim();
+	}
+	return titles.slice(0, count);
+}
+
 function findFirstPending(tasks: GoalTask[]): GoalTask | undefined {
 	const queue = [...tasks];
 	while (queue.length > 0) {
@@ -148,8 +190,13 @@ function findFirstPending(tasks: GoalTask[]): GoalTask | undefined {
 	return undefined;
 }
 
-function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0, disableTasks = false): string {
+function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0, disableTasks = false, stalled = false): string {
 	const bits: string[] = [];
+	if (stalled) bits.push("⏱ stalled");
+	if (goal.sisyphus) {
+		const steps = sisyphusStepProgress(goal);
+		if (steps) bits.push(`Step ${steps.current}/${steps.total}`);
+	}
 	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
 	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
@@ -262,7 +309,7 @@ export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme:
 	return lines;
 }
 
-export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean } = {}): string[] {
+export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean } = {}): string[] {
 	// When auditor progress is active, show auditor display instead of normal goal widget
 	if (options.auditorProgress) {
 		return renderAuditorWidgetLines(options.auditorProgress, theme, width);
@@ -281,7 +328,7 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const mode = goal.sisyphus ? "Sisyphus" : "Goal";
 	const headingLeft = `${theme.fg(color, icon)} ${theme.fg(color, theme.bold(mode))} ${theme.fg("muted", label.replace(/^sisyphus |^goal /, ""))}`;
 	const otherOpenGoalCount = Math.max(0, (options.openGoalCount ?? (goal ? 1 : 0)) - 1);
-	const headingRight = theme.fg("muted", headingMeta(goal, otherOpenGoalCount, options.disableTasks));
+	const headingRight = theme.fg("muted", headingMeta(goal, otherOpenGoalCount, options.disableTasks, options.stalled === true));
 	const lines: string[] = [heading(theme, safeWidth, headingLeft, headingRight)];
 	const body: string[] = [];
 
@@ -303,10 +350,43 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 		if (done === total) {
 			body.push(`${theme.fg("success", "✓")} ${theme.fg("muted", "All tasks complete")}`);
 		} else {
-			const firstPending = findFirstPending(goal.taskList.tasks);
-			if (firstPending) {
-				body.push(`${theme.fg("warning", "◻")} ${theme.fg("muted", `${firstPending.id}: ${truncateText(firstPending.title, Math.max(8, safeWidth - 20))} (next)`)}`);
+			// F1: task-progress block — counts, next pending with depth-aware
+			// indentation + contract snippets, evidence for recent completions.
+			body.push(`${theme.fg("muted", `Tasks: ${done}/${total} done`)}`);
+			const pending = collectPendingWithDepth(goal.taskList.tasks);
+			for (const entry of pending.slice(0, 3)) {
+				const indent = "  ".repeat(entry.depth);
+				body.push(`${theme.fg("warning", "◻")} ${indent}${theme.fg("muted", `${entry.task.id}: ${truncateText(entry.task.title, Math.max(8, safeWidth - 24))}`)}`);
+				if (entry.task.verificationContract) {
+					body.push(`${indent}  ${theme.fg("dim", `contract: ${truncateText(entry.task.verificationContract, Math.max(8, safeWidth - 32))}`)}`);
+				}
 			}
+			const hidden = pending.length - 3;
+			if (hidden > 0) {
+				body.push(`${theme.fg("dim", `(+${hidden} more pending — Ctrl+Shift+T)`)}`);
+			}
+			const recent = recentCompletedWithEvidence(goal.taskList.tasks, 2);
+			for (const entry of recent) {
+				body.push(`${theme.fg("success", "✓")} ${theme.fg("dim", `${entry.id}: ${truncateText(entry.evidence ?? entry.title, Math.max(8, safeWidth - 18))}`)}`);
+			}
+		}
+	}
+
+	// F4: sisyphus ordered-step progress (uses the E6 step detector).
+	if (goal.sisyphus) {
+		const steps = sisyphusStepProgress(goal);
+		if (steps && steps.total <= 6) {
+			const ordered = orderedStepTitles(goal.objective, steps.total);
+			ordered.forEach((title, index) => {
+				const stepNo = index + 1;
+				const isCurrent = stepNo === steps.current;
+				const isDone = stepNo < steps.current;
+				const marker = isDone ? theme.fg("success", "✓") : isCurrent ? theme.fg("accent", "▸") : theme.fg("dim", "·");
+				const line = isCurrent
+					? theme.fg("text", `${marker} Step ${stepNo}: ${truncateText(title, Math.max(8, safeWidth - 20))}`)
+					: theme.fg("muted", `${marker} Step ${stepNo}: ${truncateText(title, Math.max(8, safeWidth - 20))}`);
+				body.push(line);
+			});
 		}
 	}
 
@@ -337,6 +417,7 @@ export class GoalWidgetComponent implements Component {
 	private getAuditorProgress: () => AuditorWidgetProgress | null;
 	private getSettings: () => GoalSettings;
 	private getDebugMode: () => boolean;
+	private getStalled: () => boolean;
 
 	constructor(options: GoalWidgetOptions) {
 		this.theme = options.theme;
@@ -346,6 +427,7 @@ export class GoalWidgetComponent implements Component {
 		this.getAuditorProgress = options.getAuditorProgress ?? (() => null);
 		this.getSettings = options.getSettings ?? (() => ({}));
 		this.getDebugMode = options.getDebugMode ?? (() => false);
+		this.getStalled = options.getStalled ?? (() => false);
 	}
 
 	update(): void {
@@ -409,6 +491,7 @@ export class GoalWidgetComponent implements Component {
 			openGoalCount: this.getOpenGoalCount(),
 			auditorProgress: this.getAuditorProgress(),
 			disableTasks: settings.disableTasks,
+			stalled: this.getStalled(),
 		});
 		if (this.getDebugMode()) {
 			lines.push(...this.renderDebugPanel(width));

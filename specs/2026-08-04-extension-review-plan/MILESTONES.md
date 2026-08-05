@@ -267,3 +267,43 @@ All 7 implemented; `npm test` 509 pass (502 + 7 new enhancement tests),
   `goalDetails(goal, detail)`; paused/blocked flows populate it; collapsed
   headings byte-identical (no resultDetail/expanded → unchanged render),
   expanded view adds the full reason + suggested action.
+
+### Milestone 5 — Part 3 features F1..F6 (task 5, 2026-08-05)
+All 6 implemented; `npm test` 519 pass (509 + 10 feature tests), `npm run check`
+clean. Surfaces per feature:
+
+- **F1 task detail in the goal-running widget** (TUI + agent) — the widget's
+  single pending-task line replaced with a task-progress block: `Tasks: N/M
+  done`, next pending tasks with depth-aware indentation + verification
+  contracts (cap 3, "+N more pending — Ctrl+Shift+T"), and evidence lines for
+  recent completions; `get_goal` mirrors the block via
+  `buildGoalTaskDetailBlock`.
+- **F2 objective→task bootstrap** (human + agent + TUI) — new
+  `goal-task-derive.ts` parses checklist markers / ordered steps (≥2); the
+  draft confirmation dialog shows "Tasks derived from the objective (confirm
+  or ask the agent to adjust)" and the goal is created with the derived tree;
+  `create_goal` (agent path) stays tool-driven and surfaces the derivation as
+  a `set_goal_tasks` guidance line.
+- **F3 interactive task toggling in the Ctrl+Shift+T overlay** (TUI) — the
+  overlay gains a cursor (highlighted task row, up/down), Enter toggles
+  pending→complete (children-first + contract-evidence gates; evidence
+  collected via the UI input dialog) and complete→pending (deliberate
+  TUI-only relaxation of the tool surface's immutability, explicit human
+  correction, `task_reopened` ledger); all mutations flow through
+  `goal-service.updateTask`; failures show inline and clear after 2.5s.
+- **F4 sisyphus ordered-step progress in the widget** (TUI + agent) — Step
+  N/M badge in the widget header + ordered step lines with the current step
+  highlighted (≤6 steps), built on the E6 `sisyphusStepProgress` detector.
+- **F5 stall detector** (TUI + agent) — new `stallTimeoutMinutes` setting
+  (default 0 = off); event-driven (no polling): activity timestamps updated
+  at turn_start/tool_execution_end/turn_end; `checkStall` in
+  before_agent_start emits one `goal_stalled` ledger event + notification +
+  `[GOAL STALLED]` steering note; widget shows a "⏱ stalled" badge.
+- **F6 token-budget alerts** (TUI + agent) — accountProgress fires one
+  `goal_budget_warning` ledger event + notification at each of 50/75/90%
+  (tracked per goal+threshold, never re-fires); the E4 widget budget line is
+  the persistent progress hint (warning ≥90%, accent ≥50%).
+
+Also fixed during F5/F6: `loadGoalSettings` was dropping the new
+`auditorProjectResources`/`stallTimeoutMinutes` fields from its returned
+object (E3's setting was silently inert) — both now carried through.

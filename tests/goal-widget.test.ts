@@ -232,7 +232,10 @@ test("renderGoalWidgetLines shows next pending task in body", () => {
 	}), theme, 100);
 	const body = lines.slice(1).join(" ");
 	assert.match(body, /◻/);
-	assert.match(body, /next/);
+	// F1: counts + pending task ids, no "(next)" marker anymore.
+	assert.match(body, /1\/3 done/);
+	assert.match(body, /t2/);
+	assert.match(body, /t3/);
 });
 
 test("renderGoalWidgetLines shows 'All tasks complete' when all done", () => {
@@ -276,7 +279,7 @@ test("renderGoalWidgetLines counts subtasks recursively in heading", () => {
 	assert.match(lines[0], /1\/3 tasks/);
 });
 
-test("renderGoalWidgetLines finds first pending at any depth (BFS)", () => {
+test("renderGoalWidgetLines finds first pending at any depth", () => {
 	const lines = renderGoalWidgetLines(goal({
 		taskList: {
 			tasks: [{
@@ -290,9 +293,9 @@ test("renderGoalWidgetLines finds first pending at any depth (BFS)", () => {
 		},
 	}), theme, 100);
 	const body = lines.slice(1).join(" ");
-	// Should show t1a as next, not t1 (t1 is complete, t1a is pending)
+	// F1: the pending child renders (depth-aware) under the count line.
+	assert.match(body, /1\/2 done/);
 	assert.match(body, /t1a/);
-	assert.match(body, /next/);
 });
 
 test("renderGoalWidgetLines shows all complete when subtasks are done", () => {

@@ -4,6 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
 import { buildDraftConfirmationText, buildTweakConfirmationText, goalDraftingPrompt, type GoalDraftingFocus } from "./goal-draft.ts";
 import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
+import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
 import { buildGoalCreatedReport } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
@@ -186,7 +187,18 @@ function proposalText(draft: ActiveGoalDraft, objective: string, autoContinue: b
 	const base = draft.mode === "tweak" && current
 		? buildTweakConfirmationText({ currentObjective: current.objective, newObjective: objective, changeSummary: draft.originalTopic || "Goal revised through guided drafting.", sisyphus: current.sisyphus, tasks: taskList?.tasks })
 		: buildDraftConfirmationText({ focus: draft.mode === "sisyphus" ? "sisyphus" : "goal", originalTopic: draft.originalTopic, objective, autoContinue });
-	return !taskList || draft.mode === "tweak" ? base : base + "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
+	let tasksText = "";
+	if (taskList && taskList.tasks.length > 0) {
+		tasksText = "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
+	} else if (draft.mode !== "tweak") {
+		// F2: bootstrap a proposed task tree from the objective's own structure
+		// so the human can see (and the agent can confirm) it before the goal exists.
+		const derived = deriveTasksFromObjective(base);
+		if (derived && derived.length > 0) {
+			tasksText = "\n\nTasks derived from the objective (confirm or ask the agent to adjust):\n" + renderConfirmationTasks(derived, 0).join("\n");
+		}
+	}
+	return !taskList && draft.mode === "tweak" ? base : base + tasksText;
 }
 
 function flatTaskSchema() {
@@ -323,7 +335,13 @@ export function registerDraftingTools(core: GoalCore): void {
 			const settings = loadGoalSettings(ctx.cwd);
 			const extracted = settings.disableContracts ? { objective, verificationContract: undefined } : extractVerificationContract(objective);
 			if (draft.mode !== "tweak") {
-				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: taskResult.value, skipAuditor }, ctx, true, extracted.verificationContract);
+				// F2: if the confirmation carried no task plan but the objective has
+				// structure, bootstrap the derived tree so the goal starts trackable.
+				const effectiveTaskList: GoalTaskList | undefined = taskResult.value ?? (() => {
+					const derived = deriveTasksFromObjective(extracted.objective);
+					return derived && derived.length > 0 ? { tasks: derived, blockCompletion: false, proposedAt: nowIso() } : undefined;
+				})();
+				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: effectiveTaskList, skipAuditor }, ctx, true, extracted.verificationContract);
 				clearGoalDrafting(core, ctx);
 				// E5: echo the questionnaire Q&A in the created-goal report so the
 				// user can verify their input survived the clarification loop.

@@ -29,6 +29,8 @@ export interface GoalSettings {
 	autoSelectSingleGoal?: boolean;
 	/** E3: load the project's own skills/extensions into auditor sessions (off by default = isolation). */
 	auditorProjectResources?: boolean;
+	/** F5: stall detector timeout in minutes (0 = off). */
+	stallTimeoutMinutes?: number;
 }
 
 export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
@@ -61,6 +63,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"disabled",
 	"autoSelectSingleGoal",
 	"auditorProjectResources",
+	"stallTimeoutMinutes",
 ]);
 
 /**
@@ -127,6 +130,8 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	if (record.disabled === true || record.disabled === "true") settings.disabled = true;
 	if (record.autoSelectSingleGoal === true || record.autoSelectSingleGoal === "true") settings.autoSelectSingleGoal = true;
 	if (record.auditorProjectResources === true || record.auditorProjectResources === "true") settings.auditorProjectResources = true;
+	const stallTimeoutMinutes = asPositiveInt(record.stallTimeoutMinutes);
+	if (stallTimeoutMinutes !== undefined) settings.stallTimeoutMinutes = stallTimeoutMinutes;
 	return settings;
 }
 
@@ -173,6 +178,8 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
 		thinkingLevel: fileConfig.thinkingLevel,
 		disabled: fileConfig.disabled,
 		autoSelectSingleGoal: fileConfig.autoSelectSingleGoal ?? false,
+		auditorProjectResources: fileConfig.auditorProjectResources ?? false,
+		stallTimeoutMinutes: fileConfig.stallTimeoutMinutes,
 	};
 }
 
@@ -213,6 +220,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "model", label: "model", format: (v) => v.model ?? "(default)" },
 		{ key: "thinkingLevel", label: "thinking_level", format: (v) => v.thinkingLevel ?? "(default)" },
 		{ key: "auditorProjectResources", label: "auditor project resources", format: (v) => (v.auditorProjectResources === true ? "true" : "false") },
+		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: (v) => String(v.stallTimeoutMinutes ?? 0) },
 	];
 	for (const row of rows) {
 		const envVar = envOverrideFor(row.key, env);
@@ -247,6 +255,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (subtaskDepth !== undefined) clean.subtaskDepth = subtaskDepth;
 	if (settings.autoSelectSingleGoal === true) clean.autoSelectSingleGoal = true;
 	if (settings.auditorProjectResources === true) clean.auditorProjectResources = true;
+	if (settings.stallTimeoutMinutes !== undefined) clean.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	const configPath = goalSettingsPath(cwd);
 	fs.mkdirSync(path.dirname(configPath), { recursive: true });
 	settingsFileCache.delete(configPath);
@@ -260,6 +269,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (clean.subtaskDepth !== undefined) persisted.subtaskDepth = clean.subtaskDepth;
 	if (settings.autoSelectSingleGoal === true) persisted.autoSelectSingleGoal = true;
 	if (settings.auditorProjectResources === true) persisted.auditorProjectResources = true;
+	if (clean.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = clean.stallTimeoutMinutes;
 	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
 	return clean;
 }

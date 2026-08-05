@@ -115,6 +115,10 @@ export interface GoalCore {
 	queueContinuation(ctx: ExtensionContext, force?: boolean): void;
 	flushGoalTransaction(ctx: ExtensionContext): void;
 	replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow?: boolean, verificationContract?: string, tokenBudget?: number): void;
+	/** F5: bump the last-activity timestamp (called on real work events). */
+	touchGoalActivity(): void;
+	/** F5: detect a stalled active auto-continue goal; returns the [GOAL STALLED] steering note. */
+	checkStall(ctx: ExtensionContext): string;
 }
 
 export function createGoalCore(
@@ -439,11 +443,36 @@ export function createGoalCore(
 		state.goal = next;
 		persist(ctx);
 
+		// F6: threshold alerts at 50/75/90% — one ledger event + notification each.
+		const budgetGoal = state.goal;
+		if (budgetGoal && budgetGoal.status === "active" && typeof budgetGoal.tokenBudget === "number" && budgetGoal.tokenBudget > 0 && budgetGoal.usage.tokensUsed > 0) {
+			const pct = budgetGoal.usage.tokensUsed / budgetGoal.tokenBudget;
+			for (const threshold of [0.5, 0.75, 0.9]) {
+				const key = `${budgetGoal.id}:${threshold}`;
+				if (!budgetWarningsFired.has(key) && pct >= threshold) {
+					budgetWarningsFired.add(key);
+					try {
+						goalService.appendEvents(ctx, [{
+							type: "goal_budget_warning",
+							goalId: budgetGoal.id,
+							budget: budgetGoal.tokenBudget,
+							tokensUsed: budgetGoal.usage.tokensUsed,
+							pct: Math.round(pct * 100),
+							at: nowIso(),
+						}]);
+					} catch {
+						// Alert must never crash the turn.
+					}
+					ctx.ui.notify(`Token budget ${Math.round(pct * 100)}% used (${budgetGoal.usage.tokensUsed}/${budgetGoal.tokenBudget} tokens) — consider raising or trimming scope before the limit.`, "warning");
+				}
+			}
+		}
+
 		// Token-budget transition: when accounted usage reaches the budget, mark the
 		// goal budget_limited exactly once (status no longer active, so accounting
 		// stops and the transition cannot re-fire), emit the ledger event, arm the
 		// one-time wrap-up steering, and cancel pending continuations.
-		const budgetGoal = state.goal;
+		const budgetGoal2 = state.goal;
 		if (budgetGoal && budgetGoal.status === "active" && typeof budgetGoal.tokenBudget === "number" && budgetReached(budgetGoal)) {
 			const transition = goalService.apply(ctx, {
 				reconcile: false,
@@ -523,6 +552,37 @@ export function createGoalCore(
 	 *   └─ Suggested: ask the user for the test location
 	 */
 
+	let lastGoalActivityAt = Date.now();
+	let stallNotified = false;
+	const budgetWarningsFired = new Set<string>(); // "goalId:threshold"
+
+	function touchGoalActivity(): void {
+		lastGoalActivityAt = Date.now();
+		stallNotified = false;
+	}
+
+	function checkStall(ctx: ExtensionContext): string {
+		if (!state.goal || state.goal.status !== "active" || !state.goal.autoContinue) return "";
+		const timeoutMinutes = loadGoalSettings(ctx.cwd).stallTimeoutMinutes ?? 0;
+		if (timeoutMinutes <= 0 || stallNotified) return "";
+		const idleMs = Date.now() - lastGoalActivityAt;
+		if (idleMs < timeoutMinutes * 60_000) return "";
+		stallNotified = true;
+		const goalId = state.goal.id;
+		try {
+			goalService.appendEvents(ctx, [{
+				type: "goal_stalled",
+				goalId,
+				reason: `No continuation or tool activity for ${timeoutMinutes} minute${timeoutMinutes === 1 ? "" : "s"}.`,
+				at: nowIso(),
+			}]);
+		} catch {
+			// Stall detection must never crash the turn.
+		}
+		ctx.ui.notify(`Goal stalled: no activity for ${timeoutMinutes} minute${timeoutMinutes === 1 ? "" : "s"}.`, "warning");
+		return `\n\n[GOAL STALLED goalId=${goalId}]\nNo continuation or tool activity for ${timeoutMinutes} minute${timeoutMinutes === 1 ? "" : "s"}. Report your progress or ask the user to pause or resume the goal.`;
+	}
+
 	let uiFlushScheduled = false;
 	let lastUiCtx: ExtensionContext | null = null;
 
@@ -560,6 +620,7 @@ export function createGoalCore(
 						getAuditorProgress: () => auditProgress,
 						getSettings: () => loadGoalSettings(ctx.cwd),
 						getDebugMode: () => debugMode,
+						getStalled: () => stallNotified,
 					}),
 					{ placement: "aboveEditor" },
 				);
@@ -583,6 +644,7 @@ export function createGoalCore(
 					getAuditorProgress: () => auditProgress,
 					getSettings: () => loadGoalSettings(ctx.cwd),
 					getDebugMode: () => debugMode,
+					getStalled: () => stallNotified,
 				}),
 				{ placement: "aboveEditor" },
 			);
@@ -876,6 +938,8 @@ export function createGoalCore(
 		pauseActiveGoal,
 		queueContinuation,
 		flushGoalTransaction,
+		touchGoalActivity,
+		checkStall,
 		replaceGoal,
 	};
 }

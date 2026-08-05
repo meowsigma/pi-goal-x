@@ -8,8 +8,9 @@ import { budgetLine } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, buildTaskSummary, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
 import { readGoalLedger } from "./goal-ledger.ts";
-import { buildGoalHistoryBlock } from "./goal-format.ts";
+import { buildGoalHistoryBlock, buildGoalTaskDetailBlock } from "./goal-format.ts";
 import { sisyphusStepProgress } from "./goal-policy.ts";
+import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { nowIso, validateTokenBudgetInput } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
 
@@ -61,7 +62,12 @@ pi.registerTool(defineTool({
 		lines.push(`Usage: ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
 		const budget = budgetLine(view);
 		if (budget) lines.push(`Budget: ${budget}`);
-		if (view.taskList) lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
+		if (view.taskList) {
+			lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
+			// F1: task-detail block mirroring the widget.
+			const detail = buildGoalTaskDetailBlock(view);
+			if (detail) lines.push("", detail);
+		}
 		if (view.verificationContract?.trim()) lines.push(`Verification contract: ${view.verificationContract.trim()}`);
 		if (view.status === "paused" || view.status === "blocked") {
 			if (view.pauseReason) lines.push(`Blocker: ${view.pauseReason}`);
@@ -140,8 +146,14 @@ pi.registerTool(defineTool({
 		const otherLine = otherCount > 0
 			? `\n${otherCount} other open goal${otherCount === 1 ? "" : "s"} remain in .pi/goals — this goal is now the session focus.`
 			: "";
+		// F2: the agent path stays tool-driven — surface the derivable task plan
+		// as guidance so the agent proposes it via set_goal_tasks.
+		const derived = !created?.taskList ? deriveTasksFromObjective(cleanedObjective) : null;
+		const bootstrapLine = derived && derived.length > 0
+			? `\n\nThe objective contains ${derived.length} ordered step${derived.length === 1 ? "" : "s"}; propose them as the task tree with set_goal_tasks if the user wants tracked milestones.`
+			: "";
 		return {
-			content: [{ type: "text", text: `${buildGoalCreatedReport({ objective: created?.objective ?? objective, detailedSummary: detailedSummary(created) })}${otherLine}` }],
+			content: [{ type: "text", text: `${buildGoalCreatedReport({ objective: created?.objective ?? objective, detailedSummary: detailedSummary(created) })}${bootstrapLine}${otherLine}` }],
 			details: goalDetails(created),
 			terminate: true,
 		};

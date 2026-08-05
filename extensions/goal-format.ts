@@ -7,6 +7,7 @@ import {
 	truncateText,
 } from "./goal-core.ts";
 import { buildTaskSummary } from "./goal-policy.ts";
+import { countTaskSubtree } from "./goal-task-count.ts";
 import { latestAuditorResultForGoal, latestEventsForGoal, type GoalLedgerEvent } from "./goal-ledger.ts";
 import { GOAL_PROGRESS_TOOL_NAMES } from "./goal-tool-names.ts";
 import {
@@ -18,6 +19,7 @@ import {
 	type GoalRecord,
 	type GoalStateEntry,
 	type GoalStatus,
+	type GoalTask,
 } from "./goal-record.ts";
 
 export const STATE_ENTRY = "pi-goal-state";
@@ -259,6 +261,36 @@ export function buildGoalHistoryBlock(goal: GoalRecord | null, ledgerEvents: Goa
 		for (const event of recent) {
 			lines.push(`  ${event.at.slice(11, 19)} ${event.type}`);
 		}
+	}
+	return lines.join("\n");
+}
+
+/**
+ * F1: task-detail block mirroring the widget — counts, next pending with
+ * contracts, recent completions with evidence. Used by get_goal.
+ */
+export function buildGoalTaskDetailBlock(goal: GoalRecord): string {
+	if (!goal.taskList || goal.taskList.tasks.length === 0) return "";
+	const { total, complete, skipped } = countTaskSubtree(goal.taskList.tasks);
+	const lines: string[] = [];
+	const header = `${complete}/${total} tasks complete${skipped > 0 ? ` (${skipped} skipped)` : ""}`;
+	const pending: Array<{ task: GoalTask; depth: number }> = [];
+	const recent: GoalTask[] = [];
+	(function walk(tasks: GoalTask[], depth: number): void {
+		for (const t of tasks) {
+			if (t.status === "pending") pending.push({ task: t, depth });
+			if (t.status === "complete" && recent.length < 2) recent.push(t);
+			if (t.subtasks && t.subtasks.length > 0) walk(t.subtasks, depth + 1);
+		}
+	})(goal.taskList.tasks, 0);
+	lines.push(`Tasks: ${header}`);
+	for (const entry of pending.slice(0, 3)) {
+		lines.push(`${"  ".repeat(entry.depth)}[ ] ${entry.task.id}: ${entry.task.title}`);
+		if (entry.task.verificationContract) lines.push(`${"  ".repeat(entry.depth + 1)}contract: ${entry.task.verificationContract}`);
+	}
+	if (pending.length > 3) lines.push(`(+${pending.length - 3} more pending — see the task overlay)`);
+	for (const t of recent) {
+		lines.push(`[x] ${t.id}: ${t.title}${t.evidence ? ` — ${t.evidence}` : ""}`);
 	}
 	return lines.join("\n");
 }

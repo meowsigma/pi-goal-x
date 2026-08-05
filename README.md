@@ -22,6 +22,8 @@ Sisyphus goals work well for migrations, staged refactors, release procedures, d
 
 The `/goal` and `/sisyphus` commands start a guided drafting process. The agent can ask focused questions, clarify the objective, and propose a task plan for confirmation.
 
+The proposal is written to the conversation as a durable summary (objective, plan, verification, automatic continuation, auditor state); confirming it creates and focuses the goal and starts working automatically.
+
 ### Direct goal creation
 
 The `/goal-direct` and `/sisyphus-direct` commands create a goal immediately from a complete objective.
@@ -56,7 +58,11 @@ Approved goals are archived as complete. Goals requiring additional work remain 
 
 ### Visible status
 
-An above-editor widget shows the focused goal, its status, file path, and progress.
+An above-editor widget shows the focused goal: its status, focus state, other open goals, time and token usage, task progress, the current task, and the goal file path.
+
+Press `Ctrl+Shift+T` to expand the widget into the full unified dashboard — the complete task tree with the current task highlighted, the current task's verification contract and evidence, the goal-level verification contract, and a recent-activity feed derived from the durable goal ledger. Press `Esc` or `Ctrl+Shift+T` again to collapse it.
+
+During an independent completion audit the widget shows a structured audit dashboard (five review stages and a progress bar); after the audit it shows the approval or changes-required result, then returns to the normal view.
 
 ### Goal controls
 
@@ -216,7 +222,7 @@ Pressing `Esc` during active work pauses the goal.
 
 ## Tasks and verification
 
-The agent can divide a goal into tasks and subtasks and update them as work progresses.
+The agent can divide a goal into tasks and subtasks and update them as work progresses. The current task is tracked explicitly (persisted as the goal's execution focus) and highlighted in the dashboard; starting a task with `update_goal_task(status="start")` sets it, and completing or skipping it clears it.
 
 Verification contracts describe the evidence required for completion. They can apply to the entire goal or to an individual task.
 
@@ -234,6 +240,58 @@ Confirm the new command appears in the help menu.
 Verify that the generated report contains every required section.
 ```
 
+## Unified dashboard
+
+`pi-goal-x` renders one dashboard component in two modes; the above-editor widget, `/goal-status`, and the completion flow all derive from the same presentation model, so they can never disagree about the data.
+
+### Compact mode
+
+Always visible above the editor while a goal is focused:
+
+```text
+╭─ pi-goal-x ─ Add CSV export to reports ─────── 12m47s · 18.2K tok ─╮
+│ ● In progress · Focused: yes · Other goals: 2                      │
+│ Tasks  [██████░░░░] 3/5 · 60%                                      │
+├─ Tasks ────────────────────────────────────────────────────────────┤
+│ ✓ t1  Review reports page and data source                          │
+│ ✓ t2  Implement filtered CSV export                                │
+│ ▸ t3  Add the download button                                      │
+│ · t4  Add documentation                                            │
+│ … +1 more task                                                     │
+│ Current  t3 · Add the download button                              │
+│ Subtasks [███████░░░] 2/3 · 67%                                    │
+│ Verify   Run npm test with zero failures.                          │
+│ File     .pi/goals/active_goal_...                                 │
+╰─ Ctrl+Shift+T: expand tasks ───────────────────────────────────────╯
+```
+
+### Expanded mode
+
+`Ctrl+Shift+T` expands the same component: full task tree (✓ complete, ▸ current, ~ skipped, · pending), the current-task block with its contract and evidence, goal-level verification, and recent activity.
+
+```text
+├─ Progress ──────────────────────────────────────────────────────────┤
+│ [██████░░░░] 3/5 tasks · 60%                                       │
+├─ Tasks ─────────────────────────────────────────────────────────────┤
+│ ✓ t1  Review reports page and data source                          │
+│ ✓ t2  Implement filtered CSV export                                │
+│ ▸ t3  Add the download button                                      │
+│   ✓ t3.1  Add loading state                                         │
+│   · t3.3  Add error handling                                        │
+│ · t4  Add documentation                                             │
+├─ Current task ──────────────────────────────────────────────────────┤
+│ t3 · Add the download button                                        │
+│ Subtasks [███████░░░] 2/3 · 67%                                     │
+│ Contract: The button downloads a CSV using the active filters.      │
+├─ Verification ──────────────────────────────────────────────────────┤
+│ Run npm test with zero failures.                                    │
+└─ Esc/Ctrl+Shift+T: collapse ────────────────────────────────────────┘
+```
+
+Every rendered line is width-aware: the dashboard adapts to wide, medium, narrow, and very-narrow terminals and never overflows the available width.
+
+See [`docs/unified-dashboard.md`](docs/unified-dashboard.md) for the full layout specification, status states, and migration behavior.
+
 ## Completion review
 
 When the agent reports a goal as complete, `pi-goal-x` starts an independent completion review.
@@ -245,9 +303,9 @@ The auditor examines:
 * Verification contracts
 * The current workspace
 
-An approved goal is archived as complete. Review feedback is added to any goal that requires further work.
+An approved goal is archived as complete, and the archive path is reported. Review feedback is added to any goal that requires further work, and the dashboard shows the changes-required result before returning to the normal view.
 
-Press `Esc` to stop an active audit.
+Press `Esc` to stop an active audit (completing without audit is recorded explicitly and never presented as independently approved).
 
 ## Goal storage
 
@@ -273,7 +331,8 @@ Each session can focus on one goal while the project keeps other goals open.
 /goal-direct <objective>     Create a regular goal immediately
 /sisyphus-direct <objective> Create an ordered goal immediately
 /goal-list                   List open goals
-/goal-status                 Show the focused goal
+/goal-status                 Show the focused goal (unified dashboard)
+/goal-status verbose         Show the focused goal with full diagnostic detail
 /goal-focus                  Select an open goal
 /goal-unfocus                Remove the session’s focus
 /goal-tweak <change>         Revise the focused goal

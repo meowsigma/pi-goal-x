@@ -8,7 +8,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
-## [Unreleased]
+## [0.23.0] — 2026-08-05
 
 ### Added
 
@@ -56,6 +56,13 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ### Fixed
 
+- **Prompt-cache namespace race (P1-4).** `goalPrompt` and
+  `continuationPrompt` share one memoization cache; before this fix the cache
+  key did not distinguish the builder, so a continuation prompt cached via
+  `queueContinuation`'s 0ms timer could be served back as the active goal
+  prompt on the next turn (a `[GOAL CHECKPOINT]` frame where a
+  `[PI GOAL ACTIVE]` frame belonged). The key is now namespaced per builder,
+  with a regression test covering both call orders.
 - `loadGoalSettings` silently dropped the new `auditorProjectResources` and
   `stallTimeoutMinutes` fields from its returned object — now carried
   through (E3's setting was previously inert).

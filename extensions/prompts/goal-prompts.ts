@@ -148,8 +148,17 @@ function promptCacheKey(goal: GoalRecord, settings?: GoalSettings): string {
 	]);
 }
 
-function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, build: () => string): string {
-	const key = promptCacheKey(goal, settings);
+/**
+ * Prompt-fragment cache shared across builders. The key is namespaced per
+ * builder (goal vs continuation): both produce structurally different text
+ * for the same goal record, so without the namespace a continuation prompt
+ * cached first would be served back as the active prompt (or vice versa)
+ * on the next turn. This was a real race: queueContinuation caches the
+ * continuation prompt on a 0ms timer, and a following goalPrompt for the
+ * same goal could hit that stale entry.
+ */
+function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, kind: "goal" | "continuation", build: () => string): string {
+	const key = `${kind}:${promptCacheKey(goal, settings)}`;
 	const cached = promptFragmentCache.get(key);
 	if (cached !== undefined) return cached;
 	const value = build();
@@ -162,7 +171,7 @@ function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, buil
 }
 
 export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
-	return cachedPrompt(goal, settings, () => buildGoalPrompt(goal, settings));
+	return cachedPrompt(goal, settings, "goal", () => buildGoalPrompt(goal, settings));
 }
 
 function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
@@ -187,7 +196,7 @@ ${sisyphusDisciplineBlock(goal)}
 }
 
 export function continuationPrompt(goal: GoalRecord, settings?: GoalSettings): string {
-	return cachedPrompt(goal, settings, () => buildContinuationPrompt(goal, settings));
+	return cachedPrompt(goal, settings, "continuation", () => buildContinuationPrompt(goal, settings));
 }
 
 function buildContinuationPrompt(goal: GoalRecord, settings?: GoalSettings): string {

@@ -23,6 +23,27 @@ function goal(overrides = {}) {
 	};
 }
 
+test("cache namespace: continuation cached first never leaks into goalPrompt for the same goal (P1-4 race)", () => {
+	// Regression for the release flake: continuationPrompt and goalPrompt share
+	// one prompt cache; before the per-builder namespace, a continuation prompt
+	// cached via queueContinuation's 0ms timer could be served back as the
+	// active prompt on the same goal (or vice versa) under concurrent tests.
+	const current = goal({ id: "same-goal" });
+	const continuation = continuationPrompt(current);
+	const active = goalPrompt(current);
+	assert.match(continuation, /kind="checkpoint">/);
+	assert.match(active, /^\[PI GOAL ACTIVE goalId=same-goal\]/);
+	assert.doesNotMatch(active, /kind="checkpoint">/);
+	assert.doesNotMatch(active, /Continue working toward the active pi goal/);
+	// And the reverse order stays correct too.
+	const current2 = goal({ id: "same-goal-2" });
+	const active2 = goalPrompt(current2);
+	const continuation2 = continuationPrompt(current2);
+	assert.match(active2, /^\[PI GOAL ACTIVE goalId=same-goal-2\]/);
+	assert.match(continuation2, /kind="checkpoint">/);
+	assert.doesNotMatch(continuation2, /PI GOAL ACTIVE/);
+});
+
 test("goalPrompt wraps objective as untrusted data and includes Sisyphus discipline", () => {
 	const prompt = goalPrompt(goal());
 

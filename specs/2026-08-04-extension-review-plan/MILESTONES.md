@@ -99,3 +99,7 @@ implementation.
   concrete mechanics (one-shot per pause transition via the `goal_paused`
   ledger path, idempotent, untruncated reason + suggested action, TUI
   sessions unaffected) and an example banner line.
+- Sixth steering pass (2026-08-04): user directed "park it — we don't use
+  headless"; F7 was removed from Part 3 (features now F1–F6) and its expanded
+  description was moved to `PARKED.md` with provenance; header/scope/
+  prioritisation notes updated to F4–F6.

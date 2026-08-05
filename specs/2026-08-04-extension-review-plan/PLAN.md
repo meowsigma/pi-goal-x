@@ -5,7 +5,7 @@ Deliverable: this plan (optimisation + feature enhancements + new
 features), prioritized, each item with description + rationale + user value.
 No effort/risk ratings by design. No implementation in this plan. New-feature
 section scope steered by the user on 2026-08-04: task-focused features plus
-the most useful UI feature changes (7 features total), with no new slash
+the most useful UI feature changes (6 features total), with no new slash
 commands (the earlier 10-candidate set is parked in `PARKED.md`).
 
 ---
@@ -215,7 +215,7 @@ raise the most useful UI changes from the parked set; they deliberately add
 widget, the task-list overlay (Ctrl+Shift+T), `get_goal`, the
 proposal/confirmation dialogs, notifications, and the `goal-service` mutation
 boundary with its existing lock + revision + ledger guarantees. F1–F3 are the
-task-focused core; F4–F7 are the raised UI feature changes. (The parked
+task-focused core; F4–F6 are the raised UI feature changes. (The parked
 multi-goal dashboard remains parked because it requires a new slash command.)
 
 **F1. Task detail in the goal-running widget (priority 1).** Description: the
@@ -294,35 +294,10 @@ Rationale: the budget currently transitions only at 100% with no warning
 gradient. User value: users can decide to raise or trim scope before the hard
 stop, not after.
 
-**F7. Headless pause banner (priority 7).** Description: in headless sessions
-(`hasUI:false` — CI runs, background pi processes, no TUI), a goal pause via
-`update_goal({status:"paused"})` (with reason and optional suggested action)
-or `/goal-pause` prints a **one-shot banner** to the session log at the moment
-of the pause transition, so the next human who opens that log sees why the
-run stopped. Example:
-
-```
-[PI GOAL PAUSED abc123] Work stopped: awaiting your decision on the feature set.
-Suggested next: /goal-tweak, then /goal-resume. (Auto-continue is off.)
-```
-
-Mechanics: fires exactly once per pause transition — hooked to the existing
-`goal_paused` ledger-event path so it is idempotent and never re-printed by
-later checkpoints; it carries the full untruncated pause reason + suggested
-action; TUI sessions are unaffected (they already have the widget/dialog).
-Surfaces: **human** (log reader). Rationale: in headless runs there is no
-widget and no notification surface — today the pause reason lives only in the
-goal record and the agent-facing paused prompt (the "Agent pause reason:"
-line), which a human skimming the log never sees; the ledger event exists but
-is not readable at a glance. User value: anyone auditing why a background run
-stopped gets the answer in the first lines of the log, without opening
-`.pi/goals` files or re-parsing ledger JSONL.
-
 Prioritisation note: F1 first because it surfaces data already recorded (no
 new mutation surface), F2 next because it reuses the confirmation dialog, F3
 last of the task core because it adds the most UI machinery and requires gate
-parity with `update_goal_task`. The raised UI features F4–F7 are ordered by
+parity with `update_goal_task`. The raised UI features F4–F6 are ordered by
 visibility value: sisyphus progress (F4) extends the just-approved widget
 story, stall detection (F5) catches silent stalls, budget alerts (F6) surface
-cost pressure before the limit, and the headless pause banner (F7) is a small
-auditability win for non-TUI runs.
+cost pressure before the limit.

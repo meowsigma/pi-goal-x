@@ -4,14 +4,13 @@ import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
 import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { serializeGoalFile } from "./storage/goal-files.ts";
-import { showTaskListOverlay } from "./widgets/task-list-overlay.ts";
 import type { AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
 
 const DEBUG_GOALS_DIR = ".pi/goals/debug";
 
 /**
- * Terminal input keybindings (Escape pause/abort-audit, Ctrl+Shift+T task
+ * Terminal input keybindings (Escape pause/abort-audit, Ctrl+Shift+T dashboard
  * overlay, and the hidden debug-mode bindings) plus the debug goal/task/audit
  * helpers. Re-registered at session start/tree navigation; the handler reads
  * live state through the core at event time.
@@ -127,18 +126,22 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				core.abortAudit(ctx);
 				return { consume: true };
 			}
+			// §10: Escape collapses the expanded dashboard before it can pause the
+			// goal; Ctrl+Shift+T toggles compact/expanded (§19.5).
+			if (matchesKey(data, "escape") && core.isDashboardExpanded()) {
+				core.toggleDashboardExpanded();
+				return { consume: true };
+			}
 			if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
 				core.pauseActiveGoal(ctx);
 				return { consume: true };
 			}
 
-			// Ctrl+Shift+T — show task list overlay for all open goals (F3:
-			// interactive: Enter toggles a task through goal-service).
+			// Ctrl+Shift+T — toggle the unified dashboard between compact and
+			// expanded task views (the task-list overlay is merged into the
+			// dashboard; §10).
 			if (matchesKey(data, "ctrl+shift+t")) {
-				core.enterGoalModal();
-				showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId, {
-					onToggleTask: (goalId, taskId) => toggleTaskViaService(core, ctx, goalId, taskId),
-				}).finally(() => core.exitGoalModal());
+				core.toggleDashboardExpanded();
 				return { consume: true };
 			}
 

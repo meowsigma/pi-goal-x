@@ -349,7 +349,7 @@ test("dismisses on escape and enter", async () => {
 	assert.ok(true, "dismiss operations completed without error");
 });
 
-test("keybinding calls showTaskListOverlay with focusedGoalId", async () => {
+test("ctrl+shift+t toggles the unified dashboard expansion (overlay registration removed)", async () => {
 	const goalSource = readFileSync(
 		new URL("../extensions/goal-widget.ts", import.meta.url),
 		"utf-8",
@@ -360,12 +360,12 @@ test("keybinding calls showTaskListOverlay with focusedGoalId", async () => {
 		"goal-widget.ts contains the ctrl+shift+t keybinding",
 	);
 	assert.ok(
-		goalSource.includes("showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId, {"),
-		"goal-widget.ts calls showTaskListOverlay with focusedGoalId (F3 adds the toggle callback)",
+		goalSource.includes("core.toggleDashboardExpanded()"),
+		"ctrl+shift+t toggles the unified dashboard (overlay registration removed)",
 	);
 	assert.ok(
-		goalSource.includes("onToggleTask"),
-		"goal-widget.ts wires the F3 interactive toggle callback",
+		!goalSource.includes("showTaskListOverlay("),
+		"the separate task-list overlay is no longer registered from the keybinding",
 	);
 	assert.ok(
 		goalSource.includes('return { consume: true }'),

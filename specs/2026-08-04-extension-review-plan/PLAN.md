@@ -4,9 +4,9 @@ Date: 2026-08-04 · Scope: the full extension, every part, no exceptions ·
 Deliverable: this plan (optimisation + feature enhancements + new
 features), prioritized, each item with description + rationale + user value.
 No effort/risk ratings by design. No implementation in this plan. New-feature
-section scope steered by the user on 2026-08-04 to 1–3 task-focused features
-with no new slash commands (the earlier 10-candidate set is parked in
-`PARKED.md`).
+section scope steered by the user on 2026-08-04: task-focused features plus
+the most useful UI feature changes (7 features total), with no new slash
+commands (the earlier 10-candidate set is parked in `PARKED.md`).
 
 ---
 
@@ -209,11 +209,14 @@ User value: full pause context visible in the transcript.
 ## Part 3 — New features (user-steered: 1–3, task-focused, no new slash commands)
 
 Scope note (user steering, 2026-08-04): the earlier 10-candidate feature set
-is parked in `PARKED.md`. The three features below are all about making the
-task system better and deliberately add **no new slash commands** — each
-reuses existing surfaces: the task-list overlay (Ctrl+Shift+T), the goal
-widget, `get_goal`, the proposal/confirmation dialogs, and the `goal-service`
-mutation boundary with its existing lock + revision + ledger guarantees.
+is parked in `PARKED.md`. The features below make the task system better and
+raise the most useful UI changes from the parked set; they deliberately add
+**no new slash commands** — each reuses existing surfaces: the goal-running
+widget, the task-list overlay (Ctrl+Shift+T), `get_goal`, the
+proposal/confirmation dialogs, notifications, and the `goal-service` mutation
+boundary with its existing lock + revision + ledger guarantees. F1–F3 are the
+task-focused core; F4–F7 are the raised UI feature changes. (The parked
+multi-goal dashboard remains parked because it requires a new slash command.)
 
 **F1. Task detail in the goal-running widget (priority 1).** Description: the
 goal-running widget at the bottom of the TUI currently shows a single
@@ -260,7 +263,51 @@ wires the existing surface to the existing boundary. User value: humans can
 keep the task tree current where they already look at it, with identical
 safety gates to the agent path.
 
-Prioritisation note: F1 first because it only surfaces data already recorded
-(no new mutation surface), F2 next because it reuses the confirmation dialog,
-F3 last because it adds the most UI machinery and requires gate parity with
-`update_goal_task`.
+**F4. Sisyphus ordered-step progress in the widget (priority 4).** Description:
+for sisyphus goals, the goal-running widget shows the ordered steps with the
+current step highlighted and a "Step N/M" badge, derived from the objective's
+step markers and the latest task/event state; `get_goal` carries the same
+"At step N of M" line (per enhancement E6).
+Surfaces: **TUI** (goal-running widget) and **agent** (`get_goal`). Rationale:
+sisyphus is the extension's most sequential mode and currently has the weakest
+progress visualization. User value: clear "where am I in the sequence" at a
+glance, for both the human and the agent.
+
+**F5. Stall detector + wake prompt (priority 5).** Description: an event-driven
+check (no polling): if an active auto-continue goal has had no
+continuation/tool activity for N minutes (configurable; default off), emit one
+notification and a `[GOAL STALLED]` steering note into the next prompt asking
+the agent to report progress or the user to pause/resume; the widget shows a
+badge while stalled.
+Surfaces: **TUI** (notify + widget badge) and **agent** (prompt + event).
+Rationale: an agent that silently stops looping (provider hiccup, deadlocked
+turn) leaves an "active" goal that isn't running; nothing today distinguishes
+that from healthy silence. User value: stale "running" goals get noticed
+instead of lingering.
+
+**F6. Token-budget alerts at thresholds (priority 6).** Description: when
+accounted usage crosses 50/75/90% of a goal's token budget, emit a
+`goal_budget_warning` ledger event, a notification, and a widget progress
+hint; the final `budget_limited` transition already exists.
+Surfaces: **TUI** (widget + notify) and **agent** (event + prompt line).
+Rationale: the budget currently transitions only at 100% with no warning
+gradient. User value: users can decide to raise or trim scope before the hard
+stop, not after.
+
+**F7. Headless-friendly pause banner (priority 7).** Description: in
+`hasUI:false` sessions, a pause via `update_goal(paused)` or `/goal-pause`
+prints a one-shot banner line to the session log (reason + suggested action)
+so the next human opening the log sees why work stopped.
+Surfaces: **human** (log reader). Rationale: headless runs have no widget or
+notification; the pause reason currently exists only in the goal file.
+User value: auditability of why a background run stopped, without opening
+`.pi/goals` files.
+
+Prioritisation note: F1 first because it surfaces data already recorded (no
+new mutation surface), F2 next because it reuses the confirmation dialog, F3
+last of the task core because it adds the most UI machinery and requires gate
+parity with `update_goal_task`. The raised UI features F4–F7 are ordered by
+visibility value: sisyphus progress (F4) extends the just-approved widget
+story, stall detection (F5) catches silent stalls, budget alerts (F6) surface
+cost pressure before the limit, and the headless pause banner (F7) is a small
+auditability win for non-TUI runs.

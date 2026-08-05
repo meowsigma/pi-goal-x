@@ -88,3 +88,10 @@ implementation.
   snippets, evidence lines for recent completions, collapsed-count handling,
   `get_goal` mirror), and the former E2 widget-depth enhancement was folded
   into it; Part 2 enhancements renumbered E1–E7.
+- Fourth steering pass (2026-08-04): user approved the widget block and
+  allowed the most useful UI feature changes to be raised beyond the 3-feature
+  limit (no new slash commands). F4–F7 raised from the parked set: sisyphus
+  ordered-step progress in the widget, stall detector + wake prompt, token-
+  budget threshold alerts, headless pause banner. Part 3 now has 7 features
+  (F1–F7); the multi-goal dashboard stays parked because it needs a new slash
+  command.

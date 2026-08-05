@@ -347,21 +347,20 @@ Headline verified magnitudes:
 - Remaining: user signoff in a real terminal.
 
 ### F2 dialog-surface decision (tracking note, 2026-08-05)
-F2 originally appended a "Tasks derived from the objective (confirm or ask the
-agent to adjust):" preview section to the accept-goal confirmation proposal
-text (shown only when a new draft has no proposed task list and the objective
-contains ≥2 checklist/ordered markers). That is a byte-level change to one of
-the four goal dialogs, which the goal contract requires to stay byte-identical
-to `383ae52` (except the two existing guards) with any such change flagged to
-the user first. The change was flagged to the user on 2026-08-05 (option A =
-keep, option B = revert); no answer was received before the checkpoint
-continuation, so the constraint-safe default was applied: **the preview line
-is reverted** and `proposalText` is byte-identical to `383ae52` again (verified
-by diff: 0 dialog-output differences in `goal-drafting.ts`).
-
-The rest of F2 is untouched and fully functional: the derived tree still seeds
-the goal at creation (`goal-drafting.ts` `effectiveTaskList`), the agent path
-still surfaces the derivation via `set_goal_tasks` guidance
-(`goal-core-tools.ts`), and `goal-task-derive.ts` + its tests remain. If the
-user prefers option A, restoring the preview line is a ~6-line change confined
-to `proposalText`.
+F2 appends a "Tasks derived from the objective (confirm or ask the agent to
+adjust):" preview section to the accept-goal confirmation proposal text (shown
+only when a new draft has no proposed task list and the objective contains ≥2
+checklist/ordered markers). That is a byte-level change to one of the four goal
+dialogs, which the goal contract requires to stay byte-identical to `383ae52`
+(except the two existing guards) with any such change flagged to the user
+first. History: the change was flagged twice (2026-08-05, options A=keep /
+B=revert); with no answer before the checkpoint continuation, the
+constraint-safe default (B) was applied and the line reverted. The user then
+reviewed that state in the real terminal and chose **option A — restore the
+preview line** ("Implement option A if you think it's worthwhile"). The flag-
+first clause is now satisfied by that explicit choice; `proposalText` includes
+the derived-tree preview again, and plain objectives (no task list, no markers)
+still render byte-identical to `383ae52`. The rest of F2 — derived tree seeds
+the goal at creation (`effectiveTaskList`), agent path surfaces the derivation
+via `set_goal_tasks` guidance (`goal-core-tools.ts`), `goal-task-derive.ts` +
+tests — is unchanged.

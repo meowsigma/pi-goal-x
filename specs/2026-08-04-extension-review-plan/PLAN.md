@@ -159,14 +159,7 @@ is already injected. Rationale: the ledger already records everything; the
 surfaces just don't read it. User value: users and agents see why a goal was
 paused/rejected without digging into `.pi/goals/goal_events.jsonl`.
 
-**E2. Widget task-depth.** The widget shows only the first pending task.
-Description: show the next 2–3 pending tasks with depth-aware indentation and a
-collapsed-count line, mirroring the task-list overlay's tree. Rationale: the
-widget is the always-visible surface; one line of context is often too little
-to plan the next step. User value: glanceable "what's next" without opening the
-overlay.
-
-**E3. Effective-settings visibility.** Env overrides can silently change
+**E2. Effective-settings visibility.** Env overrides can silently change
 behavior (`PI_GOAL_DISABLE_TASKS`, `PI_GOAL_SETTINGS_FILE`, budgets).
 Description: `/goal-status` gains a "Settings" block showing effective values
 with provenance (env vs file vs default), and `/goal-settings` marks rows
@@ -174,7 +167,7 @@ overridden by env as read-only with a hint. Rationale: settings are declarative
 but opaque about their source. User value: fewer "why is my auditor different"
 surprises.
 
-**E4. Auditor session reuse of project skills.** `makeAuditorResourceLoader`
+**E3. Auditor session reuse of project skills.** `makeAuditorResourceLoader`
 returns an empty loader, so the auditor can only use its six tools.
 Description: optionally load the project's own skills/extensions into the
 auditor session (off by default for isolation, on via a setting) so audits can
@@ -182,28 +175,28 @@ follow project-specific verification conventions. Rationale: audit quality
 currently depends only on generic read/bash evidence. User value: stronger,
 project-aware audits for teams that codify checks as skills.
 
-**E5. Budget awareness in the widget and completion gate.** Description: show a
+**E4. Budget awareness in the widget and completion gate.** Description: show a
 live budget progress line in the widget (`used/total`, remaining) and make the
 budget-limited completion path mention the remaining-vs-overshoot fact in the
 wrap-up steering. Rationale: budgets are set on creation but nearly invisible
 afterwards. User value: users see cost pressure before the limit hits; agents
 get a concrete number to steer by.
 
-**E6. Drafting answer echo in the created-goal report.** Description: the
+**E5. Drafting answer echo in the created-goal report.** Description: the
 post-confirmation report already shows the objective; append a compact
 Q&A summary from the questionnaire (question → answer) when drafting used
 `goal_questionnaire`. Rationale: the answers shaped the goal but vanish after
 confirmation. User value: users can verify their input survived the
 clarification loop.
 
-**E7. Sisyphus step progress in `get_goal`.** Description: for sisyphus goals,
+**E6. Sisyphus step progress in `get_goal`.** Description: for sisyphus goals,
 derive the current step from the objective's ordered list and the latest
 events/tasks, and include "At step N of M" in `get_goal` output and the widget
 subtitle. Rationale: ordered execution is the point of sisyphus mode; the
 surfaces don't say where the goal is. User value: better progress awareness for
 long sequential goals.
 
-**E8. Pause/abort reason preview in headings.** The `update_goal` heading
+**E7. Pause/abort reason preview in headings.** The `update_goal` heading
 renders the status word only (deliberate 383ae52 surface). Description: keep
 headings byte-identical, but add an expandable tool-result detail line that
 carries the pause reason + suggested action so the collapsed heading stays
@@ -222,26 +215,22 @@ reuses existing surfaces: the task-list overlay (Ctrl+Shift+T), the goal
 widget, `get_goal`, the proposal/confirmation dialogs, and the `goal-service`
 mutation boundary with its existing lock + revision + ledger guarantees.
 
-**F1. Task detail pane — full depth, contract, evidence, and history (priority 1).** Description:
-every task record already carries more than the UI shows: full description,
-verification-contract lines, status + lightweight flag, a transition trail
-(created → updated → completed with timestamps and the actor: agent, human, or
-auditor), and the evidence recorded at each completion. Surface all of it in a
-dedicated detail view opened from the task-list overlay (select a task →
-Enter), showing the untruncated task text, its contract, its complete history
-and evidence, and its position in the subtree (children/siblings); mirror the
-same detail for the pending/next task in `get_goal`. Together with E2 (widget
-depth, always visible) this gives a graduated detail story: glanceable depth in
-the widget, full depth on demand in the overlay, and the same depth for the
-agent.
-Surfaces: **TUI** (overlay detail pane) and **agent** (`get_goal`). Rationale:
-the audit found task records already hold everything this needs (descriptions,
-contracts, evidence, ledger events), but every surface truncates to one line
-and the trail is written to the ledger and then never read — the only reader of
-evidence today is the completion auditor. User value: "seeing more task detail"
-stops being a missing capability — humans can inspect why a task is done and
-what it required, and agents can ground rework in the recorded evidence
-instead of re-deriving it or re-doing completed steps.
+**F1. Task detail in the goal-running widget (priority 1).** Description: the
+goal-running widget at the bottom of the TUI currently shows a single
+pending-task line; give it a compact task-progress block instead — done/total
+counts, the next pending tasks with depth-aware indentation and their
+verification-contract snippets, and evidence lines for the most recent
+completions (actor + short evidence). Large trees collapse to counts with a
+"more in overlay" hint; `get_goal` mirrors the same block for headless/agent
+use. This absorbs the former E2 widget-depth enhancement into one coherent
+widget story.
+Surfaces: **TUI** (goal-running widget) and **agent** (`get_goal`). Rationale:
+the audit found the widget is the always-visible surface but shows only the
+first pending task, while the task records already carry contracts and
+evidence that no surface renders — the detail exists but never reaches the
+bottom of the screen. User value: the human sees at a glance where the goal's
+tasks stand, what is next, and why recent tasks are done — without opening the
+overlay or issuing any command.
 
 **F2. Objective→task bootstrap at creation (priority 2).** Description: when a
 goal is created (draft confirmation or `create_goal`) with no task list and the

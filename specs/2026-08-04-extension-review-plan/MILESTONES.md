@@ -81,3 +81,10 @@ implementation.
   and actor, evidence, subtree position) delivered via the overlay detail
   pane and `get_goal`, explicitly paired with enhancement E2 (widget depth)
   into a graduated detail story. Priority 1 retained.
+- Third steering pass (2026-08-04): user clarified the task detail belongs
+  *under "goal running" at the bottom* — i.e. in the always-visible goal
+  widget, not an overlay detail pane. F1 was rewritten as "Task detail in the
+  goal-running widget" (done/total counts, next pending tasks with contract
+  snippets, evidence lines for recent completions, collapsed-count handling,
+  `get_goal` mirror), and the former E2 widget-depth enhancement was folded
+  into it; Part 2 enhancements renumbered E1–E7.

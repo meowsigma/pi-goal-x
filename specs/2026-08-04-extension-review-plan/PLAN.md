@@ -60,94 +60,99 @@ The extension ships as one installer (`extensions/goal.ts`, 33 lines) plus
 
 ---
 
-## Part 1 — Optimisation plan (prioritized)
+## Part 1 — Optimisation plan (prioritized by felt clock time)
 
-**P1-1. Cache settings loads.** `loadGoalSettings` / `loadGoalSettingsFileConfig`
-read the settings file synchronously on every call, and they are called on hot
-paths: `before_agent_start`, `queueContinuation`, every task-tool gate, the
-widget's `getSettings` at render time, and drafting. Description: cache the
-parsed config keyed by path + mtime, invalidate in `saveGoalSettingsFileConfig`
-and on file-mtime change. Rationale: removes repeated sync I/O from per-turn and
-per-render paths. User value: lower per-turn latency and steadier widget
-rendering, especially on network filesystems.
+Framing: per-turn wall clock is dominated by model inference, but the
+extension controls the *overhead around it* — synchronous I/O, context size,
+and stalls. The items below are ordered by the clock time the user actually
+feels, and each states its order-of-magnitude effect where it applies (slow
+storage / long sessions / contention). Four maintainability items from the
+original Part 1 (task-counter consolidation, renderer dedup, goal-state
+decomposition, debug-surface pruning) are parked in `PARKED.md` — they are
+real improvements but not clock-time wins.
 
-**P1-2. Cache the active-goal pool read.** `reconcileFocused` →
-`readActiveGoalPool` performs a full sync directory scan and file parse of every
-active goal on every tool call and lifecycle event. Description: cache the pool
-with mtime-based invalidation per goal file (and directory listing), refreshed
-once per turn rather than per tool call. Rationale: reconcile runs 2–5× per
-turn; with several open goals this is the dominant I/O cost. User value:
-snappier turns with many open goals; no behavior change (still disk-authoritative
-within a turn).
+**P1-1. Cache-first read layer for settings, goal pool, and the focused goal.** Description:
+one shared read layer with mtime-keyed caching covering the settings file,
+the per-goal files, and the pool listing, so the per-turn pipeline never
+re-reads or re-parses what it already holds; the focused goal is parsed once
+per turn (reconcile currently parses it again right after the pool scan).
+Rationale: `before_agent_start`, per-tool-call reconcile, `queueContinuation`,
+and the widget's render-time `getSettings` together do roughly 5–10 sync
+reads per turn; on local SSD that is ~5–20ms, but on network home dirs (NFS,
+iCloud-synced homes, CI sandboxes) it is 0.5–2s of blocking I/O — and every
+sync read also stalls the TUI render loop. User value: per-turn extension
+overhead drops by an order of magnitude on exactly the storage where it is
+noticeable, and the TUI stops stuttering on shared/remote homes.
 
-**P1-3. Incremental / bounded ledger reads.** `readGoalLedger` parses and
-validates the entire JSONL (plus `reconstructGoalLedger`) on every call, and it
-is called up to twice per `before_agent_start` and in compaction. Description:
-keep an in-memory parsed tail with byte-offset resume (append-only file), or
-cap the retained window and summarize older events; expose
-`latestEventsForGoal` from the cache. Rationale: ledger grows unbounded per
-session; per-turn cost is O(file). User value: long sessions stay responsive and
-prompt injection stays cheap.
+**P1-2. Incremental ledger access (byte-offset tail cache) + bounded retention.** Description:
+keep the parsed ledger tail in memory keyed by file size/mtime, resume from
+the last byte offset on append, and cap the in-session window (older events
+summarized into counts); `before_agent_start`'s double read becomes one O(1)
+tail read. Rationale: every `readGoalLedger` parses the entire JSONL, and
+sessions grow without bound — the only per-turn cost in the extension that
+gets worse as the session ages, O(file) today. User value: hour-long sessions
+with thousands of events stay as fast as fresh ones (order-of-magnitude on
+long runs), and bounded memory removes parse/GC spikes.
 
-**P1-4. Single task-counting implementation.** `buildTaskSummary` (policy),
-`countAuditorTasks` (auditor), `countAllTasks`/`countAllWithStatus` (widget +
-overlay), and `countSubtree` (prompts) each re-implement subtree counting with
-different "done" semantics. Description: one shared counter module with an
-explicit `doneIncludesSkipped` flag, used by all four call sites. Rationale:
-removes ~5 copies of the same walker and the semantic drift that produced
-inconsistent "skipped counts as done" behavior between surfaces. User value:
-consistent task numbers across widget, prompt, status, and auditor output.
+**P1-3. Mutations batched into one transaction per turn.** Description:
+task/status/usage mutations accumulate in memory during a turn and flush once
+— one lock acquire, one goal-file write, one ledger batch — at turn end or
+before the next continuation, instead of lock+write+append per tool call.
+Rationale: a task-heavy turn currently performs N lock acquisitions, N
+full-file writes, and N ledger appends, each re-entering the read pipeline
+(P1-1); the lock window also widens the contention that can stall other pi
+processes. User value: 5–10x fewer I/O ops and lock holds on real turns —
+felt on slow storage, and a proportionally smaller contention window
+everywhere.
 
-**P1-5. Deduplicate contract extraction and confirmation-task rendering.**
-`extractVerificationContract` exists in both `goal-contract.ts` and
-`goal-draft.ts`; `renderConfirmationTasks` exists in both `goal-task-confirmation.ts`
-and `goal-draft.ts`; the bordered dialog scaffold (`line()`, truncation,
-header/footer) is copy-pasted across `goal-escape-dialog.ts`,
-`goal-task-confirmation.ts`, and `widgets/task-list-overlay.ts`. Description:
-collapse to one module each. Rationale: identical logic diverging in three
-places is a correctness hazard (escape dialog vs confirmation dialog widths
-already differ slightly). User value: fewer subtle rendering inconsistencies;
-smaller surface to maintain.
+**P1-4. Prompt/context memoization + task-tree trimming.** Description: render
+the goal prompt block (status, task list, queued events, policy) into cached
+fragments invalidated only when goal state actually changes, and trim
+`taskListBlock` to pending-first with completed/skipped collapsed to counts.
+Rationale: the context handler rebuilds the goal block on every context call,
+and every continuation turn pays prefill on the full block; a 50-task tree
+can be 2–4k tokens, most of it already-completed work. User value: a 5–10x
+smaller goal block means proportionally cheaper and faster prefill on every
+turn — on long auto-continue runs this is the largest compounding clock-time
+and token saving available at the prompt level.
 
-**P1-6. Async (or tighter-bounded) goal locks.** `acquireGoalLock` blocks the
-main thread with `Atomics.wait` sleeps (default 100×25ms; persist 10×25ms).
-Description: bound the synchronous wait window (e.g. 5×20ms) and/or move lock
-acquisition off the synchronous path with a promise-based variant used by the
-async tool flows. Rationale: a contended goal can stall the interactive TUI for
-hundreds of ms. User value: no UI stutter when two pi processes share a goal.
+**P1-5. Remove the main-thread lock stall (async or strictly bounded acquire).** Description:
+replace `Atomics.wait` polling with a promise-based acquire on the async tool
+paths, and tighten the persist bound to a few tens of ms. Rationale: the
+default acquire sleeps the main thread up to ~2.5s (100×25ms) under
+cross-process contention — a frozen TUI during a tool call. User value:
+contention no longer freezes the interface; worst-case wait collapses from
+seconds to tens of ms (order-of-magnitude on the stall itself).
 
-**P1-7. Batch ledger appends.** `appendGoalEvent` writes a temp file, reads it
-back, and appends per event; completion flows append 2–4 events sequentially.
-Description: one shared append that takes an event array and writes a single
-line block (keeping the temp-file durability pattern), and a batch helper for
-the completion/focus flows. Rationale: halves per-event I/O. User value:
-negligible on its own, but compounds with P1-3 for long sessions.
+**P1-6. Auditor starts warm (reuse goal-relevant context).** Description:
+seed the auditor session with the parent's already-rendered goal context —
+objective, task states, verification contract, ledger tail, and the
+tool-evidence trail from the current turn — instead of a cold session that
+re-reads everything from scratch. Rationale: the completion audit is the most
+expensive single operation in the extension (a full agent run, minutes); the
+cold session pays full prefill and re-derives facts the parent already holds.
+User value: verdicts arrive sooner on every completion (prefill seconds to
+minutes depending on model), and audits see the evidence actually gathered
+rather than a re-derivation.
 
-**P1-8. Trim the continuation-prompt task tree.** `taskListBlock` renders every
-task (up to 50 + subtrees) into every checkpoint prompt. Description: render
-the first N pending tasks plus compact counts for the rest (completed/skipped
-collapsed to one line each), keeping contract lines for pending tasks.
-Rationale: preserves guidance while reclaiming fragment budget for the
-objective and lifecycle policy. User value: less noise per continuation turn;
-big task lists stop crowding out the objective.
+**P1-7. Parallel + cached startup rehydration.** Description: `loadState`
+currently reads the pool and goal/draft files sequentially; parallelize the
+reads and reuse the P1-1 cache. Rationale: session start pays N sequential
+sync reads before the first goal prompt renders. User value: with many open
+goals, pi gets to the first goal interaction 5–10x faster.
 
-**P1-9. Decompose `goal-state.ts`.** The 870-line core mixes state, UI, and
-lifecycle. Description: extract the widget/status glue (`updateUI`,
-`clearGoalWidget`, `goalForDisplay`) and the focus-setter trio into focused
-helpers on the same core, shrinking the interface. Rationale: the 50-member
-interface is the biggest maintainability cost in the extension. User value:
-indirect (fewer regressions, faster iteration) — no user-visible behavior
-change.
+**P1-8. Batch ledger appends (array-write, one durability op).** Description:
+`appendGoalEvent` takes an event array and writes one line block with the
+existing temp+rename durability, used by the completion/focus flows that
+already emit 2–4 events in sequence. Rationale: halves to quarters per-event
+I/O. User value: compounds with P1-2/P1-3 on the same write path.
 
-**P1-10. Prune debug-only surface from the shipped bundle.** The debug
-keybindings/helpers in `goal-widget.ts` and the debug panel in
-`widgets/goal-widget.ts` ship to every install. Description: gate them behind
-an env flag (e.g. `PI_GOAL_DEBUG`) so the default bundle excludes dead code
-(`openDebugProposal` is already effectively inert). Rationale: reduces shipped
-code and removes module-level mutable debug state from production.
-User value: smaller surface; fewer accidental trigger paths.
-
----
+**P1-9. Coalesced widget updates (one render per turn).** Description:
+debounce `updateUI` so a tool-heavy turn renders once at turn end rather than
+per event; spinner cadence and dialogs unchanged. Rationale: render is cheap,
+but per-event rebuild plus the render-time settings read (see P1-1) add up in
+turns with many tool calls. User value: steadier TUI during long turns and
+fewer sync reads on the render path.
 
 ## Part 2 — Feature-enhancement plan (prioritized)
 

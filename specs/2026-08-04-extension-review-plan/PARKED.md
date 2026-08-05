@@ -155,3 +155,55 @@ line), which a human skimming the log never sees; the ledger event exists but
 is not readable at a glance. User value: anyone auditing why a background run
 stopped gets the answer in the first lines of the log, without opening
 `.pi/goals` files or re-parsing ledger JSONL.
+
+
+---
+
+## Parked optimisation candidates (non-clock-time)
+
+Moved out of PLAN.md Part 1 on 2026-08-04 when the optimisation plan was
+refocused on user-felt clock time (order-of-magnitude improvements). These
+remain valid maintainability/correctness wins; they were never implemented.
+
+**P1-4. Single task-counting implementation.** `buildTaskSummary` (policy),
+`countAuditorTasks` (auditor), `countAllTasks`/`countAllWithStatus` (widget +
+overlay), and `countSubtree` (prompts) each re-implement subtree counting with
+different "done" semantics. Description: one shared counter module with an
+explicit `doneIncludesSkipped` flag, used by all four call sites. Rationale:
+removes ~5 copies of the same walker and the semantic drift that produced
+inconsistent "skipped counts as done" behavior between surfaces. User value:
+consistent task numbers across widget, prompt, status, and auditor output.
+
+
+**P1-5. Deduplicate contract extraction and confirmation-task rendering.**
+`extractVerificationContract` exists in both `goal-contract.ts` and
+`goal-draft.ts`; `renderConfirmationTasks` exists in both `goal-task-confirmation.ts`
+and `goal-draft.ts`; the bordered dialog scaffold (`line()`, truncation,
+header/footer) is copy-pasted across `goal-escape-dialog.ts`,
+`goal-task-confirmation.ts`, and `widgets/task-list-overlay.ts`. Description:
+collapse to one module each. Rationale: identical logic diverging in three
+places is a correctness hazard (escape dialog vs confirmation dialog widths
+already differ slightly). User value: fewer subtle rendering inconsistencies;
+smaller surface to maintain.
+
+
+**P1-9. Decompose `goal-state.ts`.** The 870-line core mixes state, UI, and
+lifecycle. Description: extract the widget/status glue (`updateUI`,
+`clearGoalWidget`, `goalForDisplay`) and the focus-setter trio into focused
+helpers on the same core, shrinking the interface. Rationale: the 50-member
+interface is the biggest maintainability cost in the extension. User value:
+indirect (fewer regressions, faster iteration) — no user-visible behavior
+change.
+
+
+**P1-10. Prune debug-only surface from the shipped bundle.** The debug
+keybindings/helpers in `goal-widget.ts` and the debug panel in
+`widgets/goal-widget.ts` ship to every install. Description: gate them behind
+an env flag (e.g. `PI_GOAL_DEBUG`) so the default bundle excludes dead code
+(`openDebugProposal` is already effectively inert). Rationale: reduces shipped
+code and removes module-level mutable debug state from production.
+User value: smaller surface; fewer accidental trigger paths.
+
+---
+
+

@@ -103,3 +103,16 @@ implementation.
   headless"; F7 was removed from Part 3 (features now F1–F6) and its expanded
   description was moved to `PARKED.md` with provenance; header/scope/
   prioritisation notes updated to F4–F6.
+- Seventh steering pass (2026-08-04): user asked to think much harder about
+  performance — order-of-magnitude clock-time improvements the user actually
+  feels. Part 1 was rebuilt around felt wall clock, in priority order: P1-1
+  cache-first read layer (settings/pool/focused goal; 5–10 sync reads/turn →
+  order-of-magnitude on slow storage), P1-2 incremental ledger tail (O(n)→O(1)),
+  P1-3 one-transaction-per-turn mutation batching (N→1 lock/write/append),
+  P1-4 prompt/context memoization + task-tree trimming (5–10x smaller goal
+  block per turn), P1-5 async/bounded lock acquire (2.5s frozen-TUI stall →
+  tens of ms), P1-6 warm-start auditor (cold session pays full prefill),
+  P1-7 parallel startup rehydration, P1-8 batch ledger appends, P1-9 coalesced
+  widget renders. Four non-clock-time items (task-counter consolidation,
+  renderer dedup, goal-state decomposition, debug-surface pruning) were moved
+  to `PARKED.md` as parked optimisation candidates.

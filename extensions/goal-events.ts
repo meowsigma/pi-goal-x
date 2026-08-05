@@ -198,7 +198,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
-		core.loadState(ctx);
+		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
+		await core.loadState(ctx);
 		core.installGoalToolProfile(!loadGoalSettings(ctx.cwd).disableTasks);
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
@@ -249,7 +250,7 @@ export function registerGoalEvents(core: GoalCore): void {
 
 	pi.on("session_tree", async (_event, ctx) => {
 		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
-		core.loadState(ctx);
+		await core.loadState(ctx);
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
 		core.beginAccounting();

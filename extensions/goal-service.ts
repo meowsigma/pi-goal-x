@@ -623,7 +623,7 @@ export class GoalService {
 		const capturedRevision = current.revision ?? 0;
 		let lock: GoalLock;
 		try {
-			lock = acquireGoalLock(ctx, current.id, { attempts: 10, retryMs: 25 });
+			lock = acquireGoalLock(ctx, current.id, { attempts: 4, retryMs: 25 }); // P1-5: 100ms bound
 		} catch {
 			// Another writer holds the goal lock; skip this persist tick.
 			return null;

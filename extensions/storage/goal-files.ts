@@ -265,6 +265,14 @@ export function parseGoalFile(filePath: string): GoalRecord | null {
 	} catch {
 		return null;
 	}
+	return parseGoalContentCached(filePath, stat.mtimeMs, stat.size, content);
+}
+
+/**
+ * Parse goal-file content and seed the P1-1 parse cache (shared by the sync
+ * and the parallel async readers). Returns null for malformed content.
+ */
+export function parseGoalContentCached(filePath: string, mtimeMs: number, size: number, content: string): GoalRecord | null {
 	const end = findJsonObjectEnd(content);
 	if (end < 0) return null;
 	let raw: Record<string, unknown>;
@@ -275,7 +283,7 @@ export function parseGoalFile(filePath: string): GoalRecord | null {
 	}
 	const objective = extractObjectiveFromBody(content.slice(end + 1)) ?? raw.objective;
 	const parsed = normalizeGoalRecord({ ...raw, objective });
-	goalFileParseCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, parsed });
+	goalFileParseCache.set(filePath, { mtimeMs, size, parsed });
 	return parsed;
 }
 
@@ -343,6 +351,47 @@ export function readActiveGoalPool(ctx: GoalFileContext): Map<string, GoalRecord
 	const pool = new Map<string, GoalRecord>();
 	for (const goal of readActiveGoalFiles(ctx)) {
 		pool.set(goal.id, goal);
+	}
+	return pool;
+}
+
+/**
+ * Parallel pool read (P1-7): fs.promises-based readdir + per-file stat/read
+ * in parallel, seeding the P1-1 parse cache so subsequent sync reads hit it.
+ * Used by session startup rehydration (loadState).
+ */
+export async function readActiveGoalPoolAsync(ctx: GoalFileContext): Promise<Map<string, GoalRecord>> {
+	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	let names: string[];
+	try {
+		const rootStat = await fs.promises.lstat(root);
+		if (rootStat.isSymbolicLink()) return new Map();
+		names = (await fs.promises.readdir(root))
+			.filter((name) => /^active_goal_.*\.md$/.test(name))
+			.sort((a, b) => a.localeCompare(b));
+	} catch {
+		return new Map();
+	}
+	const parsed = await Promise.all(names.map(async (name): Promise<GoalRecord | null> => {
+		const relPath = `${GOALS_DIR}/${name}`;
+		if (!isSafeActivePath(ctx, relPath)) return null;
+		const abs = resolveGoalPath(ctx, GOALS_DIR, relPath);
+		try {
+			const [stat, content] = await Promise.all([
+				fs.promises.lstat(abs),
+				fs.promises.readFile(abs, "utf8"),
+			]);
+			if (stat.isSymbolicLink()) return null;
+			const parsed = parseGoalContentCached(abs, stat.mtimeMs, stat.size, content);
+			if (!parsed || parsed.status === "complete") return null;
+			return sanitizeGoalPaths(ctx, { ...parsed, activePath: relPath });
+		} catch {
+			return null;
+		}
+	}));
+	const pool = new Map<string, GoalRecord>();
+	for (const goal of parsed) {
+		if (goal) pool.set(goal.id, goal);
 	}
 	return pool;
 }

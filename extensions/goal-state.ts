@@ -27,7 +27,7 @@ import {
 } from "./goal-record.ts";
 import {
 	mergeGoalPromptFromDisk,
-	readActiveGoalPool,
+	readActiveGoalPoolAsync,
 	sanitizeGoalPaths,
 } from "./storage/goal-files.ts";
 import { GoalService } from "./goal-service.ts";
@@ -108,7 +108,7 @@ export interface GoalCore {
 	refreshGoalDisplayFromDisk(ctx: ExtensionContext): void;
 	updateUI(ctx: ExtensionContext): void;
 	clearGoalWidget(ctx: ExtensionContext): void;
-	loadState(ctx: ExtensionContext): void;
+	loadState(ctx: ExtensionContext): Promise<void>;
 	setGoal(next: GoalRecord | null, ctx: ExtensionContext, shouldPersist?: boolean, focusReason?: GoalFocusReason): void;
 	archiveCurrentGoal(ctx: ExtensionContext, reason: StopReason | undefined): GoalRecord | null;
 	stopActiveGoal(status: Exclude<GoalStatus, "active">, reason: StopReason | undefined, ctx: ExtensionContext): void;
@@ -590,8 +590,8 @@ export function createGoalCore(
 		}
 	}
 
-	function loadState(ctx: ExtensionContext): void {
-		goalsById = readActiveGoalPool(ctx);
+	async function loadState(ctx: ExtensionContext): Promise<void> {
+		goalsById = await readActiveGoalPoolAsync(ctx);
 		tasksEnabled = !loadGoalSettings(ctx.cwd).disableTasks;
 		focusRevision += 1; // Session reload/tree navigation invalidates pending async focus operations.
 		assignFocusedGoalId(null);

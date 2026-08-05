@@ -329,3 +329,19 @@ Headline verified magnitudes:
 - settings load @25ms/op 60.9→33.8ms; per-turn read ops 6→4 / 24→13
 - 5 in-turn task mutations 140→38 fs ops (P1-3)
 - warm-auditor dispatch 1.3→1.2ms (win is session warm-start, not dispatch)
+
+### Milestone 7 — validation + signoff gate (task 7, 2026-08-05)
+- `npm test`: **519 pass / 0 fail** (was 499 at baseline; +20 new tests:
+  3 P1-3 turn-transaction, 7 enhancements, 10 features).
+- `npm run check` (tsc --noEmit): clean. Runner self-check: OK (44 unit +
+  1 integration entries).
+- PLAN coverage: all **35 items** (P1-1..P1-13, E1..E7, F1..F6, B1..B9)
+  mapped to implementation evidence in this MILESTONES.md (programmatic
+  check: none unmapped).
+- CHANGELOG.md updated (Added/Changed/Fixed) and committed.
+- Branch `implement/review-plan-2026-08-04`: 19 commits above `6b42045`
+  (11 plan-docs + 8 implementation batches); local main reset to `6b42045`
+  == origin/main with zero `extension-review-plan` files; working tree clean.
+- Benchmarks: BEFORE (69 rows) and AFTER (72 rows) agent-free baselines
+  committed; B6 gate PASS; BENCH-DIFF.md + B9 budgets committed.
+- Remaining: user signoff in a real terminal.

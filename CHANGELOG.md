@@ -28,6 +28,15 @@ with the `0.x` prefix indicating pre-1.0 development.
   ledgers).
 - Prompt task-list block compaction (formatting-only; pending task + contract
   on one line).
+- Cold session start: the parsed active pool is persisted to
+  `.pi/goals/.goals-pool-snapshot.json` and kept current by every extension
+  write, so a fresh process loads the pool in ~3 fs ops instead of 2 per goal
+  file (pool scan 102→3 ops, session startup 105→4 ops on this machine; the
+  goals-dir mtime + filename-set check still forces a rescan on external
+  add/remove). Settings cold load dropped its redundant stat (2→1 op).
+- Bench harness: cold-start rows via fresh child processes
+  (`b5b-cold-start.mjs`), before/after now 95 rows; four goal dialogs and
+  tool-call headings remain byte-identical.
 
 ### Benchmarks
 

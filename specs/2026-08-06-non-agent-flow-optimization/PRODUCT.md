@@ -41,3 +41,40 @@ flagged to the user before landing — never silently folded in.
 - The four goal dialogs and goal tool-call headings stay byte-identical.
 - The blocked 2026-08-04 review-plan goal's signoff (separate concern; its
   work is already merged to main).
+
+## Cold session start (2026-08-06, user-requested extension)
+
+The warm rows measure steady-state per-call cost; the campaign additionally
+benchmarks the **cold** path (fresh process, all caches empty) via
+`b5b-cold-start.mjs` (each sample runs the flow once in a fresh child
+process): `B1.pool.cold`, `B1.settings.cold`, `B1.ledger.cold`,
+`B5.startup.cold` + `.lat25` variants.
+
+Cold read optimization — **persistent pool snapshot**:
+`.pi/goals/.goals-pool-snapshot.json` caches the parsed active pool as one
+file. A cold pool read is `lstat(root) + readFile(snapshot)` (2-3 ops) instead
+of a per-goal scan (2 ops × goal count); every extension write
+(`writeActiveGoalFile` / `safeUnlinkGoalFile` / archive) keeps it current via
+a read-modify-write delta (+4 ops per mutation, mutation rows are
+write-floor-exempt). Freshness:
+
+- if the goals-dir mtime is unchanged → serve the snapshot (2 ops);
+- if it changed but the `active_goal_*.md` filename set is identical (ledger
+  appends live in the same dir and churn the dir mtime) → one extra readdir
+  verifies the names and the snapshot is served (3 ops);
+- if goal files were added/removed (including external edits) → full scan +
+  snapshot rewrite (correctness preserved).
+
+Semantics nuance vs before: an *in-place content edit* of a goal file by an
+external tool (same filename, dir mtime unchanged) may be served stale from
+the snapshot until the next extension write or mtime-changing change — the
+same staleness class already documented for the in-memory pool cache
+(mid-session). The safety-critical persist path is unaffected: it re-reads
+the goal file directly (`parseGoalFile`, mtime-keyed) under the lock, so
+cross-process revision conflicts are still detected. Tests pin all of this
+(655 green).
+
+Measured cold wins (this machine, agent-free): pool scan 102→3 fs ops
+(34x), p50 5.3→0.9ms; lat25 3.2s→99ms (32x); session startup 105→4 fs ops
+(26x); settings/ledger cold reads 2→1 op (the remaining op is the mandatory
+read floor).

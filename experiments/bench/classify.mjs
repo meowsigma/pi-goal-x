@@ -10,6 +10,11 @@
  *       durable/atomic write that cannot disappear without breaking
  *       atomicity or cross-process safety (see WRITE_FLOOR_RATIONALE).
  *       No-regression only; achievable op reductions are non-contract wins.
+ *   EXEMPT (read floor) — cold single-read rows (B5b): one mandatory read op
+ *       (the redundant stat already removed); ≤0 ops impossible.
+ *   EXEMPT (content floor) — B4 prompt rows: token size is bounded by the
+ *       fixed agent guidance + per-task status/contract text the agent must
+ *       see; 10x would require removing guidance (behavior change, forbidden).
  *   HEADROOM — everything else. Primary metric per flow class:
  *       B2.*            fs ops/turn (the per-turn I/O cost driver)
  *       B4.*            estimated prompt tokens (prompt-bound)
@@ -55,6 +60,20 @@ const WRITE_FLOOR_EXEMPT = new Set([
  * Exempt on the documented no-regression rule; the metric is still watched.
  */
 const CONTENT_FLOOR_EXEMPT_PREFIX = "B4.";
+
+/**
+ * Cold single-read rows (B5b): one mandatory read op (the file's content)
+ * cannot disappear — a cold settings/ledger load must read the file once.
+ * The redundant stat was removed (2→1 op); ≤0 ops is impossible. At 25ms/op
+ * the wall-clock floor is the single op's latency (25ms), so the lat25
+ * variants are floor-bound too. Exempt on the no-regression rule.
+ */
+const READ_FLOOR_EXEMPT = new Set([
+	"B1.settings.cold",
+	"B1.settings.cold.lat25",
+	"B1.ledger.cold",
+	"B1.ledger.cold.lat25",
+]);
 const WRITE_FLOOR_RATIONALE = {
 	"B1.lock.uncontended": "lockfile create+remove is mandatory (cross-process safety); floor ~2 ops, 0 impossible; 0.1ms wall-clock is noise",
 	"B1.append.single": "one durable ledger append requires a direct write (1-op floor); 0 impossible; 0.1ms wall-clock is noise",
@@ -69,6 +88,7 @@ const WRITE_FLOOR_RATIONALE = {
 
 export function classify(row) {
 	if (WRITE_FLOOR_EXEMPT.has(row.id)) return { cls: "exempt", metric: "durable-write floor" };
+	if (READ_FLOOR_EXEMPT.has(row.id)) return { cls: "exempt", metric: "read floor" };
 	if (row.id.startsWith(CONTENT_FLOOR_EXEMPT_PREFIX)) return { cls: "exempt", metric: "content floor" };
 	if (row.id.startsWith("B2.")) return { cls: "headroom", metric: "fs ops" };
 	const p50 = typeof row.p50 === "number" ? row.p50 : NaN;
@@ -104,6 +124,7 @@ export function renderHeadroomMarkdown(campaign, cfg, rows) {
 	const headroom = rows.filter((r) => r.cls === "headroom");
 	const exemptNoise = rows.filter((r) => r.metric === "noise floor");
 	const exemptWrite = rows.filter((r) => r.metric === "durable-write floor");
+	const exemptRead = rows.filter((r) => r.metric === "read floor");
 	const exemptContent = rows.filter((r) => r.metric === "content floor");
 	return [
 		`# Non-agent flow headroom / exemption list — campaign \`${campaign}\``,
@@ -130,6 +151,12 @@ export function renderHeadroomMarkdown(campaign, cfg, rows) {
 		`| id | p50 ms | ops | rationale |`,
 		`|---|---|---|---|`,
 		...exemptWrite.map((r) => `| ${r.id} | ${r.p50} | ${r.ops ?? "-"} | ${WRITE_FLOOR_RATIONALE[r.id] ?? ""} |`),
+		``,
+		`## Exempt — read floor (cold single-read rows; one mandatory read op, no-regression only) — ${exemptRead.length} rows`,
+		``,
+		`| id | p50 ms | ops | rationale |`,
+		`|---|---|---|---|`,
+		...exemptRead.map((r) => `| ${r.id} | ${r.p50} | ${r.ops ?? "-"} | a cold settings/ledger load must read the file at least once — the redundant stat was already removed (2→1 op), ≤0 ops is impossible; at 25ms/op the wall-clock floor is that single op's latency (25ms). Metric still watched (no-regression). |`),
 		``,
 		`## Exempt — content floor (no-regression only; 10x unreachable without behavior change — see rationale) — ${exemptContent.length} rows`,
 		``,

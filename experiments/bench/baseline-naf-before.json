@@ -1002,6 +1002,107 @@
       "p95": 0,
       "max": 0,
       "notes": "mean 0ms"
+    },
+    {
+      "id": "B1.pool.cold",
+      "label": "cold sync pool read (50 goals, fresh process)",
+      "modules": "storage/goal-files",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 5.3,
+      "p95": 5.6,
+      "max": 5.6,
+      "ops": 102,
+      "notes": "fresh-process cold read; wall samples 4.9/5.3/5.3/5.4/5.6ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.pool.cold.lat25",
+      "label": "cold sync pool read (50 goals, +25ms/op)",
+      "modules": "storage/goal-files",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 3199.2,
+      "p95": 3338.9,
+      "max": 3338.9,
+      "ops": 102,
+      "latency": "25ms/op",
+      "notes": "fresh-process cold read; wall samples 3139.1/3187.8/3199.2/3224/3338.9ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.settings.cold",
+      "label": "cold settings load (fresh process)",
+      "modules": "goal-settings",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 0.4,
+      "p95": 1.2,
+      "max": 1.2,
+      "ops": 2,
+      "notes": "fresh-process cold read; wall samples 0.4/0.4/0.4/0.4/1.2ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.settings.cold.lat25",
+      "label": "cold settings load (+25ms/op)",
+      "modules": "goal-settings",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 63.7,
+      "p95": 65,
+      "max": 65,
+      "ops": 2,
+      "latency": "25ms/op",
+      "notes": "fresh-process cold read; wall samples 52.7/61.9/63.7/64.6/65ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.ledger.cold",
+      "label": "cold ledger read (1k events, fresh process)",
+      "modules": "goal-ledger",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 1.6,
+      "p95": 4.4,
+      "max": 4.4,
+      "ops": 2,
+      "notes": "fresh-process cold read; wall samples 1.4/1.5/1.6/1.8/4.4ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.ledger.cold.lat25",
+      "label": "cold ledger read (+25ms/op)",
+      "modules": "goal-ledger",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 60.8,
+      "p95": 65.5,
+      "max": 65.5,
+      "ops": 2,
+      "latency": "25ms/op",
+      "notes": "fresh-process cold read; wall samples 57.5/60.7/60.8/65.1/65.5ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B5.startup.cold",
+      "label": "cold session startup loadState (50 goals, fresh process)",
+      "modules": "goal-state + storage/goal-files + goal-settings",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 6.5,
+      "p95": 8.1,
+      "max": 8.1,
+      "ops": 105,
+      "notes": "fresh-process cold read; wall samples 6.5/6.5/6.5/6.8/8.1ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B5.startup.cold.lat25",
+      "label": "cold session startup loadState (50 goals, +25ms/op)",
+      "modules": "goal-state + storage/goal-files + goal-settings",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 184,
+      "p95": 184.5,
+      "max": 184.5,
+      "ops": 105,
+      "latency": "25ms/op",
+      "notes": "fresh-process cold read; wall samples 173/176.3/184/184.5/184.5ms; ops = min over samples (deterministic per code state)"
     }
-  ]
+  ],
+  "rowCount": 95
 }

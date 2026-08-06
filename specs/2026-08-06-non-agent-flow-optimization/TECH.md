@@ -77,3 +77,43 @@ no-regression-only (existing tolerance). Gate must PASS before completion.
 - E2E: prompts' information content exercised by the existing e2e/integration
   tests; any prompt-token win that trims content is diffed and flagged.
 - Dialogs + tool headings byte-identical to current main.
+
+## 5. Cold start (task-2 extension, 2026-08-06)
+
+Harness: `b5b-cold-start.mjs` (rows) + `bench-cold-child.mjs` (child that
+runs ONE flow in a fresh process, reports ops + wall; hooks installed via
+`--import bench-adapter-hooks.mjs`; spawn via the B8-authorized
+`spawnContention`). Rows run in the naf campaign only, after B5.
+
+Optimization: persistent pool snapshot in `storage/goal-files.ts` —
+`.goals-pool-snapshot.json` in the goals dir:
+
+- read path (`readPoolWithSnapshotSync/Async`): `lstat(root)` + snapshot read;
+  on dir-mtime mismatch, one `readdir` verifies the `active_goal_*.md`
+  filename set (ledger churn lives in the same dir and must not force a
+  rescan); otherwise full scan + rewrite.
+- write path: `writeActiveGoalFile` merges the written record in (read +
+  temp+rename); `safeUnlinkGoalFile` removes by id (parsed from the active
+  filename); archive flows through the unlink hook. Best-effort — a
+  missing/corrupt snapshot falls back to a full scan.
+- hydrate filters `status === "complete"` exactly like `scanActiveGoalFiles`.
+- Symlink safety: the fast path still refuses symlinked roots; goal-file
+  symlinks are only reachable through the full scan (unchanged behavior).
+- Settings cold load dropped its redundant stat (readFile + ENOENT catch),
+  2 → 1 op.
+
+Cold rows (before = worktree of the pre-change commit ae4e562, same harness;
+after = current tree):
+
+| row | before | after | ratio |
+|---|---|---|---|
+| B1.pool.cold | 102 ops / 5.3ms | 3 ops / 0.9ms | 34x ops |
+| B1.pool.cold.lat25 | 102 ops / 3199ms | 3 ops / 98.6ms | 32x |
+| B5.startup.cold | 105 ops / 6.5ms | 4 ops / 2ms | 26x ops |
+| B5.startup.cold.lat25 | 105 ops / 184ms | 4 ops / 112ms | 26x ops |
+| B1.settings.cold | 2 ops | 1 op (read floor) | — |
+| B1.ledger.cold | 2 ops | 1 op (read floor) | — |
+
+Classification: pool/startup cold rows are HEADROOM (ops metric, targets
+≤10/≤10) and met; settings/ledger cold rows are read-floor EXEMPT (one
+mandatory read op; the redundant stat was removed).

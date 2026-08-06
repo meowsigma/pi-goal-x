@@ -34,6 +34,7 @@ import { run as runB3 } from "./b3-ledger-scale.mjs";
 import { run as runB2 } from "./b2-turn-accounting.mjs";
 import { run as runB4 } from "./b4-prompt-size.mjs";
 import { run as runB5 } from "./b5-startup-contention-auditor.mjs";
+import { run as runB5b } from "./b5b-cold-start.mjs";
 import { run as runB7 } from "./b7-feature-matrix.mjs";
 
 const benchDir = fileURLToPath(new URL(".", import.meta.url));
@@ -60,6 +61,10 @@ await runB4(baseline);
 console.log(`[bench] B4 prompt size done (${baseline.rows.length} rows)`);
 await runB5(baseline);
 console.log(`[bench] B5 startup/contention/auditor done (${baseline.rows.length} rows)`);
+if (campaign === "naf") {
+	await runB5b(baseline);
+	console.log(`[bench] B5b cold-start done (${baseline.rows.length} rows)`);
+}
 await runB7(baseline);
 console.log(`[bench] B7 feature matrix done (${baseline.rows.length} rows)`);
 

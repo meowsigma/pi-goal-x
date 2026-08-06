@@ -69,6 +69,119 @@ function invalidateGoalDirCache(root: string): void {
 	goalPoolCache.delete(root);
 }
 
+// ── Persistent pool snapshot (NAF cold-start, 2026-08-06) ───────────────────
+// The zero-op pool cache is in-memory; a fresh process (new session) has no
+// cache, so a cold pool read re-scanned every goal file (2 fs ops per goal).
+// The snapshot persists the pool as ONE file, so a cold read is
+// lstat(root) + readFile(snapshot) = 2 ops total, and every extension write
+// keeps it current (read-modify-write, +4 ops per mutation — mutations are
+// write-floor-exempt in the bench).
+//
+// Freshness: the snapshot records the goals-dir mtime; if the dir mtime
+// changed (goal files added/removed — including external edits), the
+// snapshot is invalidated and a full scan re-syncs it. In-place content
+// edits to a goal file do NOT change the dir mtime, so a cold read may serve
+// the last extension-written snapshot until the next extension write or
+// mtime-changing change — the same staleness class as the in-memory pool
+// cache's documented mid-session behavior (external hand-edits go stale;
+// the safety-critical persist path still re-reads the goal file directly
+// via parseGoalFile, mtime-keyed, so cross-process conflicts are detected).
+interface PoolSnapshot {
+	version: 1;
+	dirMtimeMs: number;
+	goals: GoalRecord[];
+}
+
+const POOL_SNAPSHOT_NAME = ".goals-pool-snapshot.json";
+
+function poolSnapshotPath(root: string): string {
+	return path.join(root, POOL_SNAPSHOT_NAME);
+}
+
+/** Read + validate the snapshot; null when missing/corrupt/unsupported. */
+function readPoolSnapshotSync(root: string): PoolSnapshot | null {
+	try {
+		const data = JSON.parse(fs.readFileSync(poolSnapshotPath(root), "utf8")) as Partial<PoolSnapshot>;
+		if (data.version === 1 && Array.isArray(data.goals) && typeof data.dirMtimeMs === "number") {
+			return data as PoolSnapshot;
+		}
+	} catch {
+		// missing or corrupt — caller falls back to a full scan
+	}
+	return null;
+}
+
+async function readPoolSnapshotAsync(root: string): Promise<PoolSnapshot | null> {
+	try {
+		const data = JSON.parse(await fs.promises.readFile(poolSnapshotPath(root), "utf8")) as Partial<PoolSnapshot>;
+		if (data.version === 1 && Array.isArray(data.goals) && typeof data.dirMtimeMs === "number") {
+			return data as PoolSnapshot;
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+function hydratePoolFromSnapshot(snapshot: PoolSnapshot): Map<string, GoalRecord> {
+	const pool = new Map<string, GoalRecord>();
+	for (const goal of snapshot.goals) {
+		if (goal.status === "complete") continue; // matches scanActiveGoalFiles
+		pool.set(goal.id, goal);
+	}
+	return pool;
+}
+
+/** Best-effort atomic snapshot write (temp + rename). */
+function writePoolSnapshotSync(ctx: GoalFileContext, root: string, goals: GoalRecord[]): void {
+	try {
+		const rootStat = fs.lstatSync(root);
+		const snapshot: PoolSnapshot = { version: 1, dirMtimeMs: rootStat.mtimeMs, goals };
+		const target = poolSnapshotPath(root);
+		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+		fs.writeFileSync(tempPath, JSON.stringify(snapshot), "utf8");
+		fs.renameSync(tempPath, target);
+	} catch {
+		// best-effort: a missing/stale snapshot just costs a full scan next cold read
+	}
+}
+
+async function writePoolSnapshotAsync(ctx: GoalFileContext, root: string, goals: GoalRecord[]): Promise<void> {
+	try {
+		const rootStat = await fs.promises.lstat(root);
+		const snapshot: PoolSnapshot = { version: 1, dirMtimeMs: rootStat.mtimeMs, goals };
+		const target = poolSnapshotPath(root);
+		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+		await fs.promises.writeFile(tempPath, JSON.stringify(snapshot), "utf8");
+		await fs.promises.rename(tempPath, target);
+	} catch {
+		// best-effort
+	}
+}
+
+/** Merge a delta (written goal or removal) into the persisted snapshot. */
+function updatePoolSnapshotSync(ctx: GoalFileContext, root: string, mutate: (goals: GoalRecord[]) => GoalRecord[]): void {
+	const snapshot = readPoolSnapshotSync(root);
+	if (!snapshot) return; // no snapshot yet — next cold read does a full scan + write
+	snapshot.goals = mutate(snapshot.goals);
+	try {
+		const rootStat = fs.lstatSync(root);
+		snapshot.dirMtimeMs = rootStat.mtimeMs;
+		const target = poolSnapshotPath(root);
+		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+		fs.writeFileSync(tempPath, JSON.stringify(snapshot), "utf8");
+		fs.renameSync(tempPath, target);
+	} catch {
+		// best-effort
+	}
+}
+
+/** "active_goal_<id>.md" → id (the active filename is the id with a fixed prefix/suffix). */
+function idFromActiveRelPath(relPath: string): string {
+	const base = path.posix.basename(normalizeRelPath(relPath));
+	return base.startsWith("active_goal_") && base.endsWith(".md") ? base.slice("active_goal_".length, -3) : "";
+}
+
 export interface GoalFileContext {
 	cwd: string;
 }
@@ -153,6 +266,11 @@ export function safeUnlinkGoalFile(ctx: GoalFileContext, rootRel: string, relPat
 		fs.unlinkSync(filePath);
 		invalidateGoalPathCaches(filePath);
 		invalidateGoalDirCache(path.resolve(ctx.cwd, rootRel));
+		if (rootRel === GOALS_DIR) {
+			const root = path.resolve(ctx.cwd, GOALS_DIR);
+			const id = idFromActiveRelPath(relPath);
+			if (id) updatePoolSnapshotSync(ctx, root, (goals) => goals.filter((g) => g.id !== id));
+		}
 	}
 }
 
@@ -311,6 +429,12 @@ export function writeActiveGoalFile(ctx: GoalFileContext, current: GoalRecord): 
 	const activePath = activePathForGoal(ctx, current);
 	const next = sanitizeGoalPaths(ctx, { ...current, activePath, updatedAt: nowIso() });
 	atomicWriteGoalFile(ctx, GOALS_DIR, activePath, serializeGoalFile(next));
+	// Keep the persistent pool snapshot current (read-modify-write, best-effort).
+	updatePoolSnapshotSync(ctx, path.resolve(ctx.cwd, GOALS_DIR), (goals) => {
+		const rest = goals.filter((g) => g.id !== next.id);
+		rest.push(next);
+		return rest;
+	});
 	return next;
 }
 
@@ -389,12 +513,63 @@ export function readActiveGoalPool(ctx: GoalFileContext): Map<string, GoalRecord
 	const root = path.resolve(ctx.cwd, GOALS_DIR);
 	const cachedPool = goalPoolCache.get(root);
 	if (cachedPool) return new Map(cachedPool);
+	const pool = readPoolWithSnapshotSync(ctx, root);
+	goalPoolCache.set(root, pool);
+	return pool;
+}
+
+/** Cold pool read: serve the persisted snapshot when the goals dir is unchanged (2 ops),
+ * or when only non-goal entries changed (ledger churn: one extra readdir to verify the
+ * active_goal filename set is identical — catches external add/remove). Otherwise full
+ * scan + re-snapshot (external goal add/remove or no snapshot yet). */
+function readPoolWithSnapshotSync(ctx: GoalFileContext, root: string): Map<string, GoalRecord> {
+	let rootStat: fs.Stats | null = null;
+	try {
+		rootStat = fs.lstatSync(root);
+	} catch {
+		rootStat = null;
+	}
+	if (rootStat && !rootStat.isSymbolicLink()) {
+		const snapshot = readPoolSnapshotSync(root);
+		if (snapshot) {
+			if (snapshot.dirMtimeMs === rootStat.mtimeMs || activeGoalNamesMatchSync(root, snapshot)) {
+				return hydratePoolFromSnapshot(snapshot);
+			}
+		}
+	}
 	const pool = new Map<string, GoalRecord>();
 	for (const goal of scanActiveGoalFiles(ctx, root)) {
 		pool.set(goal.id, goal);
 	}
-	goalPoolCache.set(root, pool);
+	writePoolSnapshotSync(ctx, root, Array.from(pool.values()));
 	return pool;
+}
+
+/** True when the snapshot's goal filename set equals the goals dir's active_goal files. */
+function activeGoalNamesMatchSync(root: string, snapshot: PoolSnapshot): boolean {
+	try {
+		const names = fs.readdirSync(root).filter((name) => /^active_goal_.*\.md$/.test(name)).sort();
+		const snapshotNames = snapshot.goals
+			.map((g) => path.posix.basename(normalizeRelPath(g.activePath ?? "")))
+			.filter((name) => /^active_goal_.*\.md$/.test(name))
+			.sort();
+		return names.length === snapshotNames.length && names.every((n, i) => n === snapshotNames[i]);
+	} catch {
+		return false;
+	}
+}
+
+async function activeGoalNamesMatchAsync(root: string, snapshot: PoolSnapshot): Promise<boolean> {
+	try {
+		const names = (await fs.promises.readdir(root)).filter((name) => /^active_goal_.*\.md$/.test(name)).sort();
+		const snapshotNames = snapshot.goals
+			.map((g) => path.posix.basename(normalizeRelPath(g.activePath ?? "")))
+			.filter((name) => /^active_goal_.*\.md$/.test(name))
+			.sort();
+		return names.length === snapshotNames.length && names.every((n, i) => n === snapshotNames[i]);
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -408,8 +583,28 @@ export async function readActiveGoalPoolAsync(ctx: GoalFileContext): Promise<Map
 	const root = path.resolve(ctx.cwd, GOALS_DIR);
 	const cachedPool = goalPoolCache.get(root);
 	if (cachedPool) return new Map(cachedPool);
-	const pool = await scanActiveGoalFilesAsync(ctx, root);
+	const pool = await readPoolWithSnapshotAsync(ctx, root);
 	goalPoolCache.set(root, pool);
+	return pool;
+}
+
+async function readPoolWithSnapshotAsync(ctx: GoalFileContext, root: string): Promise<Map<string, GoalRecord>> {
+	let rootStat: fs.Stats | null = null;
+	try {
+		rootStat = await fs.promises.lstat(root);
+	} catch {
+		rootStat = null;
+	}
+	if (rootStat && !rootStat.isSymbolicLink()) {
+		const snapshot = await readPoolSnapshotAsync(root);
+		if (snapshot) {
+			if (snapshot.dirMtimeMs === rootStat.mtimeMs || (await activeGoalNamesMatchAsync(root, snapshot))) {
+				return hydratePoolFromSnapshot(snapshot);
+			}
+		}
+	}
+	const pool = await scanActiveGoalFilesAsync(ctx, root);
+	await writePoolSnapshotAsync(ctx, root, Array.from(pool.values()));
 	return pool;
 }
 

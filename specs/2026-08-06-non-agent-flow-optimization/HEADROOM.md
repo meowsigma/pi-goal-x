@@ -1,11 +1,11 @@
 # Non-agent flow headroom / exemption list — campaign `naf`
 
-Generated 2026-08-06T12:19:04.498Z from `baseline-naf-before.json` (87 rows).
+Generated 2026-08-06T12:37:19.651Z from `baseline-naf-before.json` (95 rows).
 Rule: EXEMPT = wall-clock row with p50 < 0.5ms and ≤ 1 fs op (measurement-noise-bound; must not regress), plus the documented
 durable-write-floor rows (see below). HEADROOM rows must show ≥10x on their primary metric: fs ops (any row with > 1 fs op —
 the I/O-bound flow's real cost driver), p50 ms (pure-CPU / single-read wall-clock rows), or estimated tokens (B4 prompt-bound flows).
 
-## Headroom — 22 rows (≥10x target on primary metric)
+## Headroom — 26 rows (≥10x target on primary metric)
 
 | id | primary metric | before | 10x target |
 |---|---|---|---|
@@ -31,6 +31,10 @@ the I/O-bound flow's real cost driver), p50 ms (pure-CPU / single-read wall-cloc
 | B5.startup.50g.lat25 | fs ops | 104 | ≤10 |
 | B5.lock.contended | p50 ms | 245.6ms | 24.6ms |
 | B7.tool.get_goal | fs ops | 4 | ≤0 |
+| B1.pool.cold | fs ops | 102 | ≤10 |
+| B1.pool.cold.lat25 | fs ops | 102 | ≤10 |
+| B5.startup.cold | fs ops | 105 | ≤10 |
+| B5.startup.cold.lat25 | fs ops | 105 | ≤10 |
 
 ## Exempt — noise floor (no-regression only) — 50 rows
 
@@ -100,6 +104,15 @@ the I/O-bound flow's real cost driver), p50 ms (pure-CPU / single-read wall-cloc
 | B7.tool.update_goal.blocked | 0.6 | 20 | blocked = lockfile + goal file + ledger (3 files); ~5-op floor (20 today); 0.7ms wall-clock |
 | B7.tool.set_goal_tasks.50 | 0.8 | 20 | task-list set = lockfile + goal file + ledger (3 files); ~5-op floor (20 today); 0.8ms wall-clock |
 | B7.tool.update_goal_task | 0.7 | 24 | task mutation = lockfile + goal file + ledger (3 files); ~5-op floor (24 today); 0.7ms wall-clock |
+
+## Exempt — read floor (cold single-read rows; one mandatory read op, no-regression only) — 4 rows
+
+| id | p50 ms | ops | rationale |
+|---|---|---|---|
+| B1.settings.cold | 0.4 | 2 | a cold settings/ledger load must read the file at least once — the redundant stat was already removed (2→1 op), ≤0 ops is impossible; at 25ms/op the wall-clock floor is that single op's latency (25ms). Metric still watched (no-regression). |
+| B1.settings.cold.lat25 | 63.7 | 2 | a cold settings/ledger load must read the file at least once — the redundant stat was already removed (2→1 op), ≤0 ops is impossible; at 25ms/op the wall-clock floor is that single op's latency (25ms). Metric still watched (no-regression). |
+| B1.ledger.cold | 1.6 | 2 | a cold settings/ledger load must read the file at least once — the redundant stat was already removed (2→1 op), ≤0 ops is impossible; at 25ms/op the wall-clock floor is that single op's latency (25ms). Metric still watched (no-regression). |
+| B1.ledger.cold.lat25 | 60.8 | 2 | a cold settings/ledger load must read the file at least once — the redundant stat was already removed (2→1 op), ≤0 ops is impossible; at 25ms/op the wall-clock floor is that single op's latency (25ms). Metric still watched (no-regression). |
 
 ## Exempt — content floor (no-regression only; 10x unreachable without behavior change — see rationale) — 6 rows
 

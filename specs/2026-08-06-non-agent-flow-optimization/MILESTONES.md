@@ -180,3 +180,36 @@ full rationale.
 **Dialog/tool-heading byte-identical evidence:** `git diff ae4e562` (pre-work HEAD) is empty for goal-questionnaire.ts, goal-draft.ts, goal-task-confirmation.ts, widgets/goal-escape-dialog.ts, goal-format.ts, and the tool-call heading sources (goal-record.ts, goal-task-tools.ts, goal-auditor.ts, goal-core-tools.ts) — none appear in the changed-files list. Verified 2026-08-06.
 
 **Headline after numbers (this machine, agent-free):** pool scan 50g @25ms/op 1.6s→0ms; settings load 33.4→0ms; startup 50g 104→0 fs ops; per-turn reads 13→0; lock contention 245.6→~17ms; ledger reconstruct 6.4→0.6ms @10k; 4-event append 20→1 fs op; get_goal 4→0 fs ops.
+
+## Milestone 4 — cold-session-start rows + persistent pool snapshot (2026-08-06)
+
+User asked (after reviewing the warm-only numbers): add cold rows and
+optimise them.
+
+- Harness: `b5b-cold-start.mjs` + `bench-cold-child.mjs` — each sample runs
+  the flow ONCE in a fresh child process (true cold: no caches), reporting
+  ops + wall; children are node processes with the bench hooks only (B8: no
+  network, no live agents; spawn via the authorized `spawnContention`).
+  Rows: B1.pool.cold / settings.cold / ledger.cold, B5.startup.cold, all
+  with .lat25 variants. naf campaign only.
+- **BEFORE capture**: same harness run against a worktree of the pre-change
+  commit (ae4e562) with identical harness files → true pre-optimization cold
+  numbers: pool 102 ops / 5.3ms (3199ms @lat25), settings 2 ops, ledger
+  2 ops, startup 105 ops / 6.5ms. Merged into `baseline-naf-before.json`
+  (now 95 rows).
+- **Optimization**: persistent pool snapshot (`.goals-pool-snapshot.json`):
+  cold pool read = lstat(root) + readFile(snapshot) (2 ops; +1 readdir when
+  the dir mtime changed but the goal filename set is identical — the ledger
+  lives in the same dir and churns its mtime); extension writes keep it
+  current (writeActiveGoalFile merge, safeUnlinkGoalFile removal). Settings
+  cold load dropped its redundant stat (2→1 op). Freshness: external goal
+  add/remove still forces a rescan; external in-place content edits may serve
+  the last extension-written snapshot until the next extension write — the
+  same staleness class already documented for the in-memory pool cache
+  (PRODUCT.md updated). Persist path unaffected (direct mtime-keyed read).
+- **Results** (after run, 95 rows): pool.cold 102→3 ops (34x, target ≤10);
+  pool.cold.lat25 3199→98.6ms (32x); startup.cold 105→4 ops (26x);
+  startup.cold.lat25 105→4 ops; settings/ledger cold 2→1 op, classified
+  read-floor exempt (one mandatory read op). Gates: naf PASS (26 headroom
+  met, 69 exempt no-regression), extension-review-plan PASS. 655 tests green,
+  tsc clean.

@@ -10,6 +10,8 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-08-06
+
 ### Added
 
 - **Scrollable, latest-completion-anchored task list**: the task list in the

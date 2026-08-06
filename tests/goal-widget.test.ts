@@ -3,7 +3,8 @@ import test from "node:test";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { renderGoalWidgetLines, renderAuditorWidgetLines, GoalWidgetComponent, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
+import { renderGoalWidgetLines, renderAuditorWidgetLines, renderAuditResultCardView, GoalWidgetComponent, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
+import type { GoalTask } from "../extensions/goal-record.ts";
 import { createMockTUI, createMockTheme } from "./tui-test-utils.ts";
 
 const theme = {
@@ -38,170 +39,142 @@ function auditorProgress(overrides: Partial<AuditorWidgetProgress> = {}): Audito
 	};
 }
 
-test("renderGoalWidgetLines renders a distinct Sisyphus goal beacon", () => {
+test("renderGoalWidgetLines renders the unified compact dashboard", () => {
 	const lines = renderGoalWidgetLines(goal(), theme, 100);
-	assert.match(lines[0], /^◆ Sisyphus running/);
-	assert.match(lines[0], /auto · 1m05s · 2\.5K/);
-	assert.doesNotMatch(lines[0], /▰|▱/);
-	assert.match(lines[1], /^├─ ⟡ Componentize the goal widget/);
-	assert.doesNotMatch(lines.join("\n"), /pulse/);
-	assert.match(lines.at(-1) ?? "", /^└─ \.pi\/goals\/active_goal\.md/);
+	assert.match(lines[0], /^╭─ pi-goal-x ─ Componentize the goal widget/);
+	assert.match(lines[0], /1m05s · 2\.5K tok/);
+	assert.match(lines[1], /● In progress · Focused: yes/);
+	assert.match(lines.at(-1) ?? "", /^╰─ .*Ctrl\+Shift\+T: expand/);
 });
 
-test("renderGoalWidgetLines merges complete usage into the heading", () => {
+test("renderGoalWidgetLines shows the complete state", () => {
 	const lines = renderGoalWidgetLines(goal({
 		status: "complete",
 		autoContinue: false,
 		sisyphus: false,
 		archivedPath: ".pi/goals/archived/goal.md",
 	}), theme, 100);
-	assert.match(lines[0], /^✓ Goal complete/);
 	assert.match(lines[0], /1m05s · 2\.5K/);
-	assert.doesNotMatch(lines.join("\n"), /pulse/);
+	assert.match(lines.join("\n"), /All required work is complete/);
 });
 
 
-test("renderGoalWidgetLines highlights agent blockers and suggested action", () => {
+test("renderGoalWidgetLines highlights blocked state with reason and action", () => {
+	const lines = renderGoalWidgetLines(goal({
+		status: "blocked",
+		autoContinue: false,
+		pauseReason: "Missing API token",
+		pauseSuggestedAction: "Set TOKEN and run /goal-resume",
+	}), theme, 100);
+	assert.match(lines.join("\n"), /⊘ Blocked/);
+	assert.match(lines.join("\n"), /Blocker  Missing API token/);
+	assert.match(lines.join("\n"), /Action   Set TOKEN and run \/goal-resume/);
+});
+
+test("renderGoalWidgetLines shows paused reason and who paused", () => {
 	const lines = renderGoalWidgetLines(goal({
 		status: "paused",
 		autoContinue: false,
 		stopReason: "agent",
-		pauseReason: "Missing API token",
-		pauseSuggestedAction: "Set TOKEN and run /goal-resume",
+		pauseReason: "waiting on the user",
 	}), theme, 100);
-	assert.match(lines[0], /⊘ Sisyphus blocked/);
-	assert.match(lines.join("\n"), /^├─ blocker Missing API token/m);
-	assert.match(lines.join("\n"), /^├─ next Set TOKEN and run \/goal-resume/m);
+	assert.match(lines.join("\n"), /◐ Paused \(agent\)/);
+	assert.match(lines.join("\n"), /Reason   waiting on the user/);
 });
 
 test("renderGoalWidgetLines shows other open goals and unfocused multi-goal guidance", () => {
 	const focused = renderGoalWidgetLines(goal(), theme, 100, { openGoalCount: 3 });
-	assert.match(focused[0], /\+2 open/);
+	assert.match(focused[1], /Other goals: 2/);
 
 	const unfocused = renderGoalWidgetLines(null, theme, 100, { openGoalCount: 2 });
-	assert.match(unfocused[0], /^◇ Goal unfocused/);
-	assert.match(unfocused[0], /2 open/);
+	assert.match(unfocused[0], /^╭─ pi-goal-x ─ Goal focus required/);
+	assert.match(unfocused.join("\n"), /2 open goals are available/);
 	assert.match(unfocused.join("\n"), /\/goal-focus/);
 });
 
-test("renderAuditorWidgetLines shows auditor progress with current tool", () => {
+test("renderAuditorWidgetLines shows the structured audit dashboard (§15.3)", () => {
+	const progress = auditorProgress({ auditorLabel: "anthropic/claude" });
+	const lines = renderAuditorWidgetLines(progress, theme, 100);
+	assert.match(lines[0], /Independent completion audit ─ anthropic\/claude/);
+	// Five check stages in order.
+	const text = lines.join("\n");
+	assert.ok(text.indexOf("Objective and success criteria") < text.indexOf("Verification contracts"));
+	assert.ok(text.indexOf("Verification contracts") < text.indexOf("Tasks and recorded evidence"));
+	assert.ok(text.indexOf("Tasks and recorded evidence") < text.indexOf("Workspace inspection"));
+	assert.ok(text.indexOf("Workspace inspection") < text.indexOf("Final decision"));
+	// Active audit footer.
+	assert.match(lines.at(-1) ?? "", /Esc: stop audit/);
+	// Tool + output details are hidden by default (shown only in expanded/debug).
+	assert.doesNotMatch(text, /tool read/);
+	assert.doesNotMatch(text, /checking file exists/);
+});
+
+test("renderAuditorWidgetLines shows tool and output details in expanded/debug mode", () => {
 	const progress = auditorProgress();
+	const lines = renderAuditorWidgetLines(progress, theme, 100, { showToolDetails: true });
+	const text = lines.join("\n");
+	assert.match(text, /tool read/);
+	assert.match(text, /test\.txt/);
+	assert.match(text, /checking file exists/);
+});
+
+test("renderAuditorWidgetLines drives check states from percentage bands (§15.2)", () => {
+	const progress = auditorProgress({ phase: "running", percentage: 72, recentOutput: [] });
 	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	// Should show audit heading with duration (5s)
-	assert.match(lines[0], /Audit/);
-	assert.match(lines[0], /auditing/);
-	// Should show current tool
-	assert.match(lines.join("\n"), /tool.*read.*test\.txt/);
-	// Should show recent output lines
-	assert.match(lines.join("\n"), /checking file exists/);
-	assert.match(lines.join("\n"), /confirming test coverage/);
+	const text = lines.join("\n");
+	assert.match(text, /✓ Objective and success criteria/);
+	assert.match(text, /✓ Verification contracts/);
+	assert.match(text, /✓ Tasks and recorded evidence/);
+	assert.match(text, /◌ Workspace inspection/);
+	assert.match(text, /· Final decision/);
+	assert.match(text, /72%/);
 });
 
-test("renderAuditorWidgetLines shows done phase with success icon", () => {
-	const progress = auditorProgress({ phase: "done", currentTool: undefined, currentToolArgs: undefined });
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	assert.match(lines[0], /✓.*audit complete/);
-	assert.doesNotMatch(lines.join("\n"), /tool/);
-});
-
-test("renderAuditorWidgetLines handles empty recent output", () => {
-	const progress = auditorProgress({ recentOutput: [], phase: "running" });
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	assert.match(lines[0], /Audit.*auditing/);
-	// Should have heading + tool line, but no separator dash line (which contains 4+ ─ characters)
-	assert.equal(lines.filter((l) => l.includes("────")).length, 0);
-});
-
-test("auditor progress overrides normal goal display when provided", () => {
-	// When auditorProgress is passed to renderGoalWidgetLines, should show auditor instead of goal
-	const progress = auditorProgress();
-	const lines = renderGoalWidgetLines(goal(), theme, 100, { auditorProgress: progress });
-	assert.match(lines[0], /Audit/);
-	assert.doesNotMatch(lines[0], /Sisyphus|Goal/);
-});
-
-test("renderAuditorWidgetLines shows Esc to skip hint when audit is active", () => {
-	const progress = auditorProgress({ phase: "running" });
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	// The skip hint should appear when audit is actively running
-	const allText = lines.join("\n");
-	assert.match(allText, /Esc to skip/);
-	assert.match(allText, /abort the audit/);
-	// Skip hint should be on the last line (closing branch)
-	assert.match(lines[lines.length - 1], /Esc to skip/);
-});
-
-test("renderAuditorWidgetLines omits skip hint when audit is done", () => {
-	const progress = auditorProgress({ phase: "done" });
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	const allText = lines.join("\n");
-	assert.doesNotMatch(allText, /Esc to skip/);
-	assert.doesNotMatch(allText, /abort the audit/);
-});
-
-test("renderAuditorWidgetLines shows progress bar when percentage is set", () => {
-	const progress = auditorProgress({
-		phase: "running",
-		percentage: 40,
-		label: "Inspecting files...",
-	});
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	const allText = lines.join("\n");
-	// Should show step label
-	assert.match(allText, /Inspecting files/);
-	// Should show percentage
-	assert.match(allText, /40%/);
-	// Should show a progress bar (brackets with filled/empty chars)
-	assert.match(allText, /\[.*█.*░.*\]/);
-});
-
-test("renderAuditorWidgetLines shows thinking phase with distinct icon", () => {
-	const progress = auditorProgress({
-		phase: "thinking",
-		label: "Analyzing goal...",
-		recentOutput: [],
-	});
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	const allText = lines.join("\n");
-	// Should show thinking label
-	assert.match(allText, /thinking\.\.\./);
-	// Should not show Esc to skip hint during thinking
-	assert.doesNotMatch(allText, /Esc to skip/);
-});
-
-test("renderAuditorWidgetLines shows step label when present", () => {
-	const progress = auditorProgress({
-		phase: "running",
-		label: "Verifying success criteria...",
-		percentage: 50,
-	});
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	const allText = lines.join("\n");
-	assert.match(allText, /Verifying success criteria/);
-	// Should show both label and percentage
-	assert.match(allText, /50%/);
-});
-
-test("renderAuditorWidgetLines handles progress bar at 0% and 100%", () => {
-	const zero = renderAuditorWidgetLines(auditorProgress({ phase: "running", percentage: 0 }), theme, 100).join("\n");
+test("renderAuditorWidgetLines shows the progress bar at 0% and 100%", () => {
+	const zero = renderAuditorWidgetLines(auditorProgress({ phase: "running", percentage: 0, recentOutput: [] }), theme, 100).join("\n");
 	assert.match(zero, /0%/);
-
-	const hundred = renderAuditorWidgetLines(auditorProgress({ phase: "done", percentage: 100 }), theme, 100).join("\n");
+	const hundred = renderAuditorWidgetLines(auditorProgress({ phase: "running", percentage: 100, recentOutput: [] }), theme, 100).join("\n");
 	assert.match(hundred, /100%/);
 });
 
-test("renderAuditorWidgetLines no progress bar when percentage is undefined", () => {
+test("renderAuditorWidgetLines shows no percentage when undefined", () => {
 	const progress = auditorProgress({ phase: "running", label: "Working..." });
 	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	const allText = lines.join("\n");
-	// Should show label but no percentage
-	assert.match(allText, /Working/);
-	assert.doesNotMatch(allText, /\d+%/);
+	assert.match(lines.join("\n"), /Working/);
+	assert.doesNotMatch(lines.join("\n"), /\d+%/);
+});
+
+test("renderAuditorWidgetLines shows the done phase without the stop hint", () => {
+	const progress = auditorProgress({ phase: "done", currentTool: undefined, currentToolArgs: undefined, recentOutput: [] });
+	const lines = renderAuditorWidgetLines(progress, theme, 100);
+	assert.doesNotMatch(lines.join("\n"), /Esc: stop audit/);
+});
+
+test("audit progress overrides normal goal display when provided", () => {
+	const progress = auditorProgress();
+	const lines = renderGoalWidgetLines(goal(), theme, 100, { auditorProgress: progress });
+	assert.match(lines[0], /Independent completion audit/);
+	assert.doesNotMatch(lines[0], /pi-goal-x ─/);
+});
+
+test("finished audit shows the result card view (§15.4)", () => {
+	const approved = renderAuditResultCardView({ verdict: "approved", report: "ok" }, theme, 100);
+	assert.match(approved[0], /Audit result ─ APPROVED/);
+	const approvedText = approved.join("\n");
+	assert.match(approvedText, /✓ Objective satisfied\./);
+	assert.match(approvedText, /✓ Verification requirements satisfied\./);
+	assert.match(approvedText, /✓ Required tasks and evidence accepted\./);
+
+	const rejected = renderAuditResultCardView({ verdict: "disapproved", report: "- Tests were not run after the final change.\n- Task \"docs\" has no evidence." }, theme, 100);
+	const rejectedText = rejected.join("\n");
+	assert.match(rejectedText, /Audit result ─ CHANGES REQUIRED/);
+	assert.match(rejectedText, /✗ Tests were not run after the final change\./);
+	assert.match(rejectedText, /✗ Task \"docs\" has no evidence\./);
 });
 
 const testProposedAt = "2026-01-01T00:00:00.000Z";
 
-test("renderGoalWidgetLines shows task count in heading when taskList present", () => {
+test("renderGoalWidgetLines shows top-level task progress (§9.1, skipped counts as done)", () => {
 	const lines = renderGoalWidgetLines(goal({
 		taskList: {
 			tasks: [
@@ -213,12 +186,10 @@ test("renderGoalWidgetLines shows task count in heading when taskList present", 
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	const heading = lines[0];
-	assert.ok(heading);
-	assert.match(heading, /2\/3 tasks/);
+	assert.match(lines.join("\n"), /Tasks  \[.*\] 2\/3 · 67%/);
 });
 
-test("renderGoalWidgetLines shows next pending task in body", () => {
+test("renderGoalWidgetLines shows the current task (first pending, inferred)", () => {
 	const lines = renderGoalWidgetLines(goal({
 		taskList: {
 			tasks: [
@@ -230,15 +201,12 @@ test("renderGoalWidgetLines shows next pending task in body", () => {
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	const body = lines.slice(1).join(" ");
-	assert.match(body, /◻/);
-	// F1: counts + pending task ids, no "(next)" marker anymore.
-	assert.match(body, /1\/3 done/);
-	assert.match(body, /t2/);
-	assert.match(body, /t3/);
+	const body = lines.join("\n");
+	assert.match(body, /Tasks  \[.*\] 1\/3 · 33%/);
+	assert.match(body, /Current  t2 · Task 2/);
 });
 
-test("renderGoalWidgetLines shows 'All tasks complete' when all done", () => {
+test("renderGoalWidgetLines shows 'All tasks complete' when all done (§9.4)", () => {
 	const lines = renderGoalWidgetLines(goal({
 		taskList: {
 			tasks: [
@@ -249,37 +217,38 @@ test("renderGoalWidgetLines shows 'All tasks complete' when all done", () => {
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	const body = lines.slice(1).join(" ");
-	assert.match(body, /All tasks complete/);
+	assert.match(lines.join("\n"), /Tasks  \[.*\] 2\/2 · 100%/);
+	assert.match(lines.join("\n"), /Current  All tasks complete/);
 });
 
-test("renderGoalWidgetLines omits task line when no taskList", () => {
+test("renderGoalWidgetLines omits task rows when no taskList", () => {
 	const lines = renderGoalWidgetLines(goal(), theme, 100);
-	const body = lines.slice(1).join(" ");
-	assert.equal(body.includes("tasks"), false);
+	const body = lines.join("\n");
+	assert.equal(body.includes("Tasks"), false);
+	assert.equal(body.includes("Current"), false);
 });
 
 // ── Subtask widget display ──────────────────────────────────────────────
 
-test("renderGoalWidgetLines counts subtasks recursively in heading", () => {
+test("renderGoalWidgetLines shows subtask progress for the current parent task (§9.3)", () => {
 	const lines = renderGoalWidgetLines(goal({
+		currentTaskId: "t1",
 		taskList: {
 			tasks: [{
-				id: "t1", title: "Parent", status: "complete",
+				id: "t1", title: "Parent", status: "pending",
 				subtasks: [
-					{ id: "t1a", title: "Child", status: "pending" },
-					{ id: "t1b", title: "Child2", status: "pending" },
+					{ id: "t1a", title: "Child", status: "complete" },
+					{ id: "t1b", title: "Child2", status: "complete" },
 				],
 			}],
 			blockCompletion: false,
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	// Heading: 1/3 tasks (1 parent complete + 2 pending children)
-	assert.match(lines[0], /1\/3 tasks/);
+	assert.match(lines.join("\n"), /Subtasks \[.*\] 2\/2 · 100%/);
 });
 
-test("renderGoalWidgetLines finds first pending at any depth", () => {
+test("renderGoalWidgetLines infers a pending subtask as current at any depth", () => {
 	const lines = renderGoalWidgetLines(goal({
 		taskList: {
 			tasks: [{
@@ -292,10 +261,8 @@ test("renderGoalWidgetLines finds first pending at any depth", () => {
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	const body = lines.slice(1).join(" ");
-	// F1: the pending child renders (depth-aware) under the count line.
-	assert.match(body, /1\/2 done/);
-	assert.match(body, /t1a/);
+	const body = lines.join("\n");
+	assert.match(body, /Current  t1a · Child/);
 });
 
 test("renderGoalWidgetLines shows all complete when subtasks are done", () => {
@@ -311,11 +278,11 @@ test("renderGoalWidgetLines shows all complete when subtasks are done", () => {
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	const body = lines.slice(1).join(" ");
-	assert.match(body, /All tasks complete/);
+	const body = lines.join("\n");
+	assert.match(body, /Current  All tasks complete/);
 });
 
-test("renderGoalWidgetLines suppresses task info when disableTasks is true with subtasks", () => {
+test("renderGoalWidgetLines suppresses task info when disableTasks is true with subtasks (§9.5)", () => {
 	const lines = renderGoalWidgetLines(goal({
 		taskList: {
 			tasks: [{
@@ -326,9 +293,10 @@ test("renderGoalWidgetLines suppresses task info when disableTasks is true with 
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100, { disableTasks: true });
-	const body = lines.slice(1).join(" ");
-	assert.equal(body.includes("tasks"), false);
+	const body = lines.join("\n");
+	assert.equal(body.includes("Tasks"), false);
 	assert.equal(body.includes("t1a"), false);
+	assert.equal(body.includes("Current"), false);
 });
 
 // ── TUI rendering path: GoalWidgetComponent ───────────────────────────
@@ -345,8 +313,8 @@ test("GoalWidgetComponent renders through mock TUI path", () => {
 
 	const lines = component.render(100);
 	assert.ok(lines.length > 0, "Component renders lines");
-	assert.match(lines[0], /◆ Sisyphus running/);
-	assert.match(lines[1], /├─ ⟡ Componentize the goal widget/);
+	assert.match(lines[0], /^╭─ pi-goal-x ─ Componentize the goal widget/);
+	assert.match(lines[1], /● In progress · Focused: yes/);
 });
 
 test("GoalWidgetComponent shows open goal count when > 1", () => {
@@ -361,7 +329,7 @@ test("GoalWidgetComponent shows open goal count when > 1", () => {
 
 	const lines = component.render(100);
 	const text = lines.join("\n");
-assert.match(text, /\+2 open/);
+	assert.match(text, /Other goals: 2/);
 });
 
 test("GoalWidgetComponent update triggers requestRender", () => {
@@ -394,7 +362,7 @@ test("GoalWidgetComponent invalidate triggers requestRender", () => {
 	assert.ok(state.requestRenderCalls > before, "invalidate() triggers requestRender");
 });
 
-test("GoalWidgetComponent renders auditor progress when present", () => {
+test("GoalWidgetComponent renders the audit dashboard when audit progress is present", () => {
 	const { tui } = createMockTUI();
 	const component = new GoalWidgetComponent({
 		tui,
@@ -414,8 +382,10 @@ test("GoalWidgetComponent renders auditor progress when present", () => {
 
 	const lines = component.render(100);
 	const text = lines.join("\n");
-	assert.match(text, /read/);
-	assert.match(text, /test\.txt/);
+	assert.match(text, /Independent completion audit/);
+	assert.match(text, /Objective and success criteria/);
+	// Tool details are hidden unless the dashboard is expanded (debug/audit mode).
+	assert.doesNotMatch(text, /tool read/);
 });
 
 test("GoalWidgetComponent renders with disableTasks setting", () => {
@@ -436,7 +406,8 @@ getGoal: () => goal({
 
 	const lines = component.render(100);
 	const text = lines.join("\n");
-	assert.equal(text.includes("tasks"), false, "Tasks hidden when disableTasks is true");
+	assert.equal(text.includes("Tasks"), false, "Tasks hidden when disableTasks is true");
+	assert.equal(text.includes("Current"), false, "Current hidden when disableTasks is true");
 });
 
 test("GoalWidgetComponent shows completed goal status", () => {
@@ -450,7 +421,7 @@ test("GoalWidgetComponent shows completed goal status", () => {
 	});
 
 	const lines = component.render(100);
-	assert.match(lines[0], /Goal complete/);
+	assert.match(lines.join("\n"), /All required work is complete/);
 });
 
 for (const width of [50, 70, 100, 109, 120]) {
@@ -525,4 +496,365 @@ test("GoalWidgetComponent unfocused with 38 open goals at width 109", () => {
 			`Line ${i} has visible width ${visibleWidth(lines[i])} > ${width}: ${JSON.stringify(lines[i].slice(0, 80))}`,
 		);
 	}
+});
+
+// ── §19.5 dashboard interaction tests ────────────────────────────────────────
+
+import { syncTerminalInputPause } from "../extensions/goal-widget.ts";
+
+const CTRL_SHIFT_T = "\u001b[27;6;84~";
+
+function keybindingHarness(initialExpanded = false) {
+	let expanded = initialExpanded;
+	const consumed: string[] = [];
+	let inputCb: ((data: string) => unknown) | undefined;
+	const ctx = {
+		hasUI: true,
+		ui: {
+			onTerminalInput: (cb: unknown) => { inputCb = cb as (data: string) => unknown; return () => {}; },
+			notify: () => {},
+		},
+	} as never;
+	const core = {
+		goalModalDepth: 0,
+		auditProgress: null,
+		state: { goal: null },
+		pauseActiveGoal: () => { consumed.push("pause"); },
+		abortAudit: () => { consumed.push("abort-audit"); },
+		isDashboardExpanded: () => expanded,
+		toggleDashboardExpanded: () => { expanded = !expanded; consumed.push("toggle"); },
+		terminalInputUnsubscribe: null,
+	} as never;
+	syncTerminalInputPause(core as never, ctx as never);
+	return {
+		core,
+		fire: (data: string) => inputCb?.(data),
+		expanded: () => expanded,
+		consumed,
+	};
+}
+
+test("compact mode is the default and the task shortcut expands and collapses", () => {
+	const h = keybindingHarness();
+	const compact = renderGoalWidgetLines(goal({ taskList: { tasks: [{ id: "t1", title: "T1", status: "pending" }], blockCompletion: false, proposedAt: testProposedAt } }), theme, 100);
+	assert.match(compact.join("\n"), /Ctrl\+Shift\+T: expand tasks/);
+
+	h.fire(CTRL_SHIFT_T);
+	assert.equal(h.expanded(), true, "ctrl+shift+t expands the dashboard");
+	h.fire(CTRL_SHIFT_T);
+	assert.equal(h.expanded(), false, "the same shortcut collapses it");
+	assert.deepEqual(h.consumed, ["toggle", "toggle"]);
+});
+
+test("escape collapses the expanded dashboard instead of pausing", () => {
+	const h = keybindingHarness(true);
+	h.fire("\u001b");
+	assert.equal(h.expanded(), false, "escape collapses the expanded dashboard");
+	assert.deepEqual(h.consumed, ["toggle"]);
+	assert.equal(h.consumed.includes("pause"), false, "escape while expanded must not pause the goal");
+});
+
+test("escape still pauses a running goal when the dashboard is compact", () => {
+	const h = keybindingHarness(false);
+	(h.core as unknown as { state: { goal: unknown } }).state.goal = { status: "active", autoContinue: true };
+	h.fire("\u001b");
+	assert.deepEqual(h.consumed, ["pause"]);
+});
+
+test("expanded mode renders the full dashboard without mutating editor state", () => {
+	const { tui } = createMockTUI();
+	const g = goal({ taskList: { tasks: [{ id: "t1", title: "T1", status: "pending" }], blockCompletion: false, proposedAt: testProposedAt } });
+	const expanded = { current: false };
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => g,
+		getOpenGoalCount: () => 1,
+		getExpanded: () => expanded.current,
+		getSettings: () => ({}),
+	});
+	const compactLines = component.render(100);
+	expanded.current = true;
+	const expandedLines = component.render(100);
+	const text = expandedLines.join("\n");
+	assert.match(text, /├─ Tasks /);
+	assert.match(text, /Esc\/Ctrl\+Shift\+T: collapse/);
+	// Rendering is pure: re-rendering returns identical lines.
+	assert.deepEqual(component.render(100), expandedLines);
+	expanded.current = false;
+	assert.deepEqual(component.render(100), compactLines, "collapsing returns the compact view");
+});
+
+test("goal state updates are visible in both modes", () => {
+	const { tui } = createMockTUI();
+	let current = goal({ objective: "=== Goal ===\nObjective: First objective" });
+	const expanded = { current: false };
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getExpanded: () => expanded.current,
+		getSettings: () => ({}),
+	});
+	assert.match(component.render(100).join("\n"), /First objective/);
+	current = goal({ objective: "=== Goal ===\nObjective: Second objective" });
+	assert.match(component.render(100).join("\n"), /Second objective/);
+	expanded.current = true;
+	assert.match(component.render(100).join("\n"), /Second objective/, "expanded mode sees updated state");
+});
+
+test("audit mode temporarily replaces the normal view and returns after", () => {
+	const { tui } = createMockTUI();
+	let audit: AuditorWidgetProgress | null = auditorProgress();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getAuditorProgress: () => audit,
+		getSettings: () => ({}),
+	});
+	const during = component.render(100).join("\n");
+	assert.match(during, /Independent completion audit/);
+	assert.doesNotMatch(during, /pi-goal-x ─/);
+	audit = null;
+	const after = component.render(100).join("\n");
+	assert.match(after, /pi-goal-x ─/);
+	assert.doesNotMatch(after, /audit complete|auditing/);
+});
+
+test("ledger events flow into the dashboard recent-activity feed", () => {
+	const { tui } = createMockTUI();
+	const events = [
+		{ type: "goal_created", goalId: "g1", objective: "x", sisyphus: false, autoContinue: true, at: "2026-01-01T09:00:00.000Z" },
+		{ type: "task_started", goalId: "g1", taskId: "t1", at: "2026-01-01T09:01:00.000Z" },
+	] as never;
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal({ id: "g1", taskList: { tasks: [{ id: "t1", title: "T1", status: "pending" }], blockCompletion: false, proposedAt: testProposedAt } }),
+		getOpenGoalCount: () => 1,
+		getExpanded: () => true,
+		getLedgerEvents: () => events as never,
+		getSettings: () => ({}),
+	});
+	const text = component.render(100).join("\n");
+	assert.match(text, /Started “T1”\./, "ledger task_started maps to readable activity with the task title");
+});
+
+// ── §9.6 task-list scrolling ─────────────────────────────────────────────────
+
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
+const PGUP = "\x1b[5~";
+const PGDN = "\x1b[6~";
+const HOME = "\x1b[H";
+const END = "\x1b[F";
+// Ctrl+Shift chords (free in pi — the editor owns the plain arrows).
+const CS_UP = "\x1b[1;6A";
+const CS_DOWN = "\x1b[1;6B";
+const CS_HOME = "\x1b[1;6H";
+const CS_END = "\x1b[1;6F";
+const CS_PGUP = "\x1b[5;6~";
+const CS_PGDN = "\x1b[6;6~";
+
+/** 30 top-level tasks with t5 and t20 completed (t20 latest, mid-list): both
+ * the compact (5 rows @100) and expanded (20 rows @100) views overflow, the
+ * anchored window is a middle slice that can scroll in BOTH directions, and
+ * the earliest task row is hidden by default. */
+function manyTasksGoal(): GoalWidgetRecord {
+	const tasks: GoalTask[] = Array.from({ length: 30 }, (_, i) => ({
+		id: `t${i + 1}`,
+		title: `Task number ${i + 1}`,
+		status: "pending" as const,
+	}));
+	tasks[4] = { ...tasks[4]!, status: "complete", completedAt: "2026-01-01T10:00:00.000Z" };
+	tasks[19] = { ...tasks[19]!, status: "complete", completedAt: "2026-01-01T11:00:00.000Z" };
+	return goal({ taskList: { tasks, blockCompletion: false, proposedAt: testProposedAt } });
+}
+
+function scrollHarness(initialExpanded = false, g: GoalWidgetRecord = manyTasksGoal()) {
+	let expanded = initialExpanded;
+	const consumed: string[] = [];
+	let inputCb: ((data: string) => unknown) | undefined;
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => g,
+		getOpenGoalCount: () => 1,
+		getExpanded: () => expanded,
+		getSettings: () => ({}),
+	});
+	const ctx = {
+		hasUI: true,
+		ui: {
+			onTerminalInput: (cb: unknown) => { inputCb = cb as (data: string) => unknown; return () => {}; },
+			notify: () => {},
+		},
+	} as never;
+	const core = {
+		goalModalDepth: 0,
+		auditProgress: null,
+		state: { goal: null },
+		pauseActiveGoal: () => { consumed.push("pause"); },
+		abortAudit: () => { consumed.push("abort-audit"); },
+		isDashboardExpanded: () => expanded,
+		toggleDashboardExpanded: () => { expanded = !expanded; consumed.push("toggle"); },
+		goalWidgetComponentRef: { current: component },
+		terminalInputUnsubscribe: null,
+	} as never;
+	syncTerminalInputPause(core as never, ctx as never);
+	return {
+		fire: (data: string) => {
+			const result = inputCb?.(data);
+			if (result && typeof result === "object" && (result as { consume?: boolean }).consume) {
+				consumed.push(`c:${data}`);
+			}
+			return result;
+		},
+		expanded: () => expanded,
+		consumed,
+		component,
+	};
+}
+
+test("compact default viewport is anchored to the most recently completed tasks", () => {
+	const lines = renderGoalWidgetLines(manyTasksGoal(), theme, 100);
+	const text = lines.join("\n");
+	assert.match(text, /↑ 15 more tasks/, "earliest tasks are hidden above the anchored window");
+	assert.match(text, /Task number 20/, "the latest completion is the last visible row");
+	assert.match(text, /Task number 16/, "the window is a middle slice around the anchor");
+	assert.doesNotMatch(text, /[✓▸·~] t1\s/, "the earliest task row is not shown");
+	assert.match(text, /… \+10 more tasks/, "pending tasks after the anchor stay reachable below");
+});
+
+test("plain arrows are never consumed in compact mode; the editor keeps them", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	h.fire(UP);
+	h.fire(DOWN);
+	h.fire(PGUP);
+	h.fire(PGDN);
+	assert.deepEqual(h.consumed, [], "plain arrow/page keys belong to the editor in compact mode");
+});
+
+test("Ctrl+Shift+↑/↓ scroll the compact list one row; Esc is untouched", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/, "anchored window hides the earliest tasks");
+	h.fire(CS_UP);
+	assert.ok(h.consumed.includes("c:" + CS_UP), "Ctrl+Shift+↑ is consumed");
+	assert.match(h.component.render(100).join("\n"), /↑ 14 more tasks/, "up scrolls the compact window");
+	h.fire(CS_DOWN);
+	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/, "down scrolls the compact window back");
+	// plain arrows and Esc still reach the editor afterwards — nothing to disengage
+	h.fire(UP);
+	h.fire("\u001b");
+	assert.equal(h.consumed.filter((c) => c === "c:" + UP).length, 0, "plain ↑ is never consumed");
+	assert.equal(h.consumed.includes("c:\u001b"), false, "Esc is not consumed when not expanded");
+});
+
+test("Ctrl+Shift+Home/End/PgUp/PgDn jump and page in the compact list", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	h.fire(CS_HOME);
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/, "home jumps to the top");
+	assert.match(h.component.render(100).join("\n"), /[✓▸·~] t1\s/, "the earliest task row is visible");
+	h.fire(CS_END);
+	assert.match(h.component.render(100).join("\n"), /↑ 25 more tasks/, "end jumps to the tail (max offset 25)");
+	assert.doesNotMatch(h.component.render(100).join("\n"), /… \+\d+ more tasks/);
+	h.fire(CS_PGDN); // at max: clamped, still consumed
+	assert.match(h.component.render(100).join("\n"), /↑ 25 more tasks/);
+	h.fire(CS_PGUP); // page up 5 rows → offset 20
+	assert.match(h.component.render(100).join("\n"), /↑ 20 more tasks/);
+});
+
+test("compact overflow shows the scroll hint in the footer; a short list does not", () => {
+	const overflowing = scrollHarness(false);
+	assert.match(overflowing.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand · Ctrl\+Shift\+↑↓: scroll/);
+	const narrow = scrollHarness(false);
+	assert.match(narrow.component.render(40).join("\n"), /↑↓: scroll/, "minimal layout shortens the hint");
+	const g = goal({ taskList: { tasks: [
+		{ id: "t1", title: "One", status: "pending" },
+		{ id: "t2", title: "Two", status: "pending" },
+		{ id: "t3", title: "Three", status: "pending" },
+	], blockCompletion: false, proposedAt: testProposedAt } });
+	const short = scrollHarness(false, g);
+	assert.match(short.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand tasks/, "no overflow → no scroll hint");
+});
+
+test("Ctrl+Shift chords are not consumed when the compact list fits", () => {
+	const g = goal({ taskList: { tasks: [
+		{ id: "t1", title: "One", status: "pending" },
+		{ id: "t2", title: "Two", status: "pending" },
+		{ id: "t3", title: "Three", status: "pending" },
+	], blockCompletion: false, proposedAt: testProposedAt } });
+	const h = scrollHarness(false, g);
+	h.component.render(100);
+	h.fire(CS_UP);
+	h.fire(CS_DOWN);
+	assert.deepEqual(h.consumed, [], "nothing to scroll → chords pass through");
+});
+
+test("expanded mode scrolls the task tree with arrows, Home, End, and page keys", () => {
+	const h = scrollHarness(true);
+	h.component.render(100); // expanded rows 20 over 30 nodes; anchor t20 → offset 0
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/, "anchored window starts at the top");
+	assert.match(h.component.render(100).join("\n"), /Task number 20/, "the latest completion is the last visible row");
+	h.fire(DOWN);
+	assert.match(h.component.render(100).join("\n"), /↑ 1 more task/, "down moves the expanded window");
+	h.fire(HOME);
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/, "home jumps to the top");
+	h.fire(UP); // at top: clamped, still consumed
+	h.fire(END);
+	assert.match(h.component.render(100).join("\n"), /↑ 10 more tasks/, "end jumps to the tail (max offset 10)");
+	h.fire(PGDN); // at max: clamped, still consumed
+	assert.match(h.component.render(100).join("\n"), /↑ 10 more tasks/);
+	h.fire(PGUP); // page up 20 rows → top
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/);
+	assert.ok(h.consumed.filter((c) => c.startsWith("c:")).length >= 6, "every navigation key is consumed while expanded");
+});
+
+test("Ctrl+Shift+T toggles expansion; plain arrows scroll only while expanded", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	h.fire(CS_UP); // compact scroll — chord
+	assert.ok(h.consumed.includes("c:" + CS_UP));
+	h.fire(CTRL_SHIFT_T); // expand
+	assert.equal(h.expanded(), true);
+	h.fire(UP); // expanded is modal → plain arrow scrolls
+	assert.ok(h.consumed.includes("c:" + UP));
+	h.fire("\u001b"); // collapse
+	assert.equal(h.expanded(), false);
+	h.fire(UP);
+	assert.equal(h.consumed.filter((c) => c.startsWith("c:")).length, 4, "chord + Ctrl+Shift+T + expanded ↑ + Esc consumed; plain ↑ reaches the editor after collapse");
+});
+
+test("a new completion re-anchors the viewport to the latest completed task", () => {
+	let current = manyTasksGoal();
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+	// anchored to t20 → compact window t16..t20
+	assert.match(component.render(100).join("\n"), /↑ 15 more tasks/);
+	// scroll to the top with the compact chord
+	assert.equal(component.handleCompactScrollKey("home"), true, "compact list overflows → chord consumed");
+	assert.doesNotMatch(component.render(100).join("\n"), /↑ \d+ more tasks/);
+	assert.match(component.render(100).join("\n"), /[✓▸·~] t1\s/, "the earliest task row is visible after scrolling up");
+	// a short list: the chord is inert
+	assert.equal(component.handleCompactScrollKey("down"), true, "still overflows → consumed");
+	// a new completion (t9, later than t20) arrives → re-anchor to t9
+	const tasks = (current.taskList!.tasks as GoalTask[]).map((t) => ({ ...t }));
+	tasks[8] = { ...tasks[8]!, status: "complete", completedAt: "2026-01-01T12:00:00.000Z" };
+	current = { ...current, taskList: { tasks, blockCompletion: false, proposedAt: testProposedAt } };
+	const text = component.render(100).join("\n");
+	assert.match(text, /↑ 4 more tasks/, "re-anchored window shows the new completion (offset 4)");
+	assert.match(text, /Task number 9/, "the newest completion is visible at the bottom of the window");
 });

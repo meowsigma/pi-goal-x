@@ -14,13 +14,13 @@ import { Text } from "@earendil-works/pi-tui";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
 import { statusLabel, truncateText } from "./goal-core.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
-import { buildTaskSummary, checkSubtasksComplete, findSubtaskDepthViolation, skipAllSubtasks } from "./goal-policy.ts";
+import { buildTaskSummary, checkSubtasksComplete, findSubtaskDepthViolation, findTaskInTree, skipAllSubtasks } from "./goal-policy.ts";
 import { showTaskConfirmation, type TaskConfirmationResult } from "./goal-task-confirmation.ts";
 import {
 	SET_GOAL_TASKS_TOOL_NAME,
 	UPDATE_GOAL_TASK_TOOL_NAME,
 } from "./goal-tool-names.ts";
-import { nowIso, type GoalTask, type GoalTaskList } from "./goal-record.ts";
+import { nowIso, currentTaskIdIsPending, type GoalTask, type GoalTaskList } from "./goal-record.ts";
 
 export const MAX_TASKS = 50;
 
@@ -310,7 +310,11 @@ pi.registerTool(defineTool({
 			// requested operation changes the same task.
 			mutate: (g) => {
 				const merged = mergeTasksWithExisting(g.taskList?.tasks, converted.tasks);
-				return { ...g, taskList: { tasks: merged, blockCompletion, proposedAt: now }, updatedAt: now };
+				// §7.5: preserve currentTaskId only when the same id remains pending;
+				// otherwise clear it. Dashboard state recomputes on the next render.
+				const currentTaskId =
+					g.currentTaskId && currentTaskIdIsPending(merged, g.currentTaskId) ? g.currentTaskId : undefined;
+				return { ...g, currentTaskId, taskList: { tasks: merged, blockCompletion, proposedAt: now }, updatedAt: now };
 			},
 			ledger: (written) => [{
 				type: "task_list_set",
@@ -351,17 +355,18 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: UPDATE_GOAL_TASK_TOOL_NAME,
 	label: "Update Goal Task",
-	description: "Update one task in the focused goal's task tree without stopping the turn: status \"complete\" (with optional evidence; requires evidence when the task has a verification contract and enforces completed children), \"skipped\" (requires a reason; restricted to explicit user direction or a hard contradiction), or \"pending\" (reopens a skipped task). Completed tasks are immutable through this tool.",
-	promptSnippet: "Mark one task complete, skipped, or reopened. Does not stop the turn.",
+	description: "Update one task in the focused goal's task tree without stopping the turn: status \"start\" sets explicit execution focus (persisted currentTaskId; requires a pending task), \"complete\" (with optional evidence; requires evidence when the task has a verification contract and enforces completed children), \"skipped\" (requires a reason; restricted to explicit user direction or a hard contradiction), or \"pending\" (reopens a skipped task). Completed tasks are immutable through this tool. Starting another task replaces focus; completing or skipping the current task clears focus.",
+	promptSnippet: "Mark one task started, complete, skipped, or reopened. Does not stop the turn.",
 	promptGuidelines: [
 		"Use update_goal_task to update exactly one task; the turn does NOT stop so you may continue with other work.",
+		"status=start sets the persisted current task (execution focus); use it when you begin working on a task. Only pending tasks can be started.",
 		"status=complete requires evidence when the task has a verification contract, and requires all non-lightweight children to be complete first.",
 		"status=skipped requires a concrete reason and is restricted to explicit user direction or a hard contradiction (e.g. an impossible requirement). Do not skip to avoid work.",
 		"status=pending reopens a skipped task (clears its skip state). Completed tasks cannot be reopened through this tool.",
 	],
 	parameters: Type.Object({
 		task_id: Type.String({ description: "Task id to update" }),
-		status: StringEnum(["complete", "skipped", "pending"] as const, { description: "complete (with optional evidence), skipped (requires reason), or pending (reopens a skipped task)." }),
+		status: StringEnum(["start", "complete", "skipped", "pending"] as const, { description: "start (sets execution focus; requires pending), complete (with optional evidence), skipped (requires reason), or pending (reopens a skipped task)." }),
 		evidence: Type.Optional(Type.String({ description: "Evidence note for complete (max 200 characters). Required when the task has a verification contract." })),
 		reason: Type.Optional(Type.String({ description: "Reason for skipped. Required when status=skipped." })),
 	}, { additionalProperties: false }),
@@ -391,6 +396,41 @@ pi.registerTool(defineTool({
 		const settings = loadGoalSettings(ctx.cwd);
 		const now = nowIso();
 		const taskFocus = core.focusedOperationToken(core.state.goal.id);
+
+		if (params.status === "start") {
+			const result = core.goalService.updateTask(ctx, {
+				focusToken: taskFocus,
+				taskId: params.task_id,
+				validate: (task) => {
+					if (task.status !== "pending") {
+						return { ok: false, message: `Task "${params.task_id}" is ${task.status}; only pending tasks can be started.` };
+					}
+					return { ok: true };
+				},
+				update: (task) => task,
+				// §8.1: set explicit execution focus; a later start replaces it, and
+				// completing/skipping this task clears it.
+				setCurrentTaskId: params.task_id,
+				ledger: (written) => [{
+					type: "task_started",
+					goalId: written.id,
+					taskId: params.task_id,
+					at: written.updatedAt,
+				}],
+			});
+			if (!result.ok) {
+				return { content: [{ type: "text", text: result.message }], details: goalDetails(core.state.goal) };
+			}
+			core.updateUI(ctx);
+			// §8.1: surface the task contract so the next continuation prompt and
+			// the dashboard can show what starting this task requires.
+			const started = findTaskInTree(core.state.goal.taskList?.tasks ?? [], params.task_id);
+			const contract = started?.verificationContract ? ` Contract: ${started.verificationContract}` : "";
+			return {
+				content: [{ type: "text", text: `Started ${params.task_id}${contract}. ${buildTaskSummary(core.state.goal.taskList!)}.` }],
+				details: goalDetails(core.state.goal),
+			};
+		}
 
 		if (params.status === "complete") {
 			const evidence = params.evidence?.trim().slice(0, 200) || undefined;

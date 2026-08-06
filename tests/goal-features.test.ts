@@ -171,9 +171,10 @@ describe("F4 sisyphus ordered-step widget", () => {
 		};
 		const lines = renderGoalWidgetLines(goal, theme, 100, { openGoalCount: 1 });
 		const joined = lines.join("\n");
-		assert.match(joined, /Step 2\/3/);
-		assert.match(joined, /Step 1: a/);
-		assert.match(joined, /Step 2: b/);
+		// The unified dashboard derives progress from the task tree (§9.1): the
+		// ordered-step detector stays in prompts; the widget shows task progress.
+		assert.match(joined, /Tasks  \[.*\] 1\/3 · 33%/);
+		assert.match(joined, /Current  t2 · b/);
 	});
 });
 

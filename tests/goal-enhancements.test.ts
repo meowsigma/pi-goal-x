@@ -91,14 +91,12 @@ describe("E4 budget line in the widget", () => {
 		goal.usage = { tokensUsed: 45000, activeSeconds: 0 };
 		const lines = renderGoalWidgetLines(goal, theme, 100, { openGoalCount: 1 });
 		const joined = lines.join("\n");
-		assert.match(joined, /Budget:/);
-		assert.match(joined, /45% used/);
-		assert.match(joined, /remaining/);
+		assert.match(joined, /Budget 45K \/ 100K · 45%/);
 	});
 
 	it("omits the budget line when no budget is set", () => {
 		const goal = makeGoalRecord({ objective: "No budget" });
 		const lines = renderGoalWidgetLines(goal, theme, 100, { openGoalCount: 1 });
-		assert.equal(lines.join("\n").includes("Budget:"), false);
+		assert.equal(lines.join("\n").includes("Budget"), false);
 	});
 });

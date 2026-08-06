@@ -288,7 +288,7 @@ export function buildGoalTaskDetailBlock(goal: GoalRecord): string {
 		lines.push(`${"  ".repeat(entry.depth)}[ ] ${entry.task.id}: ${entry.task.title}`);
 		if (entry.task.verificationContract) lines.push(`${"  ".repeat(entry.depth + 1)}contract: ${entry.task.verificationContract}`);
 	}
-	if (pending.length > 3) lines.push(`(+${pending.length - 3} more pending — see the task overlay)`);
+	if (pending.length > 3) lines.push(`(+${pending.length - 3} more pending — expand the dashboard with Ctrl+Shift+T)`);
 	for (const t of recent) {
 		lines.push(`[x] ${t.id}: ${t.title}${t.evidence ? ` — ${t.evidence}` : ""}`);
 	}

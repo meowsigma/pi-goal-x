@@ -171,10 +171,37 @@ export function registerGoalEvents(core: GoalCore): void {
 				core.goalsById.delete(completedGoal.id);
 				core.assignFocusedGoalId(null);
 				core.appendFocusEntry(null, "completed");
+				// §16.6: append the dedicated goal_archived event (the completion
+				// transaction keeps goal_completed for compatibility) and emit the
+				// real archive path.
+				try {
+					core.goalService.appendEvents(ctx, [{
+						type: "goal_archived",
+						goalId: completedGoal.id,
+						archivePath: archiveResult.goal?.archivedPath ?? "",
+						at: nowIso(),
+					}]);
+				} catch {
+					// Best-effort; the archive itself already succeeded.
+				}
+				const path = archiveResult.goal?.archivedPath ?? "";
+				ctx.ui.notify(path ? `Goal archived.\nFile: ${path}` : "Goal archived.", "info");
 			} else {
-				// The completed goal stays open and focused; make the failure
-				// observable instead of silently dropping it.
-				ctx.ui.notify(`Failed to archive completed goal: ${archiveResult.message}`, "warning");
+				// §16.6 failure behavior: never claim success, keep the complete
+				// record recoverable at its active path, and write a diagnostic
+				// ledger event when possible.
+				const remainingPath = completedGoal.activePath ?? "(unknown)";
+				ctx.ui.notify(`Failed to archive completed goal: ${archiveResult.message}. The complete record remains at ${remainingPath}.`, "warning");
+				try {
+					core.goalService.appendEvents(ctx, [{
+						type: "goal_archive_failed",
+						goalId: completedGoal.id,
+						message: archiveResult.message ?? "archive write failed",
+						at: nowIso(),
+					}]);
+				} catch {
+					// Diagnostic write is best-effort.
+				}
 			}
 			core.updateUI(ctx);
 		}

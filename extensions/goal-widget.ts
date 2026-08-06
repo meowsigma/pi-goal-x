@@ -4,14 +4,13 @@ import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
 import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { serializeGoalFile } from "./storage/goal-files.ts";
-import { showTaskListOverlay } from "./widgets/task-list-overlay.ts";
 import type { AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
 
 const DEBUG_GOALS_DIR = ".pi/goals/debug";
 
 /**
- * Terminal input keybindings (Escape pause/abort-audit, Ctrl+Shift+T task
+ * Terminal input keybindings (Escape pause/abort-audit, Ctrl+Shift+T dashboard
  * overlay, and the hidden debug-mode bindings) plus the debug goal/task/audit
  * helpers. Re-registered at session start/tree navigation; the handler reads
  * live state through the core at event time.
@@ -127,19 +126,45 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				core.abortAudit(ctx);
 				return { consume: true };
 			}
+			// §10: Escape collapses the expanded dashboard before it can pause the
+			// goal; Ctrl+Shift+T toggles compact/expanded (§19.5). While the
+			// expanded dashboard is open it owns the plain arrow keys; the
+			// compact widget scrolls with Ctrl+Shift chords that pi never binds
+			// (the editor owns ↑/↓/PgUp/PgDn), so no focus state is needed and
+			// editor keybindings are untouched whenever the dashboard is not
+			// focused.
+			if (matchesKey(data, "escape") && core.isDashboardExpanded()) {
+				core.toggleDashboardExpanded();
+				return { consume: true };
+			}
 			if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
 				core.pauseActiveGoal(ctx);
 				return { consume: true };
 			}
 
-			// Ctrl+Shift+T — show task list overlay for all open goals (F3:
-			// interactive: Enter toggles a task through goal-service).
+			// Ctrl+Shift+T — toggle the unified dashboard between compact and
+			// expanded task views (the task-list overlay is merged into the
+			// dashboard; §10).
 			if (matchesKey(data, "ctrl+shift+t")) {
-				core.enterGoalModal();
-				showTaskListOverlay(ctx, core.goalsById, core.focusedGoalId, {
-					onToggleTask: (goalId, taskId) => toggleTaskViaService(core, ctx, goalId, taskId),
-				}).finally(() => core.exitGoalModal());
+				core.toggleDashboardExpanded();
 				return { consume: true };
+			}
+
+			// Navigation keys: plain arrows scroll the expanded dashboard (it is
+			// modal while open); Ctrl+Shift+↑/↓/PgUp/PgDn/Home/End scroll the
+			// compact task list — free chords, consumed only when the compact
+			// list overflows (§9.6).
+			if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown") || matchesKey(data, "home") || matchesKey(data, "end")) {
+				const key = matchesKey(data, "up") ? "up" : matchesKey(data, "down") ? "down" : matchesKey(data, "pageUp") ? "pageUp" : matchesKey(data, "pageDown") ? "pageDown" : matchesKey(data, "home") ? "home" : "end";
+				if (core.goalWidgetComponentRef?.current?.handleNavigationKey(key)) {
+					return { consume: true };
+				}
+			}
+			if (matchesKey(data, "ctrl+shift+up") || matchesKey(data, "ctrl+shift+down") || matchesKey(data, "ctrl+shift+pageUp") || matchesKey(data, "ctrl+shift+pageDown") || matchesKey(data, "ctrl+shift+home") || matchesKey(data, "ctrl+shift+end")) {
+				const key = matchesKey(data, "ctrl+shift+up") ? "up" : matchesKey(data, "ctrl+shift+down") ? "down" : matchesKey(data, "ctrl+shift+pageUp") ? "pageUp" : matchesKey(data, "ctrl+shift+pageDown") ? "pageDown" : matchesKey(data, "ctrl+shift+home") ? "home" : "end";
+				if (core.goalWidgetComponentRef?.current?.handleCompactScrollKey(key)) {
+					return { consume: true };
+				}
 			}
 
 			// Debug keybindings are inert unless PI_GOAL_DEBUG is set (P1-13).

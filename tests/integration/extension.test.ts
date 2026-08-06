@@ -63,6 +63,8 @@ function createHarness(options: HarnessOptions): Harness {
 	const ctx = {
 		cwd: options.cwd,
 		hasUI: options.hasUI ?? false,
+		modelRegistry: { getAvailable: () => [] },
+		model: undefined,
 		sessionManager: {
 			getBranch: () => options.sessionEntries,
 			getCwd: () => options.cwd,
@@ -320,7 +322,7 @@ describe("five-tool handler integration", () => {
 	it("goal-settings menu toggles the disabled switch through the registered handler", async () => {
 		const f = fixture();
 		try {
-			const selects: string[] = ["  disabled: (default)", "Done"];
+			const selects: string[] = ["  auditor disabled: false", "Done"];
 			const h = createHarness({
 				cwd: f.cwd,
 				sessionEntries: f.sessionEntries,
@@ -370,7 +372,7 @@ describe("five-tool handler integration", () => {
 			return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
 		};
 
-		it("displays every one of the eight persisted rows and reflects file values", async () => {
+		it("displays every one of the nine persisted rows and reflects file values", async () => {
 			const f = fixture();
 			try {
 				writeFileSync(settingsPath(f.cwd), JSON.stringify({
@@ -387,8 +389,8 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 8, `all eight rows rendered, got: ${lines.join(" | ")}`);
-				assert.ok(lines.some((l) => l === "  disabled: true"));
+				assert.equal(lines.length, 9, `all nine rows rendered, got: ${lines.join(" | ")}`);
+				assert.ok(lines.some((l) => l === "  auditor disabled: true"));
 				assert.ok(lines.some((l) => l === "  provider: anthropic"));
 				assert.ok(lines.some((l) => l === "  model: (default)"));
 				assert.ok(lines.some((l) => l === "  thinking_level: high"));
@@ -396,6 +398,7 @@ describe("five-tool handler integration", () => {
 				assert.ok(lines.some((l) => l === "  disableContracts: false"));
 				assert.ok(lines.some((l) => l === "  subtaskDepth: 3"));
 				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false"));
+				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0"));
 			} finally {
 				f.cleanup();
 			}
@@ -405,10 +408,10 @@ describe("five-tool handler integration", () => {
 			const f = fixture();
 			try {
 				const selects = [
-					"  disableTasks: (default)",
-					"  disableContracts: (default)",
-					"  disabled: (default)",
-					"  autoSelectSingleGoal: (default)",
+					"  disableTasks: false",
+					"  disableContracts: false",
+					"  auditor disabled: false",
+					"  autoSelectSingleGoal: false",
 					"Done",
 				];
 				const h = createHarness({
@@ -444,8 +447,14 @@ describe("five-tool handler integration", () => {
 		it("edits and clears provider and model text fields", async () => {
 			const f = fixture();
 			try {
-				const selects = ["  provider: (default)", "  model: (default)", "Done"];
-				const inputs = ["anthropic", "claude-sonnet-4"];
+				// Set both via the manual provider/model entry: filter first, then
+				// pick "✎ Enter provider/model manually (advanced)", then type the pair.
+				const selects = [
+					"  provider: (default)", "✎ Enter provider/model manually (advanced)",
+					"  model: (default)", "✎ Enter provider/model manually (advanced)",
+					"Done",
+				];
+				const inputs = ["", "anthropic/claude-sonnet-4", "", "anthropic/claude-sonnet-4"];
 				const h = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
 					select: async () => selects.shift(),
@@ -456,9 +465,10 @@ describe("five-tool handler integration", () => {
 				const saved = readSettings(f.cwd);
 				assert.equal(saved.provider, "anthropic");
 				assert.equal(saved.model, "claude-sonnet-4");
-				// Clear both by entering an empty value.
-				const selects2 = ["  provider: anthropic", "  model: claude-sonnet-4", "Done"];
-				const inputs2 = ["", ""];
+				// Clear both by returning to the current-session/default choice from
+				// either row: the default choice deletes provider and model together.
+				const selects2 = ["  provider: anthropic", "  Current session / default (system default)", "Done"];
+				const inputs2 = [""];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
 					select: async () => selects2.shift(),
@@ -467,8 +477,8 @@ describe("five-tool handler integration", () => {
 				await start(h2);
 				await h2.commands.get("goal-settings").handler("", h2.ctx);
 				const saved2 = readSettings(f.cwd);
-				assert.equal(saved2.provider, undefined, "empty input clears provider");
-				assert.equal(saved2.model, undefined, "empty input clears model");
+				assert.equal(saved2.provider, undefined, "default choice clears provider");
+				assert.equal(saved2.model, undefined, "default choice clears model");
 			} finally {
 				f.cleanup();
 			}

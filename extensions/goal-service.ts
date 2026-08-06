@@ -119,11 +119,30 @@ export interface GoalTaskUpdateSpec {
 	validate?(task: GoalTask): { ok: true } | { ok: false; message: string };
 	/** Transform the FRESH task. A failure aborts; only this task's path changes. */
 	update(task: GoalTask): GoalTask | { ok: false; message: string };
+	/**
+	 * §8.1: explicit execution focus — set the persisted currentTaskId to this
+	 * task id (start). Replaces any previous current task. Otherwise focus is
+	 * cleared automatically when the updated task becomes terminal
+	 * (complete/skipped) and was the current task (§8.2/§8.3).
+	 */
+	setCurrentTaskId?: string;
 	/** Ledger events appended best-effort AFTER the authoritative file write. */
 	ledger?(written: GoalRecord, updatedTask: GoalTask): GoalLedgerEvent[];
 }
 
 export type GoalTaskUpdateOutcome = { ok: true; goal: GoalRecord; task: GoalTask } | { ok: false; message: string };
+
+/**
+ * §8 execution-focus resolution for a task update: an explicit start sets the
+ * currentTaskId (replacing any previous); otherwise completing or skipping the
+ * current task clears it; otherwise focus is untouched.
+ */
+function resolveUpdatedCurrentTaskId(spec: GoalTaskUpdateSpec, current: string | undefined, updatedTask: GoalTask): string | undefined {
+	if (spec.setCurrentTaskId !== undefined) return spec.setCurrentTaskId;
+	const terminal = updatedTask.status === "complete" || updatedTask.status === "skipped";
+	if (terminal && current === spec.taskId) return undefined;
+	return current;
+}
 
 export class GoalService {
 	private readonly ref: GoalServiceRef;
@@ -484,6 +503,9 @@ export class GoalService {
 			const mutated = sanitizeGoalPaths(ctx, {
 				...current,
 				taskList: { ...current.taskList, tasks: updatedTasks },
+				// Execution focus (§8): start sets it explicitly; completing or
+				// skipping the current task clears it.
+				currentTaskId: resolveUpdatedCurrentTaskId(spec, current.currentTaskId, updatedTask),
 				updatedAt: nowIso(),
 				revision: (current.revision ?? 0) + 1,
 			});
@@ -565,6 +587,7 @@ export class GoalService {
 			const mutated = sanitizeGoalPaths(ctx, {
 				...base,
 				taskList: { ...base.taskList, tasks: updatedTasks },
+				currentTaskId: resolveUpdatedCurrentTaskId(spec, base.currentTaskId, updatedTask),
 				updatedAt: nowIso(),
 				revision: capturedRevision + 1,
 			});

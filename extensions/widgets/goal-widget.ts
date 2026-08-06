@@ -11,6 +11,27 @@ import {
 import type { GoalRecord, GoalTask, GoalTaskList, TaskStatus } from "../goal-record.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 import { sisyphusStepProgress } from "../goal-policy.ts";
+import type { GoalLedgerEvent } from "../goal-ledger.ts";
+import {
+	anchoredScrollOffset,
+	clampScrollOffset,
+	compactTaskViewportRows,
+	deriveGoalDashboardModel,
+	expandedTaskViewportRows,
+	latestCompletedNodeIndex,
+	maxScrollOffset,
+	taskViewportPageSize,
+	type GoalDashboardModel,
+} from "./goal-dashboard-model.ts";
+import {
+	clampLinesToWidth,
+	renderAuditResultCard,
+	renderAuditorDashboard,
+	renderCompactDashboard,
+	renderExpandedDashboard,
+	renderUnfocusedDashboard,
+} from "./goal-dashboard-renderer.ts";
+import { deriveAuditResultCard, deriveAuditorDashboardModel } from "./auditor-dashboard-model.ts";
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
 
@@ -25,6 +46,7 @@ export interface GoalWidgetRecord extends GoalDisplayRecordLike {
 	taskList?: GoalTaskList | null;
 	verificationContract?: string;
 	tokenBudget?: number;
+	currentTaskId?: string;
 }
 
 export const GOAL_WIDGET_KEY = "goal";
@@ -56,6 +78,9 @@ export function makeGoalWidgetFactory(opts: {
 	getSettings: () => GoalSettings;
 	getDebugMode: () => boolean;
 	getStalled: () => boolean;
+	getExpanded?: () => boolean;
+	getLedgerEvents?: () => GoalLedgerEvent[];
+	getAuditResult?: () => AuditResultView | null;
 }) {
 	return (tui: TUI, theme: Theme) => new GoalWidgetComponent({
 		tui,
@@ -66,6 +91,9 @@ export function makeGoalWidgetFactory(opts: {
 		getSettings: opts.getSettings,
 		getDebugMode: opts.getDebugMode,
 		getStalled: opts.getStalled,
+		getExpanded: opts.getExpanded,
+		getLedgerEvents: opts.getLedgerEvents,
+		getAuditResult: opts.getAuditResult,
 	});
 }
 
@@ -80,6 +108,8 @@ export interface AuditorWidgetProgress {
 	label?: string;
 	/** Completion percentage from 0 to 100 */
 	percentage?: number;
+	/** §15: auditor identity (provider/model) for the audit dashboard header. */
+	auditorLabel?: string;
 }
 
 export interface GoalWidgetOptions {
@@ -92,6 +122,12 @@ export interface GoalWidgetOptions {
 	getDebugMode?: () => boolean;
 	/** F5: stalled badge (active auto-continue goal with no recent activity). */
 	getStalled?: () => boolean;
+	/** §10: dashboard expansion state (compact vs expanded task view). */
+	getExpanded?: () => boolean;
+	/** §12: durable ledger events for the recent-activity feed. */
+	getLedgerEvents?: () => GoalLedgerEvent[];
+	/** §15.4: finished audit result card (cleared after a short display). */
+	getAuditResult?: () => AuditResultView | null;
 }
 
 function fit(value: string, width: number): string {
@@ -117,96 +153,6 @@ function progressBar(pct: number, barWidth: number, theme: Theme): string {
 	return `[${theme.fg("accent", "█".repeat(filled))}${theme.fg("dim", "░".repeat(empty))}]`;
 }
 
-function displayIcon(goal: GoalWidgetRecord): { icon: string; color: GoalWidgetColor; label: string } {
-	if (goal.status === "complete") return { icon: "✓", color: "success", label: "complete" };
-	if (goal.status === "paused") {
-		return goal.stopReason === "agent"
-			? { icon: "⊘", color: "warning", label: "blocked" }
-			: { icon: "◐", color: "muted", label: "paused" };
-	}
-	if (goal.sisyphus) return { icon: "◆", color: "accent", label: goal.autoContinue ? "sisyphus running" : "sisyphus idle" };
-	return goal.autoContinue ? { icon: "●", color: "accent", label: "goal running" } : { icon: "○", color: "muted", label: "goal idle" };
-}
-
-function countFlatTasks(tasks: GoalTask[]): { total: number; done: number } {
-	let total = 0;
-	let done = 0;
-	for (const t of tasks) {
-		total++;
-		if (t.status === "complete" || t.status === "skipped") done++;
-		if (t.subtasks && t.subtasks.length > 0) {
-			const child = countFlatTasks(t.subtasks);
-			total += child.total;
-			done += child.done;
-		}
-	}
-	return { total, done };
-}
-
-/** F1: collect pending tasks in tree order with their depth. */
-function collectPendingWithDepth(tasks: GoalTask[], depth = 0): Array<{ task: GoalTask; depth: number }> {
-	const out: Array<{ task: GoalTask; depth: number }> = [];
-	for (const t of tasks) {
-		if (t.status === "pending") out.push({ task: t, depth });
-		if (t.subtasks && t.subtasks.length > 0) out.push(...collectPendingWithDepth(t.subtasks, depth + 1));
-	}
-	return out;
-}
-
-/** F1: most recent completed tasks carrying evidence (tree order, capped). */
-function recentCompletedWithEvidence(tasks: GoalTask[], cap: number): Array<{ id: string; evidence?: string; title: string }> {
-	const out: Array<{ id: string; evidence?: string; title: string }> = [];
-	for (const t of tasks) {
-		if (t.status === "complete") out.push({ id: t.id, evidence: t.evidence, title: t.title });
-		if (t.subtasks && t.subtasks.length > 0) out.push(...recentCompletedWithEvidence(t.subtasks, cap - out.length));
-		if (out.length >= cap) break;
-	}
-	return out.slice(0, cap);
-}
-
-/** F4: first N ordered-step titles from the objective. */
-function orderedStepTitles(objective: string, count: number): string[] {
-	const titles: string[] = [];
-	const lines = objective.split(/\r?\n/);
-	for (const raw of lines) {
-		const line = raw.trim();
-		const numbered = line.match(/^(\d{1,2})\s*[.):]\s*(.*)$/);
-		const step = line.match(/^step\s+(\d+)\s*:?\s*(.*)$/i);
-		const m = numbered ?? step;
-		if (!m) continue;
-		const no = Number(m[1]);
-		titles[no - 1] = (m[2] || "").trim();
-	}
-	return titles.slice(0, count);
-}
-
-function findFirstPending(tasks: GoalTask[]): GoalTask | undefined {
-	const queue = [...tasks];
-	while (queue.length > 0) {
-		const t = queue.shift()!;
-		if (t.status === "pending") return t;
-		if (t.subtasks) queue.push(...t.subtasks);
-	}
-	return undefined;
-}
-
-function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0, disableTasks = false, stalled = false): string {
-	const bits: string[] = [];
-	if (stalled) bits.push("⏱ stalled");
-	if (goal.sisyphus) {
-		const steps = sisyphusStepProgress(goal);
-		if (steps) bits.push(`Step ${steps.current}/${steps.total}`);
-	}
-	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
-	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
-	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
-	if (!disableTasks && goal.taskList && goal.taskList.tasks.length > 0) {
-		const { total, done } = countFlatTasks(goal.taskList.tasks);
-		bits.push(`${done}/${total} tasks`);
-	}
-	if (otherOpenGoalCount > 0) bits.push(`+${otherOpenGoalCount} open`);
-	return bits.join(" · ");
-}
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -214,199 +160,62 @@ function spinnerFrame(): string {
 	return SPINNER[Math.floor(Date.now() / 80) % SPINNER.length]!;
 }
 
-export function renderAuditorWidgetLines(progress: AuditorWidgetProgress, theme: Theme, width: number): string[] {
-	const safeWidth = Math.max(1, width);
-	const isActive = progress.phase !== "done";
-	const isThinking = progress.phase === "thinking";
-	const icon = isActive
-		? isThinking
-			? theme.fg("muted", "⟡")
-			: theme.fg("accent", spinnerFrame())
-		: theme.fg("success", "✓");
-	const label = isActive
-		? isThinking
-			? "thinking..."
-			: "auditing"
-		: "audit complete";
-	// formatDuration expects seconds, progress.elapsedMs is in milliseconds
-	const duration = formatDuration(Math.floor(progress.elapsedMs / 1000));
-	const lines: string[] = [
-		heading(
-			theme,
-			safeWidth,
-			`${icon} ${theme.fg("accent", theme.bold("Audit"))} ${theme.fg("muted", label)}`,
-			theme.fg("muted", duration),
-		),
-	];
-
-	// Show step label when available
-	if (progress.label) {
-		lines.push(branchLine(
-			theme,
-			safeWidth,
-			false,
-			`${theme.fg("text", truncateText(progress.label, Math.max(8, safeWidth - 6)))}`,
-		));
-	}
-
-	// Show progress bar when percentage is available
-	if (typeof progress.percentage === "number") {
-		const barWidth = Math.max(6, Math.min(safeWidth - 10, 30));
-		const bar = progressBar(progress.percentage, barWidth, theme);
-		const pct = `${theme.fg("muted", `${Math.round(progress.percentage)}%`)}`;
-		lines.push(branchLine(
-			theme,
-			safeWidth,
-			isActive && !progress.currentTool && progress.recentOutput.length === 0 && !isThinking,
-			`${bar} ${pct}`,
-		));
-	}
-
-	if (isActive && !isThinking && progress.currentTool) {
-		const argText = progress.currentToolArgs
-			? truncateText(progress.currentToolArgs, Math.max(10, safeWidth - 24))
-			: "";
-		const toolDuration = progress.currentToolStartedAt
-			? ` ${theme.fg("dim", formatDuration(Math.floor((Date.now() - progress.currentToolStartedAt) / 1000)))}`
-			: "";
-		lines.push(branchLine(
-			theme,
-			safeWidth,
-			false,
-			`${theme.fg("accent", "tool")} ${theme.fg("text", progress.currentTool)}${argText ? ` ${theme.fg("dim", argText)}` : ""}${toolDuration}`,
-		));
-	}
-
-	if (progress.recentOutput.length > 0) {
-		// Show separator
-		lines.push(branchLine(
-			theme,
-			safeWidth,
-			!isActive,
-			theme.fg("dim", "─".repeat(Math.max(4, safeWidth - 6))),
-		));
-		for (const [index, line] of progress.recentOutput.entries()) {
-			const isLast = index === progress.recentOutput.length - 1 && !isActive;
-			lines.push(branchLine(
-				theme,
-				safeWidth,
-				isLast,
-				theme.fg("dim", truncateText(line, Math.max(8, safeWidth - 6))),
-			));
-		}
-	}
-
-	// Show skip hint when audit is actively running
-	if (isActive && !isThinking) {
-		lines.push(branchLine(
-			theme,
-			safeWidth,
-			true,
-			theme.fg("warning", "Esc to skip") + theme.fg("dim", " — abort the audit and let the user decide"),
-		));
-	}
-
-	return lines;
+export interface AuditResultView {
+	verdict: "approved" | "disapproved" | "error";
+	report: string;
 }
 
-export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean } = {}): string[] {
-	// When auditor progress is active, show auditor display instead of normal goal widget
+/**
+ * Structured audit dashboard (§15): five check stages, elapsed duration, and a
+ * progress bar, derived from the raw auditor progress stream. Raw tools and
+ * recent output appear only with showToolDetails (expanded/debug audit mode)
+ * or after a failed audit.
+ */
+export function renderAuditorWidgetLines(
+	progress: AuditorWidgetProgress,
+	theme: Theme,
+	width: number,
+	opts: { showToolDetails?: boolean; verdict?: "approved" | "disapproved" | "error" | null } = {},
+): string[] {
+	const model = deriveAuditorDashboardModel(progress, { auditorLabel: progress.auditorLabel, verdict: opts.verdict });
+	return renderAuditorDashboard(model, theme, width, { showToolDetails: opts.showToolDetails });
+}
+
+/** §15.4: approval / rejection result card for a finished audit. */
+export function renderAuditResultCardView(
+	view: AuditResultView,
+	theme: Theme,
+	width: number,
+): string[] {
+	return renderAuditResultCard(deriveAuditResultCard(view.verdict, view.report), theme, width);
+}
+
+export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean; ledgerEvents?: GoalLedgerEvent[]; expanded?: boolean; debug?: boolean; model?: GoalDashboardModel | null; compactScrollOffset?: number; expandedScrollOffset?: number; expandedTaskRows?: number } = {}): string[] {
+	// When auditor progress is active, show the structured audit dashboard
+	// instead of the normal goal widget (§15.3).
 	if (options.auditorProgress) {
-		return renderAuditorWidgetLines(options.auditorProgress, theme, width);
+		return renderAuditorWidgetLines(options.auditorProgress, theme, width, {
+			showToolDetails: options.expanded === true || options.debug === true,
+		});
 	}
+	const openGoalCount = options.openGoalCount ?? 0;
 	if (!goal) {
-		const openGoalCount = options.openGoalCount ?? 0;
-		if (openGoalCount <= 0) return [];
-		const safeWidth = Math.max(1, width);
-		return [
-			heading(theme, safeWidth, `${theme.fg("warning", "◇")} ${theme.fg("warning", theme.bold("Goal"))} ${theme.fg("muted", "unfocused")}`, theme.fg("muted", `${openGoalCount} open`)),
-			branchLine(theme, safeWidth, true, `${theme.fg("muted", "Run /goal-focus to choose this session's goal")}`),
-		];
+		// Unfocused panel when open goals exist; nothing when the pool is empty.
+		return openGoalCount > 0 ? renderUnfocusedDashboard(openGoalCount, theme, width) : [];
 	}
 	const safeWidth = Math.max(1, width);
-	const { icon, color, label } = displayIcon(goal);
-	const mode = goal.sisyphus ? "Sisyphus" : "Goal";
-	const headingLeft = `${theme.fg(color, icon)} ${theme.fg(color, theme.bold(mode))} ${theme.fg("muted", label.replace(/^sisyphus |^goal /, ""))}`;
-	const otherOpenGoalCount = Math.max(0, (options.openGoalCount ?? (goal ? 1 : 0)) - 1);
-	const headingRight = theme.fg("muted", headingMeta(goal, otherOpenGoalCount, options.disableTasks, options.stalled === true));
-	const lines: string[] = [heading(theme, safeWidth, headingLeft, headingRight)];
-	const body: string[] = [];
-
-	const titleWidth = Math.max(12, safeWidth - 8);
-	const objective = truncateText(displayObjectiveTitle(goal.objective), titleWidth);
-	body.push(`${theme.fg("accent", "⟡")} ${theme.fg("text", objective)}`);
-
-	// E4: live budget progress (used/total, remaining) once a budget is set.
-	if (typeof goal.tokenBudget === "number" && goal.tokenBudget > 0) {
-		const used = Math.max(0, goal.usage.tokensUsed);
-		const pct = Math.max(0, Math.round((used / goal.tokenBudget) * 100));
-		const remaining = Math.max(0, goal.tokenBudget - used);
-		const color = pct >= 90 ? "warning" : pct >= 50 ? "accent" : "muted";
-		body.push(`${theme.fg(color, "⛽")} ${theme.fg("muted", `Budget: ${formatTokenValue(used)}/${formatTokenValue(goal.tokenBudget)} (${pct}% used · ${formatTokenValue(remaining)} remaining)`)}`);
-	}
-
-	if (!options.disableTasks && goal.taskList && goal.taskList.tasks.length > 0) {
-		const { total, done } = countFlatTasks(goal.taskList.tasks);
-		if (done === total) {
-			body.push(`${theme.fg("success", "✓")} ${theme.fg("muted", "All tasks complete")}`);
-		} else {
-			// F1: task-progress block — counts, next pending with depth-aware
-			// indentation + contract snippets, evidence for recent completions.
-			body.push(`${theme.fg("muted", `Tasks: ${done}/${total} done`)}`);
-			const pending = collectPendingWithDepth(goal.taskList.tasks);
-			for (const entry of pending.slice(0, 3)) {
-				const indent = "  ".repeat(entry.depth);
-				body.push(`${theme.fg("warning", "◻")} ${indent}${theme.fg("muted", `${entry.task.id}: ${truncateText(entry.task.title, Math.max(8, safeWidth - 24))}`)}`);
-				if (entry.task.verificationContract) {
-					body.push(`${indent}  ${theme.fg("dim", `contract: ${truncateText(entry.task.verificationContract, Math.max(8, safeWidth - 32))}`)}`);
-				}
-			}
-			const hidden = pending.length - 3;
-			if (hidden > 0) {
-				body.push(`${theme.fg("dim", `(+${hidden} more pending — Ctrl+Shift+T)`)}`);
-			}
-			const recent = recentCompletedWithEvidence(goal.taskList.tasks, 2);
-			for (const entry of recent) {
-				body.push(`${theme.fg("success", "✓")} ${theme.fg("dim", `${entry.id}: ${truncateText(entry.evidence ?? entry.title, Math.max(8, safeWidth - 18))}`)}`);
-			}
-		}
-	}
-
-	// F4: sisyphus ordered-step progress (uses the E6 step detector).
-	if (goal.sisyphus) {
-		const steps = sisyphusStepProgress(goal);
-		if (steps && steps.total <= 6) {
-			const ordered = orderedStepTitles(goal.objective, steps.total);
-			ordered.forEach((title, index) => {
-				const stepNo = index + 1;
-				const isCurrent = stepNo === steps.current;
-				const isDone = stepNo < steps.current;
-				const marker = isDone ? theme.fg("success", "✓") : isCurrent ? theme.fg("accent", "▸") : theme.fg("dim", "·");
-				const line = isCurrent
-					? theme.fg("text", `${marker} Step ${stepNo}: ${truncateText(title, Math.max(8, safeWidth - 20))}`)
-					: theme.fg("muted", `${marker} Step ${stepNo}: ${truncateText(title, Math.max(8, safeWidth - 20))}`);
-				body.push(line);
-			});
-		}
-	}
-
-	if (goal.status === "paused" && goal.stopReason === "agent" && goal.pauseReason) {
-		body.push(`${theme.fg("warning", "blocker")} ${theme.fg("warning", truncateText(goal.pauseReason, Math.max(12, safeWidth - 14)))}`);
-		if (goal.pauseSuggestedAction) {
-			body.push(`${theme.fg("dim", "next")} ${theme.fg("muted", truncateText(goal.pauseSuggestedAction, Math.max(12, safeWidth - 10)))}`);
-		}
-	}
-
-	const path = goal.status === "complete" ? goal.archivedPath : goal.activePath;
-	if (path) {
-		body.push(theme.fg("dim", path));
-	}
-
-	for (const [index, content] of body.entries()) {
-		lines.push(branchLine(theme, safeWidth, index === body.length - 1, content));
-	}
-
-	return lines;
+	const otherCount = Math.max(0, openGoalCount - 1);
+	const model = options.model ?? deriveGoalDashboardModel(goal as GoalRecord | null, {
+		focused: true,
+		otherOpenGoals: otherCount,
+		ledgerEvents: options.ledgerEvents ?? [],
+		tasksDisabled: options.disableTasks === true,
+	});
+	if (!model) return [];
+	const lines = options.expanded
+		? renderExpandedDashboard(model, theme, safeWidth, { scrollOffset: options.expandedScrollOffset, rows: options.expandedTaskRows })
+		: renderCompactDashboard(model, theme, safeWidth, { scrollOffset: options.compactScrollOffset });
+	return clampLinesToWidth(lines, width);
 }
 
 export class GoalWidgetComponent implements Component {
@@ -418,6 +227,18 @@ export class GoalWidgetComponent implements Component {
 	private getSettings: () => GoalSettings;
 	private getDebugMode: () => boolean;
 	private getStalled: () => boolean;
+	private getExpanded: () => boolean;
+	private getLedgerEvents: () => GoalLedgerEvent[];
+	private getAuditResult: () => AuditResultView | null;
+
+	// §9.6 scroll state: viewport offsets for the compact top-level list and
+	// the expanded tree, compact scroll-focus engagement, and the re-anchor
+	// bookkeeping (a new completion re-anchors to the latest completed task).
+	private compactScrollOffset = 0;
+	private expandedScrollOffset = 0;
+	private lastRenderWidth = 100;
+	private lastSeenGoalId: string | undefined;
+	private lastSeenLatestCompletedAt: string | undefined;
 
 	constructor(options: GoalWidgetOptions) {
 		this.theme = options.theme;
@@ -428,6 +249,14 @@ export class GoalWidgetComponent implements Component {
 		this.getSettings = options.getSettings ?? (() => ({}));
 		this.getDebugMode = options.getDebugMode ?? (() => false);
 		this.getStalled = options.getStalled ?? (() => false);
+		this.getExpanded = options.getExpanded ?? (() => false);
+		this.getLedgerEvents = options.getLedgerEvents ?? (() => []);
+		this.getAuditResult = options.getAuditResult ?? (() => null);
+	}
+
+	/** Whether the dashboard is currently in expanded mode (§10). */
+	isExpanded(): boolean {
+		return this.getExpanded();
 	}
 
 	update(): void {
@@ -463,12 +292,13 @@ export class GoalWidgetComponent implements Component {
 			if (goal.archivedPath) lines.push(t.fg("dim", `  archivedPath: ${goal.archivedPath}`));
 			if (goal.verificationContract) lines.push(t.fg("dim", `  vContract: ${truncateText(goal.verificationContract, 60)}`));
 
-			// Task tree summary
-			if (goal.taskList && goal.taskList.tasks.length > 0) {
-				const { total, done } = countFlatTasks(goal.taskList.tasks);
-				lines.push(t.fg("dim", `  tasks: ${done}/${total}`));
-				const firstPending = findFirstPending(goal.taskList.tasks);
-				if (firstPending) lines.push(t.fg("dim", `  next: ${firstPending.id} (${truncateText(firstPending.title, 40)})`));
+			// Task tree summary (from the shared dashboard model).
+			const model = deriveGoalDashboardModel(goal as GoalRecord | null, { focused: true, otherOpenGoals: 0 });
+			if (model?.taskProgress) {
+				lines.push(t.fg("dim", `  tasks: ${model.taskProgress.completed}/${model.taskProgress.total}`));
+			}
+			if (model?.currentTask) {
+				lines.push(t.fg("dim", `  next: ${model.currentTask.id} (${truncateText(model.currentTask.title, 40)})`));
 			}
 		} else {
 			lines.push(t.fg("dim", "  (no goal)"));
@@ -487,22 +317,129 @@ export class GoalWidgetComponent implements Component {
 
 	render(width: number): string[] {
 		const settings = this.getSettings();
+		this.lastRenderWidth = Math.max(1, width);
+		// §15.4: a finished audit shows its result card until cleared.
+		const auditResult = this.getAuditResult();
+		if (auditResult) {
+			return clampLinesToWidth(renderAuditResultCardView(auditResult, this.theme, width), width);
+		}
+		const goal = this.getGoal();
+		const otherCount = Math.max(0, this.getOpenGoalCount() - 1);
+		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
+			focused: true,
+			otherOpenGoals: otherCount,
+			ledgerEvents: this.getLedgerEvents(),
+			tasksDisabled: settings.disableTasks === true,
+		}) : null;
+		this.maybeReanchor(model);
 		let lines = renderGoalWidgetLines(this.getGoal(), this.theme, width, {
 			openGoalCount: this.getOpenGoalCount(),
 			auditorProgress: this.getAuditorProgress(),
 			disableTasks: settings.disableTasks,
 			stalled: this.getStalled(),
+			expanded: this.getExpanded(),
+			ledgerEvents: this.getLedgerEvents(),
+			debug: this.getDebugMode(),
+			model,
+			compactScrollOffset: this.compactScrollOffset,
+			expandedScrollOffset: this.expandedScrollOffset,
+			expandedTaskRows: expandedTaskViewportRows(this.lastRenderWidth),
 		});
 		if (this.getDebugMode()) {
 			lines.push(...this.renderDebugPanel(width));
 		}
-		// Safety net: ensure no returned line exceeds the terminal width
-		for (let i = 0; i < lines.length; i++) {
-			if (visibleWidth(lines[i]) > width) {
-				lines[i] = truncateToWidth(lines[i], width);
-			}
+		return clampLinesToWidth(lines, width);
+	}
+
+	/**
+	 * §9.6 re-anchor rule: when the goal changes or a new task completes (the
+	 * latest completedAt moves), reset both viewports to the anchored defaults
+	 * so the most recently completed work stays visible. Between such events
+	 * the user's manual scroll position is preserved.
+	 */
+	private maybeReanchor(model: GoalDashboardModel | null): void {
+		const latestAt = latestCompletedNodeIndex(model?.taskTree ?? []) >= 0
+			? model!.taskTree[latestCompletedNodeIndex(model!.taskTree)]!.completedAt
+			: undefined;
+		if (model?.goalId === this.lastSeenGoalId && latestAt === this.lastSeenLatestCompletedAt) return;
+		this.lastSeenGoalId = model?.goalId;
+		this.lastSeenLatestCompletedAt = latestAt;
+		if (!model || model.taskTree.length === 0) {
+			this.compactScrollOffset = 0;
+			this.expandedScrollOffset = 0;
+			return;
 		}
-		return lines;
+		const topLevel = model.taskTree.filter((n) => n.depth === 0);
+		this.compactScrollOffset = anchoredScrollOffset(topLevel, compactTaskViewportRows(this.lastRenderWidth));
+		this.expandedScrollOffset = anchoredScrollOffset(model.taskTree, expandedTaskViewportRows(this.lastRenderWidth));
+	}
+
+	/**
+	 * Scroll the compact task list with a Ctrl+Shift chord (§9.6). The chords
+	 * are free in pi (the editor owns the plain arrows), so no focus state is
+	 * needed — but they are consumed only when the compact list actually
+	 * overflows its viewport, so they never swallow keystrokes for a short
+	 * list. Returns true when the key was consumed.
+	 */
+	handleCompactScrollKey(key: "up" | "down" | "pageUp" | "pageDown" | "home" | "end"): boolean {
+		const settings = this.getSettings();
+		const goal = this.getGoal();
+		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
+			focused: true,
+			otherOpenGoals: Math.max(0, this.getOpenGoalCount() - 1),
+			ledgerEvents: this.getLedgerEvents(),
+			tasksDisabled: settings.disableTasks === true,
+		}) : null;
+		const list = model?.taskTree.filter((n) => n.depth === 0) ?? [];
+		const rows = compactTaskViewportRows(this.lastRenderWidth);
+		if (list.length <= rows) return false;
+		let offset = clampScrollOffset(this.compactScrollOffset, list.length, rows);
+		if (key === "up") offset -= 1;
+		else if (key === "down") offset += 1;
+		else if (key === "pageUp") offset -= taskViewportPageSize(rows);
+		else if (key === "pageDown") offset += taskViewportPageSize(rows);
+		else if (key === "home") offset = 0;
+		else if (key === "end") offset = maxScrollOffset(list.length, rows);
+		offset = clampScrollOffset(offset, list.length, rows);
+		this.compactScrollOffset = offset;
+		this.tui.requestRender();
+		return true;
+	}
+
+	/**
+	 * Handle a navigation key for the expanded dashboard. The expanded
+	 * dashboard is modal — while it is open it owns the arrow keys (like the
+	 * session tree or model selector), so plain ↑/↓/PgUp/PgDn scroll the task
+	 * tree and Esc collapses. Returns true when the key was consumed.
+	 * Clamps at both ends; Home/End jump to the edges; PgUp/PgDn page by one
+	 * viewport.
+	 */
+	handleNavigationKey(key: "up" | "down" | "pageUp" | "pageDown" | "home" | "end"): boolean {
+		if (!this.getExpanded()) return false;
+		const settings = this.getSettings();
+		const goal = this.getGoal();
+		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
+			focused: true,
+			otherOpenGoals: Math.max(0, this.getOpenGoalCount() - 1),
+			ledgerEvents: this.getLedgerEvents(),
+			tasksDisabled: settings.disableTasks === true,
+		}) : null;
+		const list = model?.taskTree ?? [];
+		if (list.length === 0) return false;
+		const rows = expandedTaskViewportRows(this.lastRenderWidth);
+		const maxO = maxScrollOffset(list.length, rows);
+		if (maxO <= 0) return false;
+		let offset = clampScrollOffset(this.expandedScrollOffset, list.length, rows);
+		if (key === "up") offset -= 1;
+		else if (key === "down") offset += 1;
+		else if (key === "pageUp") offset -= taskViewportPageSize(rows);
+		else if (key === "pageDown") offset += taskViewportPageSize(rows);
+		else if (key === "home") offset = 0;
+		else if (key === "end") offset = maxO;
+		offset = clampScrollOffset(offset, list.length, rows);
+		this.expandedScrollOffset = offset;
+		this.tui.requestRender();
+		return true;
 	}
 
 	invalidate(): void {

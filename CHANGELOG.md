@@ -8,6 +8,99 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Scrollable, latest-completion-anchored task list**: the task list in the
+  dashboard is a window over the plan-ordered list that defaults to showing
+  the most recently completed tasks (`completedAt` anchor) instead of the
+  earliest ones, with `↑ N more` / `… +N more` indicator rows. The expanded
+  dashboard is modal and scrolls with `↑/↓`, `PgUp/PgDn`, and `Home/End`;
+  the compact widget never touches the editor's arrows and scrolls with the
+  free `Ctrl+Shift+↑/↓` chords (consumed only when the list overflows, with a
+  `Ctrl+Shift+↑↓: scroll` footer hint). A new completion re-anchors the
+  window. `/goal-status` renders the same anchored window as a static
+  snapshot; the window and indicators stay width-safe at 40–140 columns.
+- **Unified goal dashboard** (see `docs/unified-dashboard.md`): one dashboard
+  component in compact (above-editor) and expanded modes, driven by a shared
+  pure presentation model (`extensions/widgets/goal-dashboard-model.ts`) used
+  by the widget, `/goal-status`, and the completion flow.
+- **Expanded dashboard**: the full task tree (✓ complete, ▸ current,
+  ~ skipped, · pending), current-task block with verification contract and
+  evidence, goal-level verification, and a recent-activity feed derived from
+  the durable ledger. `Ctrl+Shift+T` toggles compact/expanded; `Esc`
+  collapses.
+- **Merged task overlay**: the separate task-list overlay registration is
+  removed; its behavior moved into the dashboard's expanded mode.
+- **Persisted current-task state**: optional `currentTaskId` on goal records
+  (execution focus, distinct from completion status), `task_started` ledger
+  event, `update_goal_task(status="start")`, normalization that accepts only
+  existing pending tasks, and focus preservation/clearing on task-list
+  restructuring. Legacy goal files load without the field and are never
+  rewritten.
+- **Improved `/goal-status`**: standard mode renders the same dashboard model
+  (compact dashboard + current-task details + recent activity + last audit
+  result, no settings noise); `/goal-status verbose` adds full diagnostic
+  detail (id, revision, objective, tree with evidence and contracts, ledger
+  history, budget, pause/blocker, paths, audit report, settings provenance).
+- **Structured audit progress**: the audit widget shows five check stages
+  (objective, verification, tasks, workspace, decision) with a progress bar
+  and auditor identity; raw tools/output appear only in expanded/debug mode
+  or on failure. Approval and changes-required result cards follow the audit.
+- **Archive-result improvements**: successful archival emits `goal_archived`
+  and reports the real archive path; failure never claims success, keeps the
+  complete record recoverable, reports the remaining path, and writes a
+  `goal_archive_failed` diagnostic ledger event.
+- **Drafting polish**: durable proposal summary (objective, plan,
+  verification, continuation, auditor state) in the transcript for every
+  proposal outcome; richer confirmation output (goal id, file, task count,
+  verification, auditor, budget); questionnaire answers are captured before
+  draft state is cleared and appear in the created-goal report.
+- **Width safety**: compact and expanded layouts adapt to wide/medium/narrow/
+  very-narrow terminals; no rendered line ever exceeds the terminal width
+  (asserted by golden tests at 40/50/60/80/100/140 columns).
+- **End-to-end lifecycle test** (`tests/e2e/goal-lifecycle-dashboard.test.ts`)
+  covering guided creation through archival (plan §19.9).
+- **Compact tracker polish**: the compact dashboard now shows the top-level
+  task list by default (colored markers, aligned id column, truncated titles,
+  `… +N more` overflow), rounded box corners, `·`-separated status bits, and
+  marker colors via the theme abstraction with a monochrome fallback —
+  consistent across the widget, the expanded dashboard, and `/goal-status`.
+- **Goal-draft proposals always show the task list exactly once**: the F2
+  derived-task preview now derives from the raw objective (boxed confirmation
+  text prefixed every line with `│`, hiding checklist/ordered markers); a
+  `/goal-tweak` confirmation renders explicit tasks once inside its box and
+  previews the retained current list when no tasks are proposed.
+- **Goal-tweak status preservation**: a `/goal-tweak` that proposes a task
+  list merges it into the existing tree by id (§7.5) — steps that persist
+  keep their status, evidence, and timestamps; new steps start pending;
+  removed steps drop; `currentTaskId` clears when its task is no longer
+  pending. A tweak without a task list retains the current list unchanged.
+- **Goal-settings menu fixes**: the settings menu renders its nine rows
+  correctly (the `stall timeout (minutes)` row edits its own key, invalid
+  `thinking_level` picks warn instead of failing silently).
+
+### Changed
+
+- **Dashboard palette (pastel)**: the outer box frame is drawn in the theme's
+  light steel gray-blue (`mdLink`) — clearly lighter than the old dark
+  `borderMuted` and in the same hue family as pi's own borders — while the
+  interior rules stay in the theme's gray (`muted`) for hierarchy. Task rows
+  are pastel amber (`mdHeading`) with colour-coded markers *and ids* (✓
+  complete muted green, ▸ current teal, ~ skipped gray, · pending amber),
+  and the current task is fully accent (marker, id, title). The header brand,
+  progress fractions, and budget gauge are tinted; blocked/budget states use
+  soft red/amber instead of neon yellow, and the header meta and footer
+  hints are muted. Everything still follows the theme with a monochrome
+  fallback.
+- The task-overlay shortcut (`Ctrl+Shift+T`) now toggles the unified
+  dashboard instead of opening a separate overlay.
+- Prompt task blocks surface the persisted current task with its contract.
+- The test runner discovers `tests/e2e/*.test.ts` (`npm run test:e2e`).
+
+---
+
 ## [0.23.0] — 2026-08-05
 
 ### Added

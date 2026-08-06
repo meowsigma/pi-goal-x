@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
-import { buildGoalHistoryBlock, detailedSummary, oneLineSummary } from "./goal-format.ts";
+import { detailedSummary, oneLineSummary } from "./goal-format.ts";
 import {
 	goalSettingsPath,
 	loadGoalSettings,
@@ -16,6 +16,7 @@ import {
 } from "./goal-pool.ts";
 import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
 import { readGoalLedger } from "./goal-ledger.ts";
+import { buildGoalStatusText } from "./goal-status.ts";
 import { effectiveSettingsReport, envOverrideFor } from "./goal-settings.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
@@ -154,20 +155,22 @@ export function registerGoalCommands(core: GoalCore): void {
 		core.replaceGoal({ objective, autoContinue: true, sisyphus: mode === "sisyphus" }, ctx, true, verificationContract);
 	}
 
-	async function showGoalStatus(ctx: ExtensionContext): Promise<void> {
+	async function showGoalStatus(rawArgs: string, ctx: ExtensionContext): Promise<void> {
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (core.state.goal) core.syncGoalPromptFromDisk(ctx);
 		const view = core.goalForDisplay() ?? core.state.goal;
 		const otherCount = otherOpenGoalCount(core.goalsById, core.focusedGoalId);
-		const extra = view && otherCount > 0 ? `\nOther open goals: ${otherCount} (run /goal-list or /goal-focus)` : "";
-		let text = view ? `${detailedSummary(view)}${extra}` : core.openGoals().length > 0 ? buildUnfocusedOpenGoalsSummary(core.openGoals().length) : detailedSummary(null);
-		if (view) {
-			// E1: goal history (last audit verdict + recent lifecycle events).
-			const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
-			if (history) text += `\n\n${history}`;
-			// E2: effective settings with provenance.
-			text += `\n\n${effectiveSettingsReport(ctx.cwd).join("\n")}`;
-		}
+		const verbose = /^\s*verbose\b/i.test(rawArgs);
+		const text = buildGoalStatusText({
+			goal: view,
+			focused: view !== null && core.focusedGoalId === view.id,
+			otherOpenGoals: otherCount,
+			ledgerEvents: readGoalLedger(ctx).events,
+			verbose,
+			// §13.2: effective settings with provenance appear only in verbose mode;
+			// the standard mode stays free of settings noise (§13.1).
+			settingsReport: verbose ? effectiveSettingsReport(ctx.cwd) : [],
+		});
 		ctx.ui.notify(text, "info");
 		core.updateUI(ctx);
 	}
@@ -337,16 +340,16 @@ export function registerGoalCommands(core: GoalCore): void {
 				continue;
 			}
 			if (row.kind === "positiveInteger") {
-				const input = await ctx.ui.input("Set subtaskDepth", String(config.subtaskDepth ?? 1));
+				const input = await ctx.ui.input(`Set ${row.label}`, settingsValue(config, key));
 				if (input === undefined) continue;
 				// Full-string decimal validation: no partial parseInt. Rejects
 				// 1.5, 1x, 0, negatives, infinity, and unsafe integers alike.
 				const trimmed = input.trim();
 				if (!/^[0-9]+$/.test(trimmed) || !Number.isSafeInteger(Number(trimmed)) || Number(trimmed) < 1) {
-					ctx.ui.notify("subtaskDepth must be a positive integer (e.g. 1, 2, 3)", "warning");
+					ctx.ui.notify(`${row.label} must be a positive integer (e.g. 1, 2, 3)`, "warning");
 					continue;
 				}
-				const next = { ...config, subtaskDepth: Number(trimmed) };
+				const next = { ...config, [key]: Number(trimmed) };
 				saveSettings(next);
 				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
 				continue;
@@ -363,6 +366,7 @@ export function registerGoalCommands(core: GoalCore): void {
 				} else if ((AUDITOR_THINKING_LEVELS as readonly string[]).includes(trimmed)) {
 					next.thinkingLevel = trimmed as GoalSettings["thinkingLevel"];
 				} else {
+					ctx.ui.notify(`thinking_level must be one of: ${AUDITOR_THINKING_LEVELS.join(", ")} (or "(default)")`, "warning");
 					continue;
 				}
 				saveSettings(next);
@@ -520,9 +524,9 @@ export function registerGoalCommands(core: GoalCore): void {
 		},
 	});
 	pi.registerCommand("goal-status", {
-		description: "Show the focused goal and how many other goals are open (read-only).",
-		handler: async (_rawArgs, ctx) => {
-			await showGoalStatus(ctx);
+		description: "Show the unified goal dashboard for the focused goal (read-only). Append \"verbose\" for full diagnostic detail (goal id, revision, objective, task tree with evidence and contracts, ledger history, budget, pause/blocker, paths, audit report, effective settings).",
+		handler: async (rawArgs, ctx) => {
+			await showGoalStatus(rawArgs ?? "", ctx);
 		},
 	});
 	pi.registerCommand("goal-focus", {

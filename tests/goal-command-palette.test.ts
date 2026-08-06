@@ -3,7 +3,7 @@
  * explicit immediate-creation escape hatch.
  */
 
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -194,3 +194,82 @@ test("goal-settings renders sectioned rows with clearer auditor wording", async 
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
+
+// ── #19: positive-integer rows use a row-driven lower bound ──────────────────
+// The stall timeout row defaults to 0 ("no stall timeout") and must accept 0;
+// subtaskDepth is a nesting depth and must keep rejecting 0 and non-integers.
+
+test("goal-settings: stall timeout row accepts 0 (row-driven lower bound)", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-settings-bound-"));
+	mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+	const h = createHarness(cwd);
+	try {
+		(h.ctx as { hasUI: boolean }).hasUI = true;
+		const ui = h.ctx.ui as unknown as {
+			select: (title: string, options: string[]) => Promise<string | undefined>;
+			input: (prompt: string, defaultValue?: string) => Promise<string | undefined>;
+		};
+		let selectCalls = 0;
+		ui.select = async (_title: string, options: string[]) => {
+			selectCalls++;
+			if (selectCalls === 1) {
+				const stallRow = options.find((o) => o.includes("stall timeout (minutes)"));
+				assert.ok(stallRow, "stall timeout row must be listed");
+				return stallRow;
+			}
+			return "Done";
+		};
+		ui.input = async (_prompt: string) => "0";
+
+		await h.commands.get("goal-settings")!.handler("", h.ctx);
+
+		const saved = JSON.parse(readFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), "utf8"));
+		assert.equal(saved.stallTimeoutMinutes, 0, "stallTimeoutMinutes must accept 0");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("goal-settings: subtaskDepth rejects 0 (min 1) and never saves it", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-settings-bound-"));
+	mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+	const h = createHarness(cwd);
+	try {
+		(h.ctx as { hasUI: boolean }).hasUI = true;
+		const ui = h.ctx.ui as unknown as {
+			select: (title: string, options: string[]) => Promise<string | undefined>;
+			input: (prompt: string, defaultValue?: string) => Promise<string | undefined>;
+		};
+		let selectCalls = 0;
+		ui.select = async (_title: string, options: string[]) => {
+			selectCalls++;
+			if (selectCalls === 1) {
+				const depthRow = options.find((o) => o.includes("subtaskDepth"));
+				assert.ok(depthRow, "subtaskDepth row must be listed");
+				return depthRow;
+			}
+			return "Done";
+		};
+		ui.input = async (_prompt: string) => "0";
+
+		await h.commands.get("goal-settings")!.handler("", h.ctx);
+
+		assert.ok(h.notifications.some((n) => n.includes("subtaskDepth must be an integer >= 1")),
+			`expected subtaskDepth bound warning, got notifications: ${h.notifications.join(" | ")}`);
+		const settingsPath = path.join(cwd, ".pi", "pi-goal-x-settings.json");
+		// A rejected input never persists: the file is either absent or lacks the key.
+		if (readFileSyncSafe(settingsPath)) {
+			assert.ok(!readFileSyncSafe(settingsPath)!.includes("subtaskDepth"), "subtaskDepth must not be written");
+		}
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+function readFileSyncSafe(p: string): string | null {
+	try {
+		return readFileSync(p, "utf8");
+	} catch {
+		return null;
+	}
+}

@@ -205,14 +205,22 @@ async function runGoalBlockedFlow(ctx: ExtensionContext): Promise<AgentToolResul
 		core.clearActiveAccounting();
 		if (result.goal) core.runtime.markTurnStopped(result.goal.id);
 		core.updateUI(ctx);
+		return {
+			content: [{
+				type: "text",
+				text: "Goal blocked. Continuation stopped; the goal is waiting for the user to resume, revise, or clear it. Stop now; do not start another tool call.",
+			}],
+			details: goalDetails(core.state.goal),
+			terminate: true,
+		};
 	}
+	// The mutation failed (lock contention, revision conflict, goal archived by
+	// another process): surface the conflict instead of claiming the goal is
+	// blocked, and keep the turn alive so the agent can retry.
 	return {
-		content: [{
-			type: "text",
-			text: "Goal blocked. Continuation stopped; the goal is waiting for the user to resume, revise, or clear it. Stop now; do not start another tool call.",
-		}],
+		content: [{ type: "text", text: `Goal blocked state update failed: ${result.message ?? "the state mutation was rejected"}. The goal was NOT marked blocked. Retry after resolving the conflict.` }],
 		details: goalDetails(core.state.goal),
-		terminate: true,
+		terminate: false,
 	};
 }
 
@@ -262,12 +270,19 @@ async function runGoalAgentPauseFlow(ctx: ExtensionContext, reason: string | und
 		core.clearActiveAccounting();
 		if (result.goal) core.runtime.markTurnStopped(result.goal.id);
 		core.updateUI(ctx);
+		const suggestion = trimmedAction ? ` Suggested next step: ${trimmedAction}` : "";
+		return {
+			content: [{ type: "text", text: `Goal paused by the agent: ${trimmedReason}.${suggestion} Stop now; the user can resume with /goal-resume or revise with /goal-tweak.` }],
+			details: goalDetails(core.state.goal, `Pause reason: ${trimmedReason}${trimmedAction ? `\nSuggested action: ${trimmedAction}` : ""}`), // E7
+			terminate: true,
+		};
 	}
-	const suggestion = trimmedAction ? ` Suggested next step: ${trimmedAction}` : "";
+	// The mutation failed: surface the conflict instead of claiming the goal is
+	// paused, and keep the turn alive so the agent can retry.
 	return {
-		content: [{ type: "text", text: `Goal paused by the agent: ${trimmedReason}.${suggestion} Stop now; the user can resume with /goal-resume or revise with /goal-tweak.` }],
-		details: goalDetails(core.state.goal, `Pause reason: ${trimmedReason}${trimmedAction ? `\nSuggested action: ${trimmedAction}` : ""}`), // E7
-		terminate: true,
+		content: [{ type: "text", text: `Goal pause update failed: ${result.message ?? "the state mutation was rejected"}. The goal was NOT paused. Retry after resolving the conflict.` }],
+		details: goalDetails(core.state.goal),
+		terminate: false,
 	};
 }
 

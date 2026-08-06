@@ -342,11 +342,14 @@ export function registerGoalCommands(core: GoalCore): void {
 			if (row.kind === "positiveInteger") {
 				const input = await ctx.ui.input(`Set ${row.label}`, settingsValue(config, key));
 				if (input === undefined) continue;
+				// Row-driven lower bound: subtaskDepth is a nesting depth (min 1);
+				// stallTimeoutMinutes defaults to 0 meaning "no stall timeout".
+				const min = row.key === "stallTimeoutMinutes" ? 0 : 1;
 				// Full-string decimal validation: no partial parseInt. Rejects
-				// 1.5, 1x, 0, negatives, infinity, and unsafe integers alike.
+				// 1.5, 1x, negatives, infinity, and unsafe integers alike.
 				const trimmed = input.trim();
-				if (!/^[0-9]+$/.test(trimmed) || !Number.isSafeInteger(Number(trimmed)) || Number(trimmed) < 1) {
-					ctx.ui.notify(`${row.label} must be a positive integer (e.g. 1, 2, 3)`, "warning");
+				if (!/^[0-9]+$/.test(trimmed) || !Number.isSafeInteger(Number(trimmed)) || Number(trimmed) < min) {
+					ctx.ui.notify(`${row.label} must be an integer >= ${min} (e.g. ${min}, ${min + 1}, ${min + 2})`, "warning");
 					continue;
 				}
 				const next = { ...config, [key]: Number(trimmed) };

@@ -10,6 +10,8 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-08-06
+
 ### Changed (performance — non-agent flows ≥10x on most hot paths)
 
 - Zero-op write-through session caches for settings, the goal pool, and the
@@ -48,7 +50,7 @@ with the `0.x` prefix indicating pre-1.0 development.
   ops, startup 104→0 fs ops, lock contention 245→~17ms, ledger
   reconstruction 6.4→0.6ms @10k events, 4-event ledger append 20→1 fs op.
 
-
+## [0.24.0] — 2026-08-06
 
 ### Added
 

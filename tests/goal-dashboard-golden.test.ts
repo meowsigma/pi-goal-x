@@ -322,8 +322,8 @@ test("compact: running with tasks at 100 shows status, progress, current, contra
 	const lines = renderCompactDashboard(model, theme, 100);
 	const text = lines.join("\n");
 	assert.match(lines[0], /^╭─ pi-goal-x ─ Add CSV export to reports/);
-	assert.match(lines[0], /12m47s · 18.2K tok/);
-	assert.match(lines[1], /● In progress · Focused: yes · Other goals: 2/);
+	assert.doesNotMatch(lines[0], /12m47s/, "usage moved from the header into the status line");
+	assert.match(lines[1], /goal: running \[12m47s 18\.2K\] \(\+2 open\)/);
 	assert.match(text, /├─ Tasks /);
 	assert.match(text, /✓ t1  Review reports page and data source/);
 	assert.match(text, /▸ t3  Add the download button/);
@@ -343,7 +343,7 @@ test("compact: minimal mode at 40 keeps the essential summary", () => {
 	assert.ok(model);
 	const lines = renderCompactDashboard(model, theme, 40);
 	const text = lines.join("\n");
-	assert.match(text, /● In progress/);
+	assert.match(text, /goal: running/);
 	assert.match(text, /Tasks  \[.*\] 3\/5 · 60%/);
 	assert.match(text, /▸ Add the download button/);
 	assert.doesNotMatch(text, /Other goals/);
@@ -355,7 +355,7 @@ test("compact: blocked state surfaces blocker and suggested action", () => {
 	assert.ok(model);
 	const lines = renderCompactDashboard(model, theme, 100);
 	const text = lines.join("\n");
-	assert.match(text, /⊘ Blocked/);
+	assert.match(text, /goal: blocked/);
 	assert.match(text, /Blocker  Build fails/);
 	assert.match(text, /Action   Run npm test/);
 });
@@ -364,7 +364,7 @@ test("compact: paused state shows who paused and the reason", () => {
 	const model = modelFor(record({ status: "paused", stopReason: "agent", pauseReason: "Waiting for input" }));
 	assert.ok(model);
 	const text = renderCompactDashboard(model, theme, 100).join("\n");
-	assert.match(text, /◐ Paused \(agent\)/);
+	assert.match(text, /goal: paused \(agent\)/);
 	assert.match(text, /Reason   Waiting for input/);
 });
 
@@ -373,7 +373,7 @@ test("compact: budget-limited state shows the budget summary", () => {
 	assert.ok(model);
 	const text = renderCompactDashboard(model, theme, 100).join("\n");
 	assert.match(text, /⛽ Budget 18\.2K \/ 20K · 91%/);
-	assert.match(text, /Budget limited/);
+	assert.match(text, /goal: budget limited/);
 });
 
 test("compact: complete state shows the §4.7 message", () => {
@@ -399,6 +399,7 @@ test("expanded: full dashboard at 100 shows sections and complete task tree", ()
 	assert.ok(model);
 	const lines = renderExpandedDashboard(model, theme, 100);
 	const text = lines.join("\n");
+	assert.match(lines[1], /goal: running \[12m47s 18\.2K\] \(\+2 open\)/);
 	assert.match(text, /├─ Progress /);
 	assert.match(text, /3\/5 tasks · 60%/);
 	assert.match(text, /├─ Tasks /);

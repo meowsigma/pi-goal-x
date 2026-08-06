@@ -10,6 +10,16 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [Unreleased]
 
+### Changed
+
+- Goal widget: the compact and expanded dashboard status lines now show
+  `goal: <status> [<elapsed> <tokens>] (+N open)` (footer-status formatting:
+  `running`, `paused (agent)`, `blocked`, … plus usage) instead of
+  `Focused: yes / Other goals: N`; the usage moved from the header into the
+  status line. The focused-goal footer line at the bottom of the pi screen is
+  removed — the widget is the single home for goal status (the unfocused
+  `goal: unfocused [N open]` hint is kept).
+
 ## [0.25.1] — 2026-08-06
 
 ### Fixed

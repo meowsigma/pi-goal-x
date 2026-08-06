@@ -21,3 +21,13 @@ test("the widget and footer status still update on state changes", () => {
 	assert.match(source, /goalWidgetComponentRef\.current\?\.update\(\)/);
 	assert.match(source, /ctx\.ui\.setStatus\("goal"/);
 });
+
+test("the focused-goal footer line is removed; the widget is the single home", () => {
+	// The status line moved into the widget (compact/expanded dashboard:
+	// `goal: <label> [<usage>] (+N open)`). The focused-goal footer segment
+	// must be cleared — not composed from footerStatus — so the bottom of the
+	// screen stops duplicating goal status; the unfocused hint stays.
+	assert.doesNotMatch(source, /footerStatus\(displayGoal\)/);
+	assert.match(source, /ctx\.ui\.setStatus\("goal", undefined\)/);
+	assert.match(source, /goal: unfocused/);
+});

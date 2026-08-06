@@ -1,5 +1,4 @@
 import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { footerStatus } from "./goal-core.ts";
 import { FOCUS_ENTRY, STATE_ENTRY, GOAL_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import {
@@ -669,9 +668,12 @@ export function createGoalCore(
 			return;
 		}
 
-		const displayGoal = goalForDisplay() ?? state.goal;
-		const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
-		ctx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
+		// The goal widget is the single home for goal status: the status line
+		// lives in the compact/expanded dashboard (goal: <label> [<usage>]
+		// (+N open)), so the focused-goal footer segment is cleared — a stale
+		// unfocused hint or earlier status must not linger once a goal is
+		// focused. The unfocused branch above still sets its own hint.
+		ctx.ui.setStatus("goal", undefined);
 
 		if (!widgetRegistered) {
 			ctx.ui.setWidget(

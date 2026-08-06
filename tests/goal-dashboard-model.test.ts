@@ -117,16 +117,16 @@ test("formatBudget summarizes used/total/percentage", () => {
 // ---------------------------------------------------------------------------
 
 test("status maps lifecycle states to explicit display codes", () => {
-	assert.deepEqual(deriveGoalStatus(goal()), { code: "running", label: "In progress" });
-	assert.deepEqual(deriveGoalStatus(goal({ autoContinue: false })), { code: "idle", label: "Idle" });
-	assert.deepEqual(deriveGoalStatus(goal({ status: "paused", stopReason: "agent" })), { code: "paused", label: "Paused (agent)" });
-	assert.deepEqual(deriveGoalStatus(goal({ status: "paused", stopReason: "user" })), { code: "paused", label: "Paused (user)" });
+	assert.deepEqual(deriveGoalStatus(goal()), { code: "running", label: "In progress", footerLabel: "running" });
+	assert.deepEqual(deriveGoalStatus(goal({ autoContinue: false })), { code: "idle", label: "Idle", footerLabel: "active" });
+	assert.deepEqual(deriveGoalStatus(goal({ status: "paused", stopReason: "agent" })), { code: "paused", label: "Paused (agent)", footerLabel: "paused (agent)" });
+	assert.deepEqual(deriveGoalStatus(goal({ status: "paused", stopReason: "user" })), { code: "paused", label: "Paused (user)", footerLabel: "paused" });
 	assert.deepEqual(
 		deriveGoalStatus(goal({ status: "blocked", pauseReason: "Build fails", pauseSuggestedAction: "Run npm test" })),
-		{ code: "blocked", label: "Blocked", reason: "Build fails", suggestedAction: "Run npm test" },
+		{ code: "blocked", label: "Blocked", footerLabel: "blocked", reason: "Build fails", suggestedAction: "Run npm test" },
 	);
-	assert.deepEqual(deriveGoalStatus(goal({ status: "budget_limited" })), { code: "budget_limited", label: "Budget limited" });
-	assert.deepEqual(deriveGoalStatus(goal({ status: "complete" })), { code: "complete", label: "Complete" });
+	assert.deepEqual(deriveGoalStatus(goal({ status: "budget_limited" })), { code: "budget_limited", label: "Budget limited", footerLabel: "budget limited" });
+	assert.deepEqual(deriveGoalStatus(goal({ status: "complete" })), { code: "complete", label: "Complete", footerLabel: "complete" });
 });
 
 // ---------------------------------------------------------------------------
@@ -445,12 +445,11 @@ test("no budget means no budget section", () => {
 // Usage labels
 // ---------------------------------------------------------------------------
 
-test("usage derives elapsed and compact token labels", () => {
+test("usage derives footer-status bits (compact duration + compact tokens)", () => {
 	const m = model();
 	assert.equal(m.usage.activeSeconds, 767);
-	assert.equal(m.usage.elapsedLabel, "12m47s");
 	assert.equal(m.usage.tokens, 18200);
-	assert.equal(m.usage.tokenLabel, "18.2K tok");
+	assert.equal(m.usage.footerBits, "12m47s 18.2K");
 });
 
 // ---------------------------------------------------------------------------

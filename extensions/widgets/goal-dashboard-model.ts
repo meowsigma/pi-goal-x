@@ -9,7 +9,7 @@
  * the durable ledger.
  */
 
-import { displayObjectiveTitle, formatDuration } from "../goal-core.ts";
+import { displayObjectiveTitle, formatDuration, statusLabel } from "../goal-core.ts";
 import type { GoalLedgerEvent } from "../goal-ledger.ts";
 import type { GoalRecord, GoalTask } from "../goal-record.ts";
 import { deriveGoalActivity, type GoalActivityItem } from "../goal-activity.ts";
@@ -27,6 +27,8 @@ export interface GoalDashboardModel {
 	status: {
 		code: DashboardStatusCode;
 		label: string;
+		/** Footer-status label (goal-core statusLabel), e.g. `running`, `paused (agent)`. */
+		footerLabel: string;
 		reason?: string;
 		suggestedAction?: string;
 	};
@@ -36,9 +38,9 @@ export interface GoalDashboardModel {
 
 	usage: {
 		activeSeconds: number;
-		elapsedLabel: string;
 		tokens: number;
-		tokenLabel: string;
+		/** Footer-style usage content, e.g. `49h49m36s 19M` (empty when unused). */
+		footerBits: string;
 	};
 
 	budget?: {
@@ -106,6 +108,10 @@ export interface GoalDashboardModelOptions {
 export interface DashboardGoalStatus {
 	code: DashboardStatusCode;
 	label: string;
+	/** Footer-status label (goal-core statusLabel: running / paused (agent) /
+	 * blocked / budget limited / active / complete, with sisyphus prefix) — the
+	 * widget status line shows the same terminology as the pi footer. */
+	footerLabel: string;
 	reason?: string;
 	suggestedAction?: string;
 }
@@ -118,25 +124,25 @@ export function deriveGoalStatus(goal: GoalRecord): DashboardGoalStatus {
 	switch (goal.status) {
 		case "active":
 			return goal.autoContinue
-				? { code: "running", label: "In progress" }
-				: { code: "idle", label: "Idle" };
+				? { code: "running", label: "In progress", footerLabel: statusLabel(goal) }
+				: { code: "idle", label: "Idle", footerLabel: statusLabel(goal) };
 		case "paused": {
 			const who = goal.stopReason === "agent" ? " (agent)" : goal.stopReason === "user" ? " (user)" : "";
-			const status: DashboardGoalStatus = { code: "paused", label: `Paused${who}` };
+			const status: DashboardGoalStatus = { code: "paused", label: `Paused${who}`, footerLabel: statusLabel(goal) };
 			if (goal.pauseReason) status.reason = goal.pauseReason;
 			if (goal.pauseSuggestedAction) status.suggestedAction = goal.pauseSuggestedAction;
 			return status;
 		}
 		case "blocked": {
-			const status: DashboardGoalStatus = { code: "blocked", label: "Blocked" };
+			const status: DashboardGoalStatus = { code: "blocked", label: "Blocked", footerLabel: statusLabel(goal) };
 			if (goal.pauseReason) status.reason = goal.pauseReason;
 			if (goal.pauseSuggestedAction) status.suggestedAction = goal.pauseSuggestedAction;
 			return status;
 		}
 		case "budget_limited":
-			return { code: "budget_limited", label: "Budget limited" };
+			return { code: "budget_limited", label: "Budget limited", footerLabel: statusLabel(goal) };
 		case "complete":
-			return { code: "complete", label: "Complete" };
+			return { code: "complete", label: "Complete", footerLabel: statusLabel(goal) };
 	}
 }
 
@@ -472,6 +478,13 @@ export function deriveGoalDashboardModel(
 	const taskTitles = new Map(taskTree.map((n) => [n.id, n.title]));
 	const recentActivity = deriveGoalActivity(ledgerEvents, goal.id, { taskTitles, limit: activityLimit });
 
+	// Footer-status usage bits (goal-core footerStatus parity): compact
+	// duration + compact token count, e.g. `49h49m36s 19M`. The status line
+	// renders them inside brackets; empty when the goal has no usage yet.
+	const footerUsageBits: string[] = [];
+	if (goal.usage.activeSeconds > 0) footerUsageBits.push(formatDuration(goal.usage.activeSeconds));
+	if (goal.usage.tokensUsed > 0) footerUsageBits.push(formatCompactTokens(goal.usage.tokensUsed));
+
 	return {
 		goalId: goal.id,
 		title: displayObjectiveTitle(goal.objective),
@@ -480,9 +493,8 @@ export function deriveGoalDashboardModel(
 		filePath: goal.activePath ?? goal.archivedPath,
 		usage: {
 			activeSeconds: goal.usage.activeSeconds,
-			elapsedLabel: formatDashboardDuration(goal.usage.activeSeconds),
 			tokens: goal.usage.tokensUsed,
-			tokenLabel: `${formatCompactTokens(goal.usage.tokensUsed)} tok`,
+			footerBits: footerUsageBits.join(" "),
 		},
 		budget,
 		taskProgress,

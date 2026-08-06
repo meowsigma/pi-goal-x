@@ -97,16 +97,7 @@ function boxFooter(theme: Theme, width: number, content: string): string {
 	return `${frame(theme, "╰")}${l}${frame(theme, H.repeat(fill))}${frame(theme, "╯")}`;
 }
 
-// ── §5.2 status symbols / colors ────────────────────────────────────────────
-
-const STATUS_SYMBOL: Record<DashboardStatusCode, string> = {
-	running: "●",
-	idle: "○",
-	paused: "◐",
-	blocked: "⊘",
-	budget_limited: "⛽",
-	complete: "✓",
-};
+// ── §5.2 status colors ──────────────────────────────────────────────────────
 
 const STATUS_COLOR: Record<DashboardStatusCode, RenderColor> = {
 	running: "accent",
@@ -116,6 +107,20 @@ const STATUS_COLOR: Record<DashboardStatusCode, RenderColor> = {
 	budget_limited: "mdHeading",
 	complete: "success",
 };
+
+/**
+ * Widget status line — footer-status parity: `goal: <label> [<usage>] (+N open)`.
+ * Same terminology/format as the pi footer status line (goal-core statusLabel +
+ * usage bracket), without the objective preview (the header title shows it) and
+ * without the old `Focused: yes` / `Other goals: N` bits. The open-goals count
+ * appears only when other open goals exist.
+ */
+function statusLine(theme: Theme, model: GoalDashboardModel): string {
+	const color = STATUS_COLOR[model.status.code];
+	const usage = model.usage.footerBits ? ` [${model.usage.footerBits}]` : "";
+	const open = model.otherOpenGoals > 0 ? ` (+${model.otherOpenGoals} open)` : "";
+	return `${theme.fg(color, `goal: ${model.status.footerLabel}`)}${muted(theme, `${usage}${open}`)}`;
+}
 
 // ── §5.3 progress bars ──────────────────────────────────────────────────────
 
@@ -140,24 +145,21 @@ function layoutMode(width: number): LayoutMode {
 
 interface LayoutSpec {
 	barWidth: number;
-	showFocused: boolean;
-	showOtherGoals: boolean;
 	showPath: boolean;
 	showPauseAction: boolean;
 	footerHint: string;
-	statusLine: "full" | "brief";
 }
 
 function specFor(mode: LayoutMode): LayoutSpec {
 	switch (mode) {
 		case "wide":
-			return { barWidth: 26, showFocused: true, showOtherGoals: true, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks", statusLine: "full" };
+			return { barWidth: 26, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks" };
 		case "medium":
-			return { barWidth: 18, showFocused: true, showOtherGoals: true, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks", statusLine: "full" };
+			return { barWidth: 18, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks" };
 		case "narrow":
-			return { barWidth: 12, showFocused: true, showOtherGoals: true, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand", statusLine: "brief" };
+			return { barWidth: 12, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand" };
 		case "minimal":
-			return { barWidth: 8, showFocused: false, showOtherGoals: false, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand", statusLine: "brief" };
+			return { barWidth: 8, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand" };
 	}
 }
 
@@ -273,21 +275,13 @@ export function renderCompactDashboard(
 	const inner = safeWidth - 2;
 	const lines: string[] = [];
 
-	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
-		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
-		: "";
-	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`, usageRight ? frame(theme, usageRight) : ""));
+	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`));
 
 	// Status line.
 	if (model.status.code === "complete") {
 		lines.push(boxLine(theme, safeWidth, `${success(theme, "✓")} ${success(theme, "All required work is complete.")}`));
 	} else {
-		const symbol = STATUS_SYMBOL[model.status.code];
-		const color = STATUS_COLOR[model.status.code];
-		const bits = [`${theme.fg(color, symbol)} ${theme.fg(color, model.status.label)}`];
-		if (spec.showFocused) bits.push(muted(theme, `Focused: ${model.focused ? "yes" : "no"}`));
-		if (spec.showOtherGoals && model.otherOpenGoals > 0) bits.push(muted(theme, `Other goals: ${model.otherOpenGoals}`));
-		lines.push(boxLine(theme, safeWidth, bits.join(" · ")));
+		lines.push(boxLine(theme, safeWidth, statusLine(theme, model)));
 	}
 
 	// Budget (when configured): fuel gauge + amount, amber until the budget is
@@ -397,19 +391,9 @@ export function renderExpandedDashboard(
 	const inner = safeWidth - 2;
 	const lines: string[] = [];
 
-	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
-		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
-		: "";
-	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`, usageRight ? frame(theme, usageRight) : ""));
+	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`));
 
-	const symbol = STATUS_SYMBOL[model.status.code];
-	const color = STATUS_COLOR[model.status.code];
-	const statusBits = [
-		`Status: ${theme.fg(color, symbol)} ${theme.fg(color, model.status.label)}`,
-		...((spec.showFocused ? [muted(theme, `Focused: ${model.focused ? "yes" : "no"}`)] : []) as string[]),
-		...((spec.showOtherGoals && model.otherOpenGoals > 0 ? [muted(theme, `Other goals: ${model.otherOpenGoals}`)] : []) as string[]),
-	];
-	lines.push(boxLine(theme, safeWidth, statusBits.join(" · ")));
+	lines.push(boxLine(theme, safeWidth, statusLine(theme, model)));
 
 	if (spec.showPath && model.filePath) {
 		lines.push(boxLine(theme, safeWidth, dim(theme, `File: ${model.filePath}`)));

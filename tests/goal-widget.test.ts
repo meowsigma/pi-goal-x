@@ -42,8 +42,8 @@ function auditorProgress(overrides: Partial<AuditorWidgetProgress> = {}): Audito
 test("renderGoalWidgetLines renders the unified compact dashboard", () => {
 	const lines = renderGoalWidgetLines(goal(), theme, 100);
 	assert.match(lines[0], /^╭─ pi-goal-x ─ Componentize the goal widget/);
-	assert.match(lines[0], /1m05s · 2\.5K tok/);
-	assert.match(lines[1], /● In progress · Focused: yes/);
+	assert.doesNotMatch(lines[0], /1m05s/, "usage moved from the header into the status line");
+	assert.match(lines[1], /goal: sisyphus running \[1m05s 2\.5K\]/);
 	assert.match(lines.at(-1) ?? "", /^╰─ .*Ctrl\+Shift\+T: expand/);
 });
 
@@ -54,7 +54,6 @@ test("renderGoalWidgetLines shows the complete state", () => {
 		sisyphus: false,
 		archivedPath: ".pi/goals/archived/goal.md",
 	}), theme, 100);
-	assert.match(lines[0], /1m05s · 2\.5K/);
 	assert.match(lines.join("\n"), /All required work is complete/);
 });
 
@@ -66,7 +65,7 @@ test("renderGoalWidgetLines highlights blocked state with reason and action", ()
 		pauseReason: "Missing API token",
 		pauseSuggestedAction: "Set TOKEN and run /goal-resume",
 	}), theme, 100);
-	assert.match(lines.join("\n"), /⊘ Blocked/);
+	assert.match(lines.join("\n"), /goal: sisyphus blocked/);
 	assert.match(lines.join("\n"), /Blocker  Missing API token/);
 	assert.match(lines.join("\n"), /Action   Set TOKEN and run \/goal-resume/);
 });
@@ -78,13 +77,13 @@ test("renderGoalWidgetLines shows paused reason and who paused", () => {
 		stopReason: "agent",
 		pauseReason: "waiting on the user",
 	}), theme, 100);
-	assert.match(lines.join("\n"), /◐ Paused \(agent\)/);
+	assert.match(lines.join("\n"), /goal: sisyphus paused \(agent\)/);
 	assert.match(lines.join("\n"), /Reason   waiting on the user/);
 });
 
 test("renderGoalWidgetLines shows other open goals and unfocused multi-goal guidance", () => {
 	const focused = renderGoalWidgetLines(goal(), theme, 100, { openGoalCount: 3 });
-	assert.match(focused[1], /Other goals: 2/);
+	assert.match(focused[1], /goal: sisyphus running \[1m05s 2\.5K\] \(\+2 open\)/);
 
 	const unfocused = renderGoalWidgetLines(null, theme, 100, { openGoalCount: 2 });
 	assert.match(unfocused[0], /^╭─ pi-goal-x ─ Goal focus required/);
@@ -314,7 +313,7 @@ test("GoalWidgetComponent renders through mock TUI path", () => {
 	const lines = component.render(100);
 	assert.ok(lines.length > 0, "Component renders lines");
 	assert.match(lines[0], /^╭─ pi-goal-x ─ Componentize the goal widget/);
-	assert.match(lines[1], /● In progress · Focused: yes/);
+	assert.match(lines[1], /goal: sisyphus running \[1m05s 2\.5K\]/);
 });
 
 test("GoalWidgetComponent shows open goal count when > 1", () => {
@@ -329,7 +328,7 @@ test("GoalWidgetComponent shows open goal count when > 1", () => {
 
 	const lines = component.render(100);
 	const text = lines.join("\n");
-	assert.match(text, /Other goals: 2/);
+	assert.match(text, /goal: sisyphus running \[1m05s 2\.5K\] \(\+2 open\)/);
 });
 
 test("GoalWidgetComponent update triggers requestRender", () => {

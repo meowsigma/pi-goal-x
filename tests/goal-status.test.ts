@@ -106,6 +106,33 @@ test("standard mode includes no effective settings noise by default", () => {
 	assert.doesNotMatch(text, /provider:/);
 });
 
+test("standard mode shows the anchored task window — parity with the widget default (§9.6)", () => {
+	// 30 top-level tasks; t5 and t20 completed (t20 latest). The status
+	// width (78 cols, medium) budgets 4 task rows, so the anchored window is
+	// t17..t20 — the most recently completed task visible, earliest hidden,
+	// exactly like the compact widget's default rendering.
+	const tasks: GoalTask[] = Array.from({ length: 30 }, (_, i) => ({
+		id: `t${i + 1}`,
+		title: `Task number ${i + 1}`,
+		status: "pending" as const,
+	}));
+	tasks[4] = { ...tasks[4]!, status: "complete", completedAt: "2026-01-01T10:00:00.000Z" };
+	tasks[19] = { ...tasks[19]!, status: "complete", completedAt: "2026-01-01T11:00:00.000Z" };
+	const text = buildGoalStatusText({
+		goal: withTasks(tasks, { currentTaskId: "t21" }),
+		focused: true,
+		otherOpenGoals: 0,
+	});
+	assert.match(text, /↑ 16 more tasks/, "the anchored window hides the earliest tasks");
+	assert.match(text, /Task number 20/, "the latest completion is the last visible row");
+	assert.match(text, /… \+10 more tasks/, "pending tasks after the anchor stay reachable below");
+	assert.doesNotMatch(text, /[✓▸·~] t1\s/, "the earliest task row is not rendered");
+	// Width-safe including the indicator rows.
+	for (const line of text.split("\n")) {
+		assert.ok(visibleWidth(line) <= GOAL_STATUS_WIDTH, `line exceeds ${GOAL_STATUS_WIDTH}: ${JSON.stringify(line.slice(0, 60))}`);
+	}
+});
+
 test("verbose mode carries full diagnostic detail (§13.2)", () => {
 	const text = buildGoalStatusText({
 		...base(),

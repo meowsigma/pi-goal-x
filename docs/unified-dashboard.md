@@ -100,6 +100,33 @@ When no persisted current task exists, the dashboard falls back to the first
 pending task for display and marks it as inferred — the fallback is never
 persisted.
 
+## Scrolling the task list
+
+Both views show the task list as a **window** over the plan-ordered list, and
+by default the window is **anchored to the most recently completed task** —
+the viewport is "scrolled down" so recent completions (by `completedAt`) are
+visible instead of always showing the earliest tasks. With nothing completed
+the window starts at the top; when a new task completes the window re-anchors
+to it. `↑ N more tasks` / `… +N more tasks` indicator rows mark rows hidden
+above and below the window.
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Scroll one task row (window anchored at the latest completion by default) |
+| `PgUp` / `PgDn` | Scroll one page of task rows |
+| `Home` / `End` | Jump to the top / bottom of the list |
+| `F6` | Engage/disengage compact scrolling so the arrow keys scroll the compact widget instead of the editor |
+| `Esc` | Disengage compact scrolling; collapse the expanded dashboard |
+
+Scrolling keys are active only while the dashboard is focused: the expanded
+dashboard is focused while open (arrows scroll the full task tree, `Esc`
+collapses), and the compact widget is focused once `F6` engages scrolling
+(the footer shows `↑↓/PgUp/PgDn: scroll · Esc done`). Otherwise the arrow and
+page keys belong to the editor — typing and navigation are never hijacked.
+`/goal-status` renders the same anchored window as a static snapshot (it is
+not interactive). The window and its indicators are width-safe at every
+layout width.
+
 ## Status states
 
 | Symbol | Status | Shown for |
@@ -162,7 +189,9 @@ auditor's findings, and returns to the normal dashboard so work can continue.
 | Key | Action |
 | --- | --- |
 | `Ctrl+Shift+T` | Toggle the dashboard between compact and expanded |
-| `Esc` | Collapse the expanded dashboard; otherwise pause the goal |
+| `↑` / `↓`, `PgUp` / `PgDn`, `Home` / `End` | Scroll the focused task list (see [Scrolling the task list](#scrolling-the-task-list)) |
+| `F6` | Engage/disengage compact scrolling |
+| `Esc` | Disengage compact scrolling or collapse the expanded dashboard; otherwise pause the goal |
 | `Esc` (during audit) | Stop the audit and choose to continue working or complete without audit |
 
 ## Width behavior

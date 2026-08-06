@@ -290,7 +290,9 @@ Always visible above the editor while a goal is focused:
 
 Every rendered line is width-aware: the dashboard adapts to wide, medium, narrow, and very-narrow terminals and never overflows the available width.
 
-See [`docs/unified-dashboard.md`](docs/unified-dashboard.md) for the full layout specification, status states, and migration behavior.
+The task list is a scrollable **window** that by default is anchored to the most recently completed task — recent completions stay visible instead of the earliest tasks. `F6` engages compact scrolling; while the dashboard is focused (expanded, or compact after `F6`), `↑/↓` scroll a row, `PgUp/PgDn` scroll a page, and `Home/End` jump to the ends; `Esc` returns the keys to the editor. A new completion re-anchors the window.
+
+See [`docs/unified-dashboard.md`](docs/unified-dashboard.md) for the full layout specification, status states, scrolling behavior, and migration behavior.
 
 ## Completion review
 

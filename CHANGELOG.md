@@ -12,6 +12,16 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ### Added
 
+- **Scrollable, latest-completion-anchored task list**: the task list in the
+  dashboard is a window over the plan-ordered list that defaults to showing
+  the most recently completed tasks (`completedAt` anchor) instead of the
+  earliest ones, with `↑ N more` / `… +N more` indicator rows. `↑/↓` scroll a
+  row, `PgUp/PgDn` a page, and `Home/End` jump to the ends while the
+  dashboard is focused — the expanded dashboard is focused while open, and
+  `F6` engages compact scrolling so the arrow keys scroll the compact widget
+  without touching the editor (`Esc` disengages). A new completion re-anchors
+  the window. `/goal-status` renders the same anchored window as a static
+  snapshot; the window and indicators stay width-safe at 40–140 columns.
 - **Unified goal dashboard** (see `docs/unified-dashboard.md`): one dashboard
   component in compact (above-editor) and expanded modes, driven by a shared
   pure presentation model (`extensions/widgets/goal-dashboard-model.ts`) used

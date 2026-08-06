@@ -72,6 +72,20 @@ function fiveTaskTree(): GoalTask[] {
 	];
 }
 
+/** 30 top-level tasks; t5 and t20 completed (t20 latest) — the anchored
+ * viewport lands mid-list so both compact and expanded windows scroll in
+ * both directions. */
+function manyTaskTree(): GoalTask[] {
+	const tasks: GoalTask[] = Array.from({ length: 30 }, (_, i) => ({
+		id: `t${i + 1}`,
+		title: `Task number ${i + 1}`,
+		status: "pending" as const,
+	}));
+	tasks[4] = { ...tasks[4]!, status: "complete", completedAt: "2026-01-01T10:00:00.000Z" };
+	tasks[19] = { ...tasks[19]!, status: "complete", completedAt: "2026-01-01T11:00:00.000Z" };
+	return tasks;
+}
+
 function modelFor(goal: GoalRecord, opts: { focused?: boolean; otherOpenGoals?: number; ledgerEvents?: GoalLedgerEvent[] } = {}): ReturnType<typeof deriveGoalDashboardModel> {
 	return deriveGoalDashboardModel(goal, {
 		focused: opts.focused ?? true,
@@ -152,6 +166,20 @@ for (const width of WIDTHS) {
 			assertWidthSafe(renderCompactDashboard(model, theme, width), width);
 			assertWidthSafe(renderExpandedDashboard(model, theme, width), width);
 		}
+
+		// Scrolled viewports: a long list with completion timestamps at
+		// several window positions (anchored default, top, middle, off-scale)
+		// must stay width-safe — the ↑/↓ indicator rows count toward width.
+		const scrolled = withTasks(manyTaskTree(), { currentTaskId: "t21" });
+		const scrolledModel = modelFor(scrolled);
+		if (scrolledModel) {
+			assertWidthSafe(renderCompactDashboard(scrolledModel, theme, width), width);
+			assertWidthSafe(renderExpandedDashboard(scrolledModel, theme, width, { rows: 10 }), width);
+			for (const offset of [0, 3, 7, 99]) {
+				assertWidthSafe(renderCompactDashboard(scrolledModel, theme, width, { scrollOffset: offset }), width);
+				assertWidthSafe(renderExpandedDashboard(scrolledModel, theme, width, { rows: 10, scrollOffset: offset }), width);
+			}
+		}
 	});
 }
 
@@ -192,6 +220,46 @@ test("compact: top-level task list is shown by default with '+N more' overflow",
 	assert.ok(emptyModel);
 	const empty = renderCompactDashboard(emptyModel, theme, 100).join("\n");
 	assert.equal(empty.includes("├─ Tasks"), false);
+});
+
+test("compact: the default viewport anchors to the most recently completed tasks (§9.6)", () => {
+	const model = modelFor(withTasks(manyTaskTree(), { currentTaskId: "t21" }));
+	assert.ok(model);
+	// Wide (100): 5 rows; anchor t20 → window t16..t20, indicator on both sides.
+	const wide = renderCompactDashboard(model, theme, 100).join("\n");
+	assert.match(wide, /↑ 15 more tasks/);
+	assert.match(wide, /Task number 20/);
+	assert.doesNotMatch(wide, /[✓▸·~] t1\s/, "the earliest task row is hidden");
+	assert.match(wide, /… \+10 more tasks/);
+	// Minimal (40): 2 rows; the anchor stays the last visible row.
+	const minimal = renderCompactDashboard(model, theme, 40).join("\n");
+	assert.match(minimal, /↑ 18 more tasks/);
+	assert.match(minimal, /Task number 20/);
+});
+
+test("compact: an explicit scrollOffset windows the list and clamps at both ends", () => {
+	const model = modelFor(withTasks(manyTaskTree(), { currentTaskId: "t21" }));
+	assert.ok(model);
+	const top = renderCompactDashboard(model, theme, 100, { scrollOffset: 0 }).join("\n");
+	assert.doesNotMatch(top, /↑ \d+ more tasks/);
+	assert.match(top, /Task number 1/);
+	assert.match(top, /… \+25 more tasks/);
+	const tail = renderCompactDashboard(model, theme, 100, { scrollOffset: 99 }).join("\n");
+	assert.match(tail, /↑ 25 more tasks/);
+	assert.doesNotMatch(tail, /… \+\d+ more tasks/);
+});
+
+test("expanded: rows + scrollOffset window the tree with indicators; full tree by default", () => {
+	const model = modelFor(withTasks(manyTaskTree()));
+	assert.ok(model);
+	const mid = renderExpandedDashboard(model, theme, 100, { rows: 10, scrollOffset: 5 }).join("\n");
+	assert.match(mid, /↑ 5 more tasks/);
+	assert.match(mid, /Task number 6/);
+	assert.match(mid, /… \+15 more tasks/);
+	// No rows option → the whole tree is rendered (backward compatible).
+	const full = renderExpandedDashboard(model, theme, 100).join("\n");
+	assert.doesNotMatch(full, /↑ \d+ more tasks/);
+	assert.match(full, /Task number 30/);
 });
 
 test("compact: running with tasks at 100 shows status, progress, current, contract, file", () => {

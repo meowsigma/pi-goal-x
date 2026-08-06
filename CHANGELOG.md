@@ -10,6 +10,30 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [Unreleased]
 
+## [0.25.1] — 2026-08-06
+
+### Fixed
+
+- Settings menu: positive-integer rows validate against a row-specific lower
+  bound, so `stall timeout (minutes)` (default `0` = no stall timeout) can be
+  set to `0` instead of being forced to min `1` like `subtaskDepth` (#19).
+- Completion audit: the verdict marker (`<approved/>` / `<disapproved/>`) is
+  accepted only as the final non-empty line of the auditor report; a prose
+  mention of the marker elsewhere no longer counts as a verdict (#20).
+- Completion audit: the objective, executor claim, goal details, verification
+  contract, warm context, and task titles are escaped before interpolation, so
+  payload text can no longer close a `<...>` section early and read as
+  instructions (#21).
+- `update_goal({status: "blocked"})` and `update_goal({status: "paused"})`
+  now surface the mutation failure (e.g. revision conflict, goal modified by
+  another process) instead of reporting success, and keep the turn alive so
+  the agent can retry (#22).
+- Escape on a live goal pauses it AND passes the key back to pi so the
+  running tool execution / current turn is aborted — Escape stops the
+  "working", it doesn't just flip the state. Escape while the goal is already
+  paused passes through to pi to stop the current turn without any goal
+  state change (restores the pre-runtime-overhaul behavior).
+
 ## [0.25.0] — 2026-08-06
 
 ### Changed (performance — non-agent flows ≥10x on most hot paths)

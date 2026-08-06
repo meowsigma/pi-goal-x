@@ -420,13 +420,13 @@ test("golden: compaction summary for an empty session", () => {
 
 // ── Auditor verdict marker contract ─────────────────────────────────────────
 
-test("golden: auditor verdict marker contract is approval-disapproval exclusive", () => {
+test("golden: auditor verdict marker contract is final-line approval/disapproval", () => {
 	// Pins the <approved/> / <disapproved/> marker contract that the completion
-	// audit currently uses. parseAuditorDecision requires explicit approval and
-	// lets disapproval win when both markers appear.
+	// audit currently uses. parseAuditorDecision requires the marker to be the
+	// final non-empty line (#20); a prose mention anywhere else is not a verdict.
 	assert.deepEqual(parseAuditorDecision("Looks good\n<approved/>"), { approved: true, disapproved: false });
 	assert.deepEqual(parseAuditorDecision("Nope\n<disapproved/>"), { approved: false, disapproved: true });
-	assert.deepEqual(parseAuditorDecision("confused <approved/> <disapproved/>"), { approved: false, disapproved: true });
+	assert.deepEqual(parseAuditorDecision("confused <approved/> <disapproved/>"), { approved: false, disapproved: false });
 	assert.deepEqual(parseAuditorDecision("no marker"), { approved: false, disapproved: false });
 });
 

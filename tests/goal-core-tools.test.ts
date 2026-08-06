@@ -352,6 +352,62 @@ test("update_goal(blocked) is rejected from a non-active goal", async () => {
 	}
 });
 
+test("update_goal(blocked) surfaces an apply failure instead of claiming success (#22)", async () => {
+	const f = makeFixture();
+	try {
+		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+		await start(h);
+		// Simulate a failed mutation (lock contention / revision conflict).
+		const service = h.core.goalService;
+		const originalApply = service.apply.bind(service);
+		service.apply = () => ({ ok: false, message: "simulated conflict: goal modified by another process" });
+		try {
+			const update = h.tools.get("update_goal")!;
+			const result = await (update.execute as any)("update-3", { status: "blocked" }, undefined, undefined, h.ctx);
+			const text = result.content?.[0]?.text ?? "";
+			assert.ok(text.includes("simulated conflict"), `must surface the mutation message, got: ${text}`);
+			assert.ok(text.includes("NOT marked blocked"), `must not claim the goal is blocked, got: ${text}`);
+			assert.ok(result.terminate !== true, "must not terminate the turn so the agent can retry");
+		} finally {
+			service.apply = originalApply;
+		}
+		// The goal on disk is untouched: still active, no blocked event.
+		const active = activeGoalFiles(f.cwd);
+		const parsed = parseGoalFile(path.join(f.cwd, ".pi", "goals", active[0]!));
+		assert.equal(parsed?.status, "active", "goal must remain active");
+		assert.equal(ledgerEvents(f.cwd).filter((e) => e.type === "goal_blocked").length, 0, "no goal_blocked event");
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("update_goal(paused) surfaces an apply failure instead of claiming success (#22)", async () => {
+	const f = makeFixture();
+	try {
+		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+		await start(h);
+		const service = h.core.goalService;
+		const originalApply = service.apply.bind(service);
+		service.apply = () => ({ ok: false, message: "simulated lock contention" });
+		try {
+			const update = h.tools.get("update_goal")!;
+			const result = await (update.execute as any)("update-paused", { status: "paused", reason: "waiting on user input" }, undefined, undefined, h.ctx);
+			const text = result.content?.[0]?.text ?? "";
+			assert.ok(text.includes("simulated lock contention"), `must surface the mutation message, got: ${text}`);
+			assert.ok(text.includes("NOT paused"), `must not claim the goal is paused, got: ${text}`);
+			assert.ok(result.terminate !== true, "must not terminate the turn so the agent can retry");
+		} finally {
+			service.apply = originalApply;
+		}
+		const active = activeGoalFiles(f.cwd);
+		const parsed = parseGoalFile(path.join(f.cwd, ".pi", "goals", active[0]!));
+		assert.equal(parsed?.status, "active", "goal must remain active");
+		assert.equal(ledgerEvents(f.cwd).filter((e) => e.type === "goal_paused").length, 0, "no goal_paused event");
+	} finally {
+		f.cleanup();
+	}
+});
+
 // ── Stage 1 hardening: lifecycle authority and completion paths ──────────────
 
 test("legacy paused record with autoContinue:true stays paused after session restore", async () => {

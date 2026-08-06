@@ -27,12 +27,17 @@ import {
 import type { GoalActivityItem } from "../goal-activity.ts";
 import { truncateText } from "../goal-core.ts";
 
-type RenderColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
+type RenderColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text" | "mdHeading">;
 
 // ── §5.1 border system ──────────────────────────────────────────────────────
 
 const H = "─";
 const V = "│";
+
+/** Box borders: theme-appropriate gray (muted) instead of dim. */
+function border(theme: Theme, value: string): string {
+	return theme.fg("muted", value);
+}
 
 function fit(value: string, width: number): string {
 	return visibleWidth(value) > width ? truncateToWidth(value, width, "…") : value;
@@ -48,10 +53,10 @@ function boxHeader(theme: Theme, width: number, left: string, right = ""): strin
 		const budget = Math.max(4, inner - visibleWidth(r) - 4);
 		const l2 = `${H} ${fit(left, budget)}`;
 		const fill = Math.max(1, inner - visibleWidth(l2) - visibleWidth(r) - 1);
-		return `╭${l2}${theme.fg("dim", H.repeat(fill))}${r}╮`;
+		return `╭${l2}${border(theme, H.repeat(fill))}${r}╮`;
 	}
 	const fill = Math.max(1, inner - fixed);
-	return `╭${l}${theme.fg("dim", H.repeat(fill))}${r}╮`;
+	return `╭${l}${border(theme, H.repeat(fill))}${r}╮`;
 }
 
 function boxLine(theme: Theme, width: number, content: string): string {
@@ -62,7 +67,7 @@ function boxLine(theme: Theme, width: number, content: string): string {
 }
 
 function boxRule(theme: Theme, width: number): string {
-	return `├${theme.fg("dim", H.repeat(Math.max(1, width - 2)))}┤`;
+	return `├${border(theme, H.repeat(Math.max(1, width - 2)))}┤`;
 }
 
 /** Section separator with a label: `├─ Tasks ──────────┤` (§5.1). */
@@ -70,17 +75,17 @@ function boxSectionRule(theme: Theme, width: number, label: string): string {
 	const inner = Math.max(4, width - 2);
 	const left = `${H} ${label} `;
 	const fill = Math.max(1, inner - visibleWidth(left) - 1);
-	return `├${left}${theme.fg("dim", H.repeat(fill))}┤`;
+	return `├${left}${border(theme, H.repeat(fill))}┤`;
 }
 
 function boxFooter(theme: Theme, width: number, content: string): string {
 	const inner = Math.max(4, width - 2);
 	if (!content) {
-		return `╰${theme.fg("dim", H.repeat(inner))}╯`;
+		return `╰${border(theme, H.repeat(inner))}╯`;
 	}
-	const l = `${H} ${content}`;
+	const l = `${H} ${muted(theme, content)}`;
 	const fill = Math.max(1, inner - visibleWidth(l) - 1);
-	return `╰${l}${theme.fg("dim", H.repeat(fill))}╯`;
+	return `╰${l}${border(theme, H.repeat(fill))}╯`;
 }
 
 // ── §5.2 status symbols / colors ────────────────────────────────────────────
@@ -98,8 +103,8 @@ const STATUS_COLOR: Record<DashboardStatusCode, RenderColor> = {
 	running: "accent",
 	idle: "muted",
 	paused: "muted",
-	blocked: "warning",
-	budget_limited: "warning",
+	blocked: "error",
+	budget_limited: "mdHeading",
 	complete: "success",
 };
 
@@ -163,17 +168,21 @@ function success(theme: Theme, value: string): string {
 	return theme.fg("success", value);
 }
 
-function warning(theme: Theme, value: string): string {
-	return theme.fg("warning", value);
+/** Pastel accent helpers (§5): amber for tasks, teal for current/progress,
+ * muted gray for chrome, soft red for blockers, muted green for complete. */
+function amber(theme: Theme, value: string): string {
+	return theme.fg("mdHeading", value);
 }
 
 // ── task tree rows (§9.2) ───────────────────────────────────────────────────
 
+/** Task rows: pending amber ·, complete muted-green ✓, skipped gray ~, and
+ * the current task teal ▸ with accent text; row text is pastel amber. */
 function taskMarker(node: DashboardTaskNode): { symbol: string; color: RenderColor } {
 	if (node.isCurrent) return { symbol: "▸", color: "accent" };
 	if (node.status === "complete") return { symbol: "✓", color: "success" };
-	if (node.status === "skipped") return { symbol: "~", color: "warning" };
-	return { symbol: "·", color: "muted" };
+	if (node.status === "skipped") return { symbol: "~", color: "muted" };
+	return { symbol: "·", color: "mdHeading" };
 }
 
 function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, available: number): string {
@@ -186,7 +195,7 @@ function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, av
 	const markerText = theme.fg(marker.color, marker.symbol);
 	const colored = node.isCurrent
 		? `${markerText} ${accent(theme, `${node.id}  ${title}`)}`
-		: `${markerText} ${node.id}  ${title}`;
+		: `${markerText} ${amber(theme, `${node.id}  ${title}`)}`;
 	const line = `${indentText}${colored}${contractMark}`;
 	return line;
 }
@@ -214,7 +223,7 @@ function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewpor
 		const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark));
 		const title = fit(node.title, titleBudget);
 		const markerText = theme.fg(marker.color, marker.symbol);
-		const body = node.isCurrent ? accent(theme, `${id}  ${title}`) : `${id}  ${title}`;
+		const body = node.isCurrent ? accent(theme, `${id}  ${title}`) : amber(theme, `${id}  ${title}`);
 		rows.push(`${markerText} ${body}${contractMark}`);
 	}
 	if (viewport.hiddenBelow > 0) {
@@ -228,7 +237,7 @@ function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewpor
 function activityMarker(item: GoalActivityItem): { symbol: string; color: RenderColor } {
 	if (item.marker === "done") return { symbol: "✓", color: "success" };
 	if (item.marker === "current") return { symbol: "▸", color: "accent" };
-	if (item.marker === "skipped") return { symbol: "~", color: "warning" };
+	if (item.marker === "skipped") return { symbol: "~", color: "mdHeading" };
 	return { symbol: "·", color: "muted" };
 }
 
@@ -253,7 +262,7 @@ export function renderCompactDashboard(
 	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
 		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
 		: "";
-	lines.push(boxHeader(theme, safeWidth, `pi-goal-x ─ ${model.title}`, usageRight));
+	lines.push(boxHeader(theme, safeWidth, `pi-goal-x ─ ${model.title}`, muted(theme, usageRight)));
 
 	// Status line.
 	if (model.status.code === "complete") {
@@ -262,14 +271,14 @@ export function renderCompactDashboard(
 		const symbol = STATUS_SYMBOL[model.status.code];
 		const color = STATUS_COLOR[model.status.code];
 		const bits = [`${theme.fg(color, symbol)} ${theme.fg(color, model.status.label)}`];
-		if (spec.showFocused) bits.push(`Focused: ${model.focused ? "yes" : "no"}`);
-		if (spec.showOtherGoals && model.otherOpenGoals > 0) bits.push(`Other goals: ${model.otherOpenGoals}`);
+		if (spec.showFocused) bits.push(muted(theme, `Focused: ${model.focused ? "yes" : "no"}`));
+		if (spec.showOtherGoals && model.otherOpenGoals > 0) bits.push(muted(theme, `Other goals: ${model.otherOpenGoals}`));
 		lines.push(boxLine(theme, safeWidth, bits.join(" · ")));
 	}
 
 	// Budget (when configured).
 	if (model.budget) {
-		lines.push(boxLine(theme, safeWidth, `${theme.fg("warning", "⛽")} ${muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)}`));
+		lines.push(boxLine(theme, safeWidth, `${theme.fg("mdHeading", "⛽")} ${muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)}`));
 	}
 
 	// Overall task progress (§9.1).
@@ -322,7 +331,7 @@ export function renderCompactDashboard(
 
 	// Blocked details (§4.5).
 	if (model.status.code === "blocked") {
-		if (model.status.reason) lines.push(boxLine(theme, safeWidth, `${warning(theme, "Blocker")}  ${fit(model.status.reason, inner - 10)}`));
+		if (model.status.reason) lines.push(boxLine(theme, safeWidth, `${theme.fg("error", "Blocker")}  ${fit(model.status.reason, inner - 10)}`));
 		if (spec.showPauseAction && model.status.suggestedAction) lines.push(boxLine(theme, safeWidth, `${muted(theme, "Action")}   ${fit(model.status.suggestedAction, inner - 9)}`));
 	}
 
@@ -373,20 +382,22 @@ export function renderExpandedDashboard(
 	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
 		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
 		: "";
-	lines.push(boxHeader(theme, safeWidth, `pi-goal-x ─ ${model.title}`, usageRight));
+	lines.push(boxHeader(theme, safeWidth, `pi-goal-x ─ ${model.title}`, muted(theme, usageRight)));
 
 	const symbol = STATUS_SYMBOL[model.status.code];
 	const color = STATUS_COLOR[model.status.code];
-	const statusBits = [`Status: ${theme.fg(color, symbol)} ${theme.fg(color, model.status.label)}`];
-	if (spec.showFocused) statusBits.push(`Focused: ${model.focused ? "yes" : "no"}`);
-	if (spec.showOtherGoals && model.otherOpenGoals > 0) statusBits.push(`Other goals: ${model.otherOpenGoals}`);
+	const statusBits = [
+		`Status: ${theme.fg(color, symbol)} ${theme.fg(color, model.status.label)}`,
+		...((spec.showFocused ? [muted(theme, `Focused: ${model.focused ? "yes" : "no"}`)] : []) as string[]),
+		...((spec.showOtherGoals && model.otherOpenGoals > 0 ? [muted(theme, `Other goals: ${model.otherOpenGoals}`)] : []) as string[]),
+	];
 	lines.push(boxLine(theme, safeWidth, statusBits.join(" · ")));
 
 	if (spec.showPath && model.filePath) {
 		lines.push(boxLine(theme, safeWidth, dim(theme, `File: ${model.filePath}`)));
 	}
 	if (model.budget) {
-		lines.push(boxLine(theme, safeWidth, `${theme.fg("warning", "⛽")} ${muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)}`));
+		lines.push(boxLine(theme, safeWidth, `${theme.fg("mdHeading", "⛽")} ${muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)}`));
 	}
 
 	// Progress section (§4.2).
@@ -526,7 +537,7 @@ export function clampLinesToWidth(lines: string[], width: number): string[] {
 import type { AuditorDashboardModel, AuditResultCard } from "./auditor-dashboard-model.ts";
 
 const CHECK_SYMBOL = { passed: "✓", running: "◌", pending: "·", failed: "✗" } as const;
-const CHECK_COLOR = { passed: "success", running: "accent", pending: "muted", failed: "warning" } as const;
+const CHECK_COLOR = { passed: "success", running: "accent", pending: "muted", failed: "error" } as const;
 
 /**
  * Structured audit dashboard (§15.3): five check stages, a progress bar, and
@@ -582,7 +593,7 @@ export function renderAuditResultCard(card: AuditResultCard, theme: Theme, width
 	const inner = safeWidth - 2;
 	const lines: string[] = [];
 	const success = card.verdict === "approved";
-	const accentColor = success ? "success" : "warning";
+	const accentColor = success ? "success" : "error";
 	lines.push(boxHeader(theme, safeWidth, `Audit result ─ ${card.label}`));
 	for (const line of card.lines) {
 		const symbol = success ? "✓" : "✗";

@@ -83,6 +83,14 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ### Changed
 
+- **Dashboard palette (pastel)**: box borders are drawn in the theme's gray
+  (`muted`) instead of the dark `borderMuted`; task rows are pastel amber
+  (`mdHeading`) — the theme's soft markdown-heading yellow rather than the
+  bright `warning` — with colour-coded markers (✓ complete muted green,
+  ▸ current teal, ~ skipped gray, · pending amber). Blocked/budget states
+  use the soft red/amber instead of neon yellow, and the header meta and
+  footer hints are muted. Everything still follows the theme with a
+  monochrome fallback.
 - The task-overlay shortcut (`Ctrl+Shift+T`) now toggles the unified
   dashboard instead of opening a separate overlay.
 - Prompt task blocks surface the persisted current task with its contract.

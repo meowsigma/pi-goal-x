@@ -45,10 +45,13 @@ Compact rows, in order:
 3. Token budget (when configured): `⛽ Budget 18.2K / 50K · 36%`.
 4. Top-level task progress (`3/5 · 60%`); a skipped top-level task counts as
    done (§9.1).
-5. Task list section: the top-level tasks shown by default with colored
-   markers (✓ complete, ▸ current, ~ skipped, · pending), an aligned id
-   column, truncated titles, and a `… +N more` overflow line when the list is
-   longer than the row budget (5 rows at wide, 4 medium, 3 narrow, 2 minimal).
+5. Task list section: the top-level tasks shown by default in **pastel
+   amber** (`mdHeading`) with colour-coded markers (✓ complete muted green,
+   ▸ current teal, ~ skipped gray, · pending amber), an aligned id column,
+   truncated titles, and a `… +N more` overflow line when the list is longer
+   than the row budget (5 rows at wide, 4 medium, 3 narrow, 2 minimal). The
+   current task is highlighted in the theme's accent color; box borders are
+   drawn in the theme's gray (`muted`).
 6. Current task: `Current  t3 · Add the download button`.
 7. Current-task subtask progress (`2/3 · 67%`) when the current task has
    direct children (the current task's subtasks stay inline).

@@ -189,6 +189,30 @@ test("unfocused panel is width-safe at every width", () => {
 	}
 });
 
+test("palette: gray borders, pastel task rows, accent current task (§5)", () => {
+	const captured: Array<[string, string]> = [];
+	const colorTheme = {
+		fg: (color: string, value: string) => { captured.push([color, value]); return value; },
+		bold: (value: string) => value,
+	} as never;
+	const model = modelFor(withTasks(fiveTaskTree(), { currentTaskId: "t3" }));
+	assert.ok(model);
+	renderCompactDashboard(model, colorTheme, 100);
+	renderExpandedDashboard(model, colorTheme, 100);
+	// Box borders come from the theme's gray (muted), never raw white/dim.
+	assert.ok(captured.some(([c]) => c === "muted"), "box borders use muted (theme gray)");
+	assert.equal(captured.some(([c]) => c === "borderMuted"), false);
+	// Task markers are colour-coded pastel: pending amber, complete green, skipped gray.
+	const byColor = (c: string) => captured.filter(([col]) => col === c).map(([, v]) => v);
+	assert.ok(byColor("mdHeading").includes("·"), "pending marker is pastel amber");
+	assert.ok(byColor("success").includes("✓"), "complete marker is muted green");
+	assert.ok(byColor("muted").includes("~"), "skipped marker is gray");
+	assert.ok(byColor("mdHeading").some((v) => v.includes("Review reports page")), "task titles are pastel amber");
+	assert.ok(byColor("accent").some((v) => v.includes("t3")), "current task stays accent (teal)");
+	// No blinding #ffff00-style warning anywhere.
+	assert.equal(byColor("warning").length, 0, "the bright warning color is not used in the dashboard");
+});
+
 test("audit-running widget is width-safe at every width", () => {
 	for (const width of WIDTHS) {
 		assertWidthSafe(renderAuditorWidgetLines(auditorProgress(), theme, width), width);

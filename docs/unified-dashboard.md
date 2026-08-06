@@ -44,7 +44,8 @@ Compact rows, in order:
    (`·`-separated). Colors come from the theme with a monochrome fallback.
 3. Token budget (when configured): `⛽ Budget 18.2K / 50K · 36%`.
 4. Top-level task progress (`3/5 · 60%`); a skipped top-level task counts as
-   done (§9.1).
+   done (§9.1). The fraction and percent are muted; only the progress bar is
+   colourful (accent fill, dim empty cells).
 5. Task list section: the top-level tasks shown by default in **pastel
    amber** (`mdHeading`) with colour-coded markers and ids (✓ complete muted
    green, ▸ current teal, ~ skipped gray, · pending amber), an aligned id
@@ -61,7 +62,10 @@ Compact rows, in order:
 8. Goal-level verification contract (first line, truncated).
 9. Blocked or paused detail (reason, suggested action).
 10. Active (or archived) goal file path.
-11. Footer with the expansion shortcut.
+11. Footer with the expansion shortcut. The whole footer line — leading dash,
+    shortcut hint and trailing fill — is drawn in one frame tone (`mdLink`),
+    so the blue-gray spans the full width with no two-tone split; the header
+    line is likewise one tone with only the `pi-goal-x` brand in accent.
 
 When every top-level task is done, the current line reads
 `Current  All tasks complete`. With `disableTasks` enabled the task rows are

@@ -81,7 +81,7 @@ function boxRule(theme: Theme, width: number): string {
 /** Section separator with a label: `├─ Tasks ──────────┤` (§5.1). */
 function boxSectionRule(theme: Theme, width: number, label: string): string {
 	const inner = Math.max(4, width - 2);
-	const left = `${border(theme, H)} ${label} `;
+	const left = border(theme, `${H} ${label} `);
 	const fill = Math.max(1, inner - visibleWidth(left));
 	return `├${left}${border(theme, H.repeat(fill))}┤`;
 }
@@ -91,7 +91,9 @@ function boxFooter(theme: Theme, width: number, content: string): string {
 	if (!content) {
 		return `╰${frame(theme, H.repeat(inner))}╯`;
 	}
-	const l = `${frame(theme, H)} ${muted(theme, fit(content, inner - 4))}`;
+	// The footer is one frame tone: leading dash, hint text and trailing fill
+	// all carry the frame color, so the blue-gray spans the whole line.
+	const l = frame(theme, `${H} ${fit(content, inner - 4)}`);
 	const fill = Math.max(1, inner - visibleWidth(l));
 	return `╰${l}${frame(theme, H.repeat(fill))}╯`;
 }
@@ -273,7 +275,7 @@ export function renderCompactDashboard(
 	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
 		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
 		: "";
-	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ─ ${model.title}`, muted(theme, usageRight)));
+	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`, usageRight ? frame(theme, usageRight) : ""));
 
 	// Status line.
 	if (model.status.code === "complete") {
@@ -294,10 +296,11 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${theme.fg(fuel as RenderColor, "⛽")} ${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
 	}
 
-	// Overall task progress (§9.1).
+	// Overall task progress (§9.1). The fraction is muted like the percent:
+	// only the bar itself stays colourful.
 	if (model.taskProgress) {
 		const bar = progressBar(theme, model.taskProgress.percentage, spec.barWidth);
-		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Tasks")}  ${bar} ${accent(theme, `${model.taskProgress.completed}/${model.taskProgress.total}`)} · ${muted(theme, `${model.taskProgress.percentage}%`)}`));
+		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Tasks")}  ${bar} ${muted(theme, `${model.taskProgress.completed}/${model.taskProgress.total} · ${model.taskProgress.percentage}%`)}`));
 	}
 
 	// §9.2/§9.6 compact task list: a window over the top-level tasks, anchored
@@ -396,7 +399,7 @@ export function renderExpandedDashboard(
 	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
 		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
 		: "";
-	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ─ ${model.title}`, muted(theme, usageRight)));
+	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`, usageRight ? frame(theme, usageRight) : ""));
 
 	const symbol = STATUS_SYMBOL[model.status.code];
 	const color = STATUS_COLOR[model.status.code];
@@ -418,7 +421,7 @@ export function renderExpandedDashboard(
 	if (model.taskProgress) {
 		lines.push(boxSectionRule(theme, safeWidth, "Progress"));
 		const bar = progressBar(theme, model.taskProgress.percentage, Math.max(10, spec.barWidth + 8));
-		lines.push(boxLine(theme, safeWidth, `${bar} ${model.taskProgress.completed}/${model.taskProgress.total} tasks · ${model.taskProgress.percentage}%`));
+		lines.push(boxLine(theme, safeWidth, `${bar} ${muted(theme, `${model.taskProgress.completed}/${model.taskProgress.total} tasks · ${model.taskProgress.percentage}%`)}`));
 	}
 
 	// Tasks section: a window over the recursive tree (§9.2, §9.6). With no
@@ -531,7 +534,7 @@ function wrappedBlock(theme: Theme, width: number, label: string, text: string):
 export function renderUnfocusedDashboard(openGoalCount: number, theme: Theme, width: number): string[] {
 	const safeWidth = Math.max(10, width);
 	const lines: string[] = [];
-	lines.push(boxHeader(theme, safeWidth, "pi-goal-x ─ Goal focus required"));
+	lines.push(boxHeader(theme, safeWidth, frame(theme, "pi-goal-x ─ Goal focus required")));
 	const goals = openGoalCount === 1 ? "1 open goal is available." : `${openGoalCount} open goals are available.`;
 	lines.push(boxLine(theme, safeWidth, muted(theme, goals)));
 	lines.push(boxLine(theme, safeWidth, muted(theme, "Run /goal-focus to choose the goal for this session.")));
@@ -569,7 +572,7 @@ export function renderAuditorDashboard(
 	const inner = safeWidth - 2;
 	const lines: string[] = [];
 	const duration = formatAuditElapsed(model.elapsedMs);
-	lines.push(boxHeader(theme, safeWidth, `Independent completion audit ─ ${model.auditorLabel}`, duration));
+	lines.push(boxHeader(theme, safeWidth, frame(theme, `Independent completion audit ─ ${model.auditorLabel}`), frame(theme, duration)));
 
 	for (const check of model.checks) {
 		const symbol = CHECK_SYMBOL[check.state];
@@ -608,7 +611,7 @@ export function renderAuditResultCard(card: AuditResultCard, theme: Theme, width
 	const lines: string[] = [];
 	const success = card.verdict === "approved";
 	const accentColor = success ? "success" : "error";
-	lines.push(boxHeader(theme, safeWidth, `Audit result ─ ${card.label}`));
+	lines.push(boxHeader(theme, safeWidth, frame(theme, `Audit result ─ ${card.label}`)));
 	for (const line of card.lines) {
 		const symbol = success ? "✓" : "✗";
 		lines.push(boxLine(theme, safeWidth, `${theme.fg(accentColor as RenderColor, symbol)} ${fit(line, inner - 4)}`));

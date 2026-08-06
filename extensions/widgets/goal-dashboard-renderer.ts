@@ -27,7 +27,9 @@ import {
 import type { GoalActivityItem } from "../goal-activity.ts";
 import { truncateText } from "../goal-core.ts";
 
-type RenderColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text" | "mdHeading" | "mdLink">;
+// mdLink is deliberately excluded: the chrome must stay neutral gray, not
+// blue-tinged ("more grey than blue").
+type RenderColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text" | "mdHeading">;
 
 // ── §5.1 border system ──────────────────────────────────────────────────────
 
@@ -35,10 +37,11 @@ const H = "─";
 const V = "│";
 
 /** Box chrome: the entire frame — corners, top/bottom dashes, left/right
- * edges and interior rules — is one tone: light steel gray-blue (mdLink).
- * Only the content inside is colour-coded. */
+ * edges and interior rules — is one tone: the theme's neutral gray (muted).
+ * No blue tinge: the chrome is grey, while the content inside is
+ * colour-coded. */
 function frame(theme: Theme, value: string): string {
-	return theme.fg("mdLink", value);
+	return theme.fg("muted", value);
 }
 
 function fit(value: string, width: number): string {

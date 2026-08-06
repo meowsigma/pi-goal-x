@@ -189,7 +189,7 @@ test("unfocused panel is width-safe at every width", () => {
 	}
 });
 
-test("palette: one-tone frame lines, gray rules, muted percentage, colour-coded rows (§5)", () => {
+test("palette: neutral-gray chrome, colour-coded content (§5)", () => {
 	const captured: Array<[string, string]> = [];
 	const colorTheme = {
 		fg: (color: string, value: string) => { captured.push([color, value]); return value; },
@@ -200,29 +200,29 @@ test("palette: one-tone frame lines, gray rules, muted percentage, colour-coded 
 	renderCompactDashboard(model, colorTheme, 100);
 	renderExpandedDashboard(model, colorTheme, 100);
 	const byColor = (c: string) => captured.filter(([col]) => col === c).map(([, v]) => v);
-	const mdLink = byColor("mdLink");
-	// The chrome is ONE tone: corners, top/bottom dashes, left/right edges
-	// and interior rules all carry the same light steel gray-blue (mdLink).
-	assert.ok(mdLink.some((v) => /^─+$/.test(v)), "outer frame fill is light (mdLink)");
-	assert.ok(mdLink.includes("│"), "vertical edges are frame-colored (mdLink)");
-	for (const glyph of ["╭", "╮", "├", "┤", "╰", "╯"]) {
-		assert.ok(mdLink.includes(glyph), `${glyph} corner is frame-colored`);
-	}
+	const muted = byColor("muted");
+	// The chrome is ONE neutral-gray tone (muted, #808080 — no blue tinge):
+	// corners, top/bottom dashes, left/right edges and interior rules all
+	// share it. The blue-gray mdLink token is banned from the dashboard.
+	assert.equal(byColor("mdLink").length, 0, "no blue-tinged mdLink anywhere — chrome is neutral gray");
 	assert.equal(byColor("borderMuted").length, 0, "the dark borderMuted token is not used");
-	assert.equal(byColor("muted").some((v) => /^─+$/.test(v)), false, "no muted dashes: the rules share the frame color");
-	assert.ok(mdLink.some((v) => v === "─ Tasks "), "section-rule label is part of the frame tone");
-	// Frame lines are one tone: the blue-gray must appear on BOTH the left
-	// and the right of every frame line (regression: it used to read muted on
-	// one side and mdLink on the other).
-	assert.ok(mdLink.some((v) => v === "─"), "header leading dash is frame-colored (LHS)");
-	assert.ok(mdLink.some((v) => v.includes("Ctrl+Shift+T: expand tasks")), "footer hint is frame-colored, not muted");
-	assert.equal(byColor("muted").some((v) => v.includes("Ctrl+Shift+T")), false, "footer hint no longer muted");
-	assert.ok(mdLink.some((v) => v.includes("12m47s")), "header usage meta is frame-colored");
-	assert.ok(mdLink.some((v) => v.includes("Add CSV export to reports")), "header title is frame-colored");
+	assert.ok(muted.some((v) => /^─+$/.test(v)), "top/bottom frame dashes are neutral gray");
+	assert.ok(muted.includes("│"), "vertical edges are neutral gray");
+	for (const glyph of ["╭", "╮", "├", "┤", "╰", "╯"]) {
+		assert.ok(muted.includes(glyph), `${glyph} corner is neutral gray`);
+	}
+	assert.ok(muted.some((v) => v === "─ Tasks "), "section-rule label is part of the frame tone");
+	// Frame lines are one tone: the gray must appear on BOTH the left and the
+	// right of every frame line (regression: it used to read muted on one
+	// side and mdLink on the other).
+	assert.ok(muted.some((v) => v === "─"), "header leading dash is frame-colored (LHS)");
+	assert.ok(muted.some((v) => v.includes("Ctrl+Shift+T: expand tasks")), "footer hint is part of the frame tone");
+	assert.ok(muted.some((v) => v.includes("12m47s")), "header usage meta is part of the frame tone");
+	assert.ok(muted.some((v) => v.includes("Add CSV export to reports")), "header title is part of the frame tone");
 	// Task markers are colour-coded pastel: pending amber, complete green, skipped gray.
 	assert.ok(byColor("mdHeading").includes("·"), "pending marker is pastel amber");
 	assert.ok(byColor("success").includes("✓"), "complete marker is muted green");
-	assert.ok(byColor("muted").includes("~"), "skipped marker is gray");
+	assert.ok(muted.includes("~"), "skipped marker is gray");
 	// Task ids share the marker color; titles stay pastel amber; the current
 	// task is fully accent (marker, id, title).
 	assert.ok(byColor("success").some((v) => v.includes("t1") || v.includes("t2")), "completed ids are muted green");
@@ -234,10 +234,10 @@ test("palette: one-tone frame lines, gray rules, muted percentage, colour-coded 
 	assert.ok(byColor("accent").some((v) => v.includes("pi-goal-x")), "brand is accent");
 	assert.ok(byColor("accent").some((v) => /^█+$/.test(v)), "progress bar fill is accent");
 	assert.ok(byColor("dim").some((v) => /^░+$/.test(v)), "progress bar empty cells are dim");
-	// The tasks percentage (fraction and percent) is muted, not accent. (The
-	// current task's own subtask fraction stays accent — it is part of the
-	// current-task emphasis.)
-	assert.ok(byColor("muted").some((v) => /^\d+\/\d+ · \d+%$/.test(v)), "tasks percentage is muted");
+	// The tasks percentage (fraction and percent) is neutral gray, not accent.
+	// (The current task's own subtask fraction stays accent — it is part of
+	// the current-task emphasis.)
+	assert.ok(muted.some((v) => /^\d+\/\d+ · \d+%$/.test(v)), "tasks percentage is neutral gray");
 	assert.equal(byColor("accent").some((v) => /^\d+\/\d+ · \d+%$/.test(v)), false, "tasks percentage is no longer accent");
 	// No blinding #ffff00-style warning anywhere.
 	assert.equal(byColor("warning").length, 0, "the bright warning color is not used in the dashboard");

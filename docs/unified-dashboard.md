@@ -54,7 +54,7 @@ Compact rows, in order:
    minimal). The current task is fully highlighted in the theme's accent
    color (marker, id, title). The whole box chrome — top/bottom frame,
    left/right edges, corners and interior rules — is drawn in one tone: the
-   theme's light steel gray-blue (`mdLink`).
+   theme's neutral gray (`muted`). No blue tinge.
 6. Current task: `Current  t3 · Add the download button` (id and title in the
    accent color).
 7. Current-task subtask progress (`2/3 · 67%`) when the current task has
@@ -63,9 +63,10 @@ Compact rows, in order:
 9. Blocked or paused detail (reason, suggested action).
 10. Active (or archived) goal file path.
 11. Footer with the expansion shortcut. The whole footer line — leading dash,
-    shortcut hint and trailing fill — is drawn in one frame tone (`mdLink`),
-    so the blue-gray spans the full width with no two-tone split; the header
-    line is likewise one tone with only the `pi-goal-x` brand in accent.
+    shortcut hint and trailing fill — is drawn in one frame tone (the
+    neutral-gray `muted`), so the color spans the full width with no two-tone
+    split; the header line is likewise one tone with only the `pi-goal-x`
+    brand in accent.
 
 When every top-level task is done, the current line reads
 `Current  All tasks complete`. With `disableTasks` enabled the task rows are

@@ -51,14 +51,16 @@ function fit(value: string, width: number): string {
 
 function boxHeader(theme: Theme, width: number, left: string, right = ""): string {
 	const inner = Math.max(4, width - 2);
-	const l = `${H} ${left}`;
-	const r = right ? ` ${right} ${H}` : "";
+	// The leading/trailing dashes belong to the frame, so they carry the same
+	// color as the fill; only the corners stay plain.
+	const l = `${frame(theme, H)} ${left}`;
+	const r = right ? ` ${right} ${frame(theme, H)}` : "";
 	const fixed = visibleWidth(l) + visibleWidth(r);
 	if (fixed > inner - 2) {
 		// Too tight: truncate the title so the right-side meta survives.
 		const budget = Math.max(4, inner - visibleWidth(r) - 4);
-		const l2 = `${H} ${fit(left, budget)}`;
-		const fill = Math.max(1, inner - visibleWidth(l2) - visibleWidth(r) - 1);
+		const l2 = `${frame(theme, H)} ${fit(left, budget)}`;
+		const fill = Math.max(1, inner - visibleWidth(l2) - visibleWidth(r));
 		return `╭${l2}${frame(theme, H.repeat(fill))}${r}╮`;
 	}
 	const fill = Math.max(1, inner - fixed);
@@ -79,8 +81,8 @@ function boxRule(theme: Theme, width: number): string {
 /** Section separator with a label: `├─ Tasks ──────────┤` (§5.1). */
 function boxSectionRule(theme: Theme, width: number, label: string): string {
 	const inner = Math.max(4, width - 2);
-	const left = `${H} ${label} `;
-	const fill = Math.max(1, inner - visibleWidth(left) - 1);
+	const left = `${border(theme, H)} ${label} `;
+	const fill = Math.max(1, inner - visibleWidth(left));
 	return `├${left}${border(theme, H.repeat(fill))}┤`;
 }
 
@@ -89,8 +91,8 @@ function boxFooter(theme: Theme, width: number, content: string): string {
 	if (!content) {
 		return `╰${frame(theme, H.repeat(inner))}╯`;
 	}
-	const l = `${H} ${muted(theme, content)}`;
-	const fill = Math.max(1, inner - visibleWidth(l) - 1);
+	const l = `${frame(theme, H)} ${muted(theme, fit(content, inner - 4))}`;
+	const fill = Math.max(1, inner - visibleWidth(l));
 	return `╰${l}${frame(theme, H.repeat(fill))}╯`;
 }
 

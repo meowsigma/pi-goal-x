@@ -44,8 +44,8 @@ Compact rows, in order:
    (`·`-separated). Colors come from the theme with a monochrome fallback.
 3. Token budget (when configured): `⛽ Budget 18.2K / 50K · 36%`.
 4. Top-level task progress (`3/5 · 60%`); a skipped top-level task counts as
-   done (§9.1). The fraction and percent are muted; only the progress bar is
-   colourful (accent fill, dim empty cells).
+   done (§9.1). The whole progress element is neutral gray — bar fill and
+   empty cells included — so nothing in the progress info is colourful.
 5. Task list section: the top-level tasks shown by default in **pastel
    amber** (`mdHeading`) with colour-coded markers and ids (✓ complete muted
    green, ▸ current teal, ~ skipped gray, · pending amber), an aligned id
@@ -58,7 +58,8 @@ Compact rows, in order:
 6. Current task: `Current  t3 · Add the download button` (id and title in the
    accent color).
 7. Current-task subtask progress (`2/3 · 67%`) when the current task has
-   direct children (the current task's subtasks stay inline).
+   direct children (the current task's subtasks stay inline). The subtask
+   bar and its fraction are neutral gray like the top-level progress.
 8. Goal-level verification contract (first line, truncated).
 9. Blocked or paused detail (reason, suggested action).
 10. Active (or archived) goal file path.

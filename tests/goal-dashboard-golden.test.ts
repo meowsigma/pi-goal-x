@@ -229,16 +229,16 @@ test("palette: neutral-gray chrome, colour-coded content (§5)", () => {
 	assert.ok(byColor("mdHeading").some((v) => v.includes("Review reports page")), "task titles are pastel amber");
 	assert.ok(byColor("accent").some((v) => v.includes("t3")), "current task id stays accent (teal)");
 	assert.ok(byColor("accent").some((v) => v.includes("Add the download button")), "current task title is accent too");
-	// The compact header brand is teal; the progress bar keeps its accent fill
-	// with dim empty cells.
+	// The compact header brand is teal; the progress bar is fully muted —
+	// neutral-gray fill with dim empty cells, matching the muted percentage.
 	assert.ok(byColor("accent").some((v) => v.includes("pi-goal-x")), "brand is accent");
-	assert.ok(byColor("accent").some((v) => /^█+$/.test(v)), "progress bar fill is accent");
+	assert.ok(muted.some((v) => /^█+$/.test(v)), "progress bar fill is neutral gray");
 	assert.ok(byColor("dim").some((v) => /^░+$/.test(v)), "progress bar empty cells are dim");
-	// The tasks percentage (fraction and percent) is neutral gray, not accent.
-	// (The current task's own subtask fraction stays accent — it is part of
-	// the current-task emphasis.)
+	// No accent progress numbers remain: the tasks percentage and the current
+	// task's subtask fraction are both neutral gray.
 	assert.ok(muted.some((v) => /^\d+\/\d+ · \d+%$/.test(v)), "tasks percentage is neutral gray");
-	assert.equal(byColor("accent").some((v) => /^\d+\/\d+ · \d+%$/.test(v)), false, "tasks percentage is no longer accent");
+	assert.ok(muted.some((v) => /^\d+\/\d+$/.test(v)), "subtask fraction is neutral gray");
+	assert.equal(byColor("accent").some((v) => /^\d+\/\d+/.test(v)), false, "no accent progress fractions remain");
 	// No blinding #ffff00-style warning anywhere.
 	assert.equal(byColor("warning").length, 0, "the bright warning color is not used in the dashboard");
 });

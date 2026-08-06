@@ -122,7 +122,9 @@ const STATUS_COLOR: Record<DashboardStatusCode, RenderColor> = {
 function progressBar(theme: Theme, pct: number, barWidth: number): string {
 	const safeBar = Math.max(2, barWidth);
 	const filled = Math.min(safeBar, Math.max(0, Math.round((pct / 100) * safeBar)));
-	return `[${theme.fg("accent", "█".repeat(filled))}${theme.fg("dim", "░".repeat(safeBar - filled))}]`;
+	// The bar is muted like the rest of the progress info: neutral-gray fill
+	// with dim empty cells — no accent teal anywhere in the progress element.
+	return `[${theme.fg("muted", "█".repeat(filled))}${theme.fg("dim", "░".repeat(safeBar - filled))}]`;
 }
 
 // ── Layout modes (§5.5) ─────────────────────────────────────────────────────
@@ -337,7 +339,7 @@ export function renderCompactDashboard(
 	// Current-task subtask progress (§9.3).
 	if (model.currentTask && model.currentTask.totalSubtasks > 0 && mode !== "minimal") {
 		const bar = progressBar(theme, model.currentTask.subtaskPercentage, spec.barWidth);
-		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Subtasks")} ${bar} ${accent(theme, `${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks}`)} · ${muted(theme, `${model.currentTask.subtaskPercentage}%`)}`));
+		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Subtasks")} ${bar} ${muted(theme, `${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks}`)} · ${muted(theme, `${model.currentTask.subtaskPercentage}%`)}`));
 	}
 
 	// Goal-level verification (§11.1): truncated first line in compact.

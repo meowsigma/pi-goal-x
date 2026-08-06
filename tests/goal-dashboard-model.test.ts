@@ -13,15 +13,22 @@ import test from "node:test";
 import type { GoalLedgerEvent } from "../extensions/goal-ledger.ts";
 import type { GoalRecord, GoalTask } from "../extensions/goal-record.ts";
 import {
+	anchoredScrollOffset,
+	clampScrollOffset,
+	compactTaskViewportRows,
 	deriveCurrentTask,
 	deriveCurrentTaskSubtaskProgress,
 	deriveGoalDashboardModel,
 	deriveGoalStatus,
+	deriveTaskListViewport,
 	deriveTopLevelTaskProgress,
 	flattenTaskTree,
 	formatBudget,
 	formatCompactTokens,
 	formatDashboardDuration,
+	latestCompletedNodeIndex,
+	maxScrollOffset,
+	taskViewportPageSize,
 	type DashboardTaskNode,
 } from "../extensions/widgets/goal-dashboard-model.ts";
 
@@ -186,6 +193,119 @@ test("tree nodes carry verification contracts and evidence", () => {
 	const t3 = nodes.find((n) => n.id === "t3");
 	assert.equal(t1?.evidence, "Reviewed source");
 	assert.equal(t3?.verificationContract, "The button downloads a CSV using the active filters.");
+});
+
+// ---------------------------------------------------------------------------
+// Task-list viewport / scroll (§9.6)
+// ---------------------------------------------------------------------------
+
+function nodesWithCompletions(completed: Array<[string, string]>): DashboardTaskNode[] {
+	const ids = ["t1", "t2", "t3", "t4", "t5", "t6", "t7"];
+	return ids.map((id, i) => {
+		const entry = completed.find(([tid]) => tid === id);
+		return {
+			id,
+			title: `Task ${id}`,
+			status: entry ? ("complete" as const) : ("pending" as const),
+			depth: 0,
+			isCurrent: false,
+			...(entry ? { completedAt: entry[1] } : {}),
+		};
+	});
+}
+
+test("latestCompletedNodeIndex picks the max completedAt and ties resolve to the last in plan order", () => {
+	const nodes = nodesWithCompletions([
+		["t1", "2026-01-01T10:00:00.000Z"],
+		["t2", "2026-01-01T11:00:00.000Z"],
+		["t5", "2026-01-01T09:00:00.000Z"],
+	]);
+	assert.equal(latestCompletedNodeIndex(nodes), 1); // t2
+	const tied = nodesWithCompletions([
+		["t2", "2026-01-01T11:00:00.000Z"],
+		["t5", "2026-01-01T11:00:00.000Z"],
+	]);
+	assert.equal(latestCompletedNodeIndex(tied), 4); // t5 wins the tie (last position)
+});
+
+test("latestCompletedNodeIndex returns -1 without completed/timestamped tasks", () => {
+	assert.equal(latestCompletedNodeIndex([]), -1);
+	assert.equal(latestCompletedNodeIndex(nodesWithCompletions([])), -1);
+	// status complete but no completedAt (legacy) does not qualify
+	const legacy = [{ id: "t1", title: "A", status: "complete" as const, depth: 0, isCurrent: false }];
+	assert.equal(latestCompletedNodeIndex(legacy), -1);
+	// skipped tasks never qualify
+	const skipped = [
+		{ id: "t1", title: "A", status: "skipped" as const, depth: 0, isCurrent: false, completedAt: "2026-01-01T10:00:00.000Z" },
+	];
+	assert.equal(latestCompletedNodeIndex(skipped), -1);
+});
+
+test("anchoredScrollOffset bottom-anchors the latest completion as the last visible row", () => {
+	// t5 completed last (index 4); a 3-row window ends at t5 → offset 2
+	const nodes = nodesWithCompletions([
+		["t1", "2026-01-01T10:00:00.000Z"],
+		["t2", "2026-01-01T11:00:00.000Z"],
+		["t5", "2026-01-01T12:00:00.000Z"],
+	]);
+	assert.equal(anchoredScrollOffset(nodes, 3), 2); // rows t3..t5, t5 at the bottom
+	assert.equal(anchoredScrollOffset(nodes, 5), 0); // t5 already the bottom row of the initial window
+	// anchor near the end clamps to the tail
+	const tail = nodesWithCompletions([["t6", "2026-01-01T12:00:00.000Z"]]);
+	assert.equal(anchoredScrollOffset(tail, 3), 3); // rows t4..t6, t6 at the bottom
+	// early completion with everything else pending stays at the top
+	const early = nodesWithCompletions([["t2", "2026-01-01T10:00:00.000Z"]]);
+	assert.equal(anchoredScrollOffset(early, 5), 0);
+	// no completions → top
+	assert.equal(anchoredScrollOffset(nodesWithCompletions([]), 3), 0);
+	// list fits entirely → top
+	assert.equal(anchoredScrollOffset(nodesWithCompletions([["t3", "2026-01-01T10:00:00.000Z"]]), 7), 0);
+	// long list: the most recent completion (t12) pulls the window to the tail,
+	// hiding the earliest tasks — the core ask
+	const longList: DashboardTaskNode[] = Array.from({ length: 12 }, (_, i) => ({
+		id: `t${i + 1}`,
+		title: `Task ${i + 1}`,
+		status: "pending" as const,
+		depth: 0,
+		isCurrent: false,
+	}));
+	longList[1] = { ...longList[1]!, status: "complete", completedAt: "2026-01-01T10:00:00.000Z" };
+	longList[11] = { ...longList[11]!, status: "complete", completedAt: "2026-01-01T11:00:00.000Z" };
+	assert.equal(anchoredScrollOffset(longList, 5), 7); // rows t8..t12
+});
+
+test("clampScrollOffset and maxScrollOffset bound the window", () => {
+	assert.equal(maxScrollOffset(7, 5), 2);
+	assert.equal(maxScrollOffset(3, 5), 0);
+	assert.equal(clampScrollOffset(-3, 7, 5), 0);
+	assert.equal(clampScrollOffset(99, 7, 5), 2);
+	assert.equal(clampScrollOffset(1.9, 7, 5), 1);
+	assert.equal(clampScrollOffset(2, 3, 5), 0);
+});
+
+test("compactTaskViewportRows matches the §5.5 width buckets", () => {
+	assert.equal(compactTaskViewportRows(140), 5);
+	assert.equal(compactTaskViewportRows(100), 5);
+	assert.equal(compactTaskViewportRows(99), 4);
+	assert.equal(compactTaskViewportRows(70), 4);
+	assert.equal(compactTaskViewportRows(69), 3);
+	assert.equal(compactTaskViewportRows(50), 3);
+	assert.equal(compactTaskViewportRows(49), 2);
+	assert.equal(compactTaskViewportRows(40), 2);
+});
+
+test("taskViewportPageSize is one viewport of rows", () => {
+	assert.equal(taskViewportPageSize(5), 5);
+	assert.equal(taskViewportPageSize(1), 1);
+	assert.equal(taskViewportPageSize(0), 1);
+});
+
+test("deriveTaskListViewport computes the window with hidden counts", () => {
+	const v = deriveTaskListViewport(9, 5, 2);
+	assert.deepEqual(v, { totalRows: 9, rows: 5, offset: 2, maxOffset: 4, hiddenAbove: 2, hiddenBelow: 2 });
+	assert.deepEqual(deriveTaskListViewport(9, 5, 99), { totalRows: 9, rows: 5, offset: 4, maxOffset: 4, hiddenAbove: 4, hiddenBelow: 0 });
+	assert.deepEqual(deriveTaskListViewport(4, 5, 3), { totalRows: 4, rows: 5, offset: 0, maxOffset: 0, hiddenAbove: 0, hiddenBelow: 0 });
+	assert.deepEqual(deriveTaskListViewport(0, 5, 0), { totalRows: 0, rows: 5, offset: 0, maxOffset: 0, hiddenAbove: 0, hiddenBelow: 0 });
 });
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,11 @@ with the `0.x` prefix indicating pre-1.0 development.
   now surface the mutation failure (e.g. revision conflict, goal modified by
   another process) instead of reporting success, and keep the turn alive so
   the agent can retry (#22).
+- Escape on a live goal pauses it AND passes the key back to pi so the
+  running tool execution / current turn is aborted — Escape stops the
+  "working", it doesn't just flip the state. Escape while the goal is already
+  paused passes through to pi to stop the current turn without any goal
+  state change (restores the pre-runtime-overhaul behavior).
 
 ## [0.25.0] — 2026-08-06
 

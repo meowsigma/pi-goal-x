@@ -216,3 +216,46 @@ test("Escape with no goal modal open pauses the goal (regression guard)", async 
 		// temp dir cleanup is best-effort.
 	}
 });
+
+test("Escape on a live goal pauses AND passes the key back to pi (stops the working)", async () => {
+	const { cwd } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h);
+
+		// The fixture goal is active + autoContinue. Escape must pause it AND
+		// return undefined (not { consume: true }) so pi also receives the key
+		// and aborts the running tool execution / current turn — pausing without
+		// stopping the "working" is the reported bug.
+		const result = h.terminalInput(ESCAPE);
+		assert.equal(result, undefined, "Escape on a live goal must pass back to pi so the current turn stops");
+		assert.ok(h.notifyCalls.includes("Goal paused."), "Escape on a live goal must still pause the goal");
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("Escape while the goal is paused passes through to pi without any goal state change", async () => {
+	const { cwd } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h);
+
+		// First Escape pauses the live goal (one notification).
+		h.terminalInput(ESCAPE);
+		assert.equal(h.notifyCalls.filter((m) => m === "Goal paused.").length, 1, "first Escape pauses the live goal");
+
+		// Second Escape: the goal is now paused, so the handler must not pause
+		// again (no state change) and must pass the key back to pi (undefined),
+		// which stops the current turn.
+		const result = h.terminalInput(ESCAPE);
+		assert.equal(result, undefined, "Escape while paused must pass back to pi (stop the current turn)");
+		assert.equal(
+			h.notifyCalls.filter((m) => m === "Goal paused.").length,
+			1,
+			"Escape while paused must not re-pause or otherwise change goal state",
+		);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});

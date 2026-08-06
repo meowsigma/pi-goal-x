@@ -116,6 +116,10 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// Must return { consume: true } so the TUI doesn't also process the key
 			// and abort the running tool execution, which would cascade into pausing
 			// the entire goal (agent_end sees ctx.signal?.aborted and calls pauseActiveGoal).
+			// By contrast, the live-goal pause branch below deliberately does NOT
+			// consume: Escape must pass back to pi so it aborts the running tool
+			// execution and stops the current turn — pausing without stopping the
+			// "working" is exactly the reported bug.
 			// Any goal-owned modal (questionnaire, task confirmation, settings,
 			// goal picker, task-list overlay, escape dialog) owns every key while
 			// it is open: never intercept — otherwise Escape would pause the goal
@@ -137,9 +141,17 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				core.toggleDashboardExpanded();
 				return { consume: true };
 			}
+			// Escape on a live goal: pause it, then pass the key back to pi by
+			// returning undefined (not { consume: true }) so pi aborts the running
+			// tool execution / current turn too — Escape must stop the working as
+			// well as flip the state. The abort cascade (agent_end / turn_end call
+			// pauseActiveGoal again) is a no-op because the goal is already paused.
+			// When the goal is already paused this branch is skipped and Escape
+			// falls through to pi, which stops the current turn without any goal
+			// state change.
 			if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
 				core.pauseActiveGoal(ctx);
-				return { consume: true };
+				return undefined;
 			}
 
 			// Ctrl+Shift+T — toggle the unified dashboard between compact and

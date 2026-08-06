@@ -78,3 +78,32 @@ and assert the result text surfaces the message and `terminate` is not true.
 - `tests/goal-command-palette.test.ts` or a settings-focused test — #19 lower
   bound coverage (validation helper is inline in the UI loop; test via the
   menu's `ui.input` custom harness if practical, else document manual check).
+
+## Escape passes back to pi (post-#19–#22 follow-up)
+
+`syncTerminalInputPause` in `extensions/goal-widget.ts` previously consumed
+Escape on a live goal (`{ consume: true }`) after `pauseActiveGoal`, so pi
+never saw the key and the running tool execution kept going — pausing without
+stopping the "working". Now:
+
+```ts
+if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
+	core.pauseActiveGoal(ctx);
+	return undefined; // pass Escape back to pi: it aborts the running turn
+}
+```
+
+Returning `undefined` (not consumed) lets pi abort the running tool
+execution; `agent_end`/`turn_end` then call `pauseActiveGoal` again, which is
+a no-op because the goal is already paused. The paused-goal branch needs no
+code change (verified by reading the fall-through: modal guard, audit branch,
+dashboard-collapse branch, navigation keys, and the `isDebugEnabled` gate all
+return `undefined` for Escape when the goal is paused), but is now pinned by
+tests. The audit-abort branch (consume to prevent the cascade pause) and the
+modal-depth guard are unchanged.
+
+Tests in `tests/goal-modal-escape.test.ts`:
+
+- live-goal Escape pauses AND returns `undefined` (passthrough, not consumed);
+- paused-goal Escape returns `undefined` with no additional "Goal paused."
+  notification (no re-pause / no state change).

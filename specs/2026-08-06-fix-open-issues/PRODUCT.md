@@ -4,7 +4,7 @@
 
 Shipped (all four actionable issues fixed on `fix/open-issues` with
 regression tests, spec docs, CHANGELOG entry, patch bump to 0.25.1; junk
-issues #15–#18 closed).
+issues #15–#18 closed; plus the Escape-stops-the-working fix below).
 
 ## Outcome
 
@@ -34,6 +34,28 @@ Address the four actionable open issues filed on `tmonk/pi-goal-x`
 
 Also close the four empty-body junk issues **#15–#18** via `gh` with a comment
 noting they are invalid duplicates of #19–#22.
+
+## Escape stops the working (post-#19–#22 follow-up)
+
+User-reported regression (same branch, same day): pressing Escape no longer
+stops the goal's "working" — it only pauses the goal. Desired behavior:
+
+- **Live goal (active + autoContinue) + Escape → pause the goal AND stop the
+  current turn.** The pause path consumed Escape (`{ consume: true }`) and
+  never aborted the in-flight tool execution, so the agent kept working after
+  the goal flipped to paused.
+- **Paused goal + Escape → stop the current turn.** Escape must pass back to
+  pi (not be consumed), aborting the running tool execution; goal state stays
+  unchanged.
+
+Fix in `extensions/goal-widget.ts` (`syncTerminalInputPause`): the live-goal
+branch still calls `pauseActiveGoal(ctx)` but returns `undefined` instead of
+`{ consume: true }`, so pi also receives the key and aborts the current turn.
+The abort cascade (`agent_end`/`turn_end` → `pauseActiveGoal`) is a no-op
+because the goal is already paused. The paused-goal case already fell through
+(after the modal-depth guard, audit-abort branch, and expanded-dashboard
+collapse) and is pinned by a new regression test. Audit-abort consumption and
+the modal guard are unchanged.
 
 ## Scope
 

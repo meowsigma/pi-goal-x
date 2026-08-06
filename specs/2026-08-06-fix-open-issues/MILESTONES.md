@@ -70,3 +70,39 @@
 - CHANGELOG: `## [0.25.1] — 2026-08-06` entry with all four fixes; package.json
   bumped 0.25.0 → 0.25.1.
 - All work committed on `fix/open-issues`.
+
+## 2026-08-06 — escape no longer stops the working (user report, same branch)
+
+User report: "escape is no longer stopping 'working', but is pausing a goal."
+Desired: live goal + Escape → pause goal; paused goal + Escape → stop current
+turn ("this is how it used to work before we fixed the escape behaviour").
+
+Investigation:
+- The live-goal Escape branch in `goal-widget.ts`
+  `syncTerminalInputPause` has paused synchronously AND consumed the key
+  (`{ consume: true }`) since the runtime overhaul (967bc7d) — pi never sees
+  the Escape, so the running tool execution continues after the goal flips to
+  paused. That matches the report exactly.
+- `ExtensionContext` exposes `abort()` and `signal`; pi's native Escape
+  handling aborts the running tool execution, and `agent_end`/`turn_end`
+  already cascade `pauseActiveGoal` on aborted turns (no-op when already
+  paused).
+- Paused-goal Escape already fell through to `undefined` (no other Escape
+  consumer in the extension), so only the live branch needed changing.
+- User decision (goal questionnaire): commit the validated pending
+  #19–#22 work first, keep the escape fix on the same `fix/open-issues`
+  branch, commit directly.
+
+Fix: live-goal branch keeps `core.pauseActiveGoal(ctx)` but returns
+`undefined` (passes Escape back to pi, which aborts the current turn).
+Comments updated to explain the consume-vs-passthrough split (audit: consume;
+pause: passthrough).
+
+Tests: `tests/goal-modal-escape.test.ts` — "Escape on a live goal pauses AND
+passes the key back to pi (stops the working)" + "Escape while the goal is
+paused passes through to pi without any goal state change"; pre-existing
+modal-guard + pause regression tests unchanged and green (4/4).
+
+Validation: `npx tsx --test tests/goal-modal-escape.test.ts` 4/4 pass;
+full `npm run check` + `npm test` green; CHANGELOG 0.25.1 entry extended with
+the Escape fix; committed on `fix/open-issues`.

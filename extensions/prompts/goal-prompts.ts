@@ -40,10 +40,8 @@ function renderPendingTasks(tasks: GoalTask[], indent: number, rendered: { count
 		}
 		rendered.count++;
 		const lw = task.lightweightSubtasks ? " (lightweight)" : "";
-		lines.push(`${prefix}[ ] ${task.id}: ${task.title}${lw}`);
-		if (task.verificationContract) {
-			lines.push(`${prefix}  contract: ${task.verificationContract}`);
-		}
+		const contract = task.verificationContract ? ` — contract: ${task.verificationContract}` : "";
+		lines.push(`${prefix}[ ] ${task.id}: ${task.title}${lw}${contract}`);
 		if (task.subtasks && task.subtasks.length > 0) {
 			lines.push(...renderPendingTasks(task.subtasks, indent + 1, rendered));
 		}

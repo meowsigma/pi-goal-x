@@ -41,12 +41,32 @@ interface GoalDirListingCacheEntry {
 
 const goalDirListingCache = new Map<string, GoalDirListingCacheEntry>();
 
+/**
+ * Zero-op pool cache (NAF 2026-08-06): the fully-scanned active pool per
+ * goals dir, served without any stat. Every extension write (atomic write /
+ * unlink / archive) invalidates it, so extension-mediated changes are always
+ * observed; external (non-extension) file edits go stale mid-session
+ * (documented in the naf spec PRODUCT.md). The safety-critical persist path
+ * re-reads the goal file directly (parseGoalFile, mtime-keyed) under the
+ * lock, so cross-process revision conflicts are still detected.
+ */
+const goalPoolCache = new Map<string, Map<string, GoalRecord>>();
+
+/**
+ * Session boundary (session_start / resume): drop the zero-op pool cache so
+ * a new session rescans the goal pool fresh from disk.
+ */
+export function invalidateGoalPoolCache(): void {
+	goalPoolCache.clear();
+}
+
 function invalidateGoalPathCaches(filePath: string): void {
 	goalFileParseCache.delete(filePath);
 }
 
 function invalidateGoalDirCache(root: string): void {
 	goalDirListingCache.delete(root);
+	goalPoolCache.delete(root);
 }
 
 export interface GoalFileContext {
@@ -309,6 +329,13 @@ export function archiveGoalFile(ctx: GoalFileContext, current: GoalRecord): Goal
 
 export function mergeGoalPromptFromDisk(ctx: GoalFileContext, current: GoalRecord): GoalRecord {
 	if (!isSafeActivePath(ctx, current.activePath)) return current;
+	// NAF: the zero-op pool cache is the session view of the parsed goal file
+	// (invalidated on every extension write) — source the objective from it so
+	// the per-turn merge is 0 fs ops. When the cache is empty (cold or just
+	// invalidated by a write), fall back to the mtime-keyed direct parse.
+	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	const cached = goalPoolCache.get(root)?.get(current.id);
+	if (cached) return { ...current, objective: cached.objective };
 	try {
 		const parsed = parseGoalFile(resolveGoalPath(ctx, GOALS_DIR, current.activePath));
 		if (!parsed) return current;
@@ -320,6 +347,17 @@ export function mergeGoalPromptFromDisk(ctx: GoalFileContext, current: GoalRecor
 
 export function readActiveGoalFiles(ctx: GoalFileContext): GoalRecord[] {
 	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	const cachedPool = goalPoolCache.get(root);
+	if (cachedPool) return Array.from(cachedPool.values());
+	const goals = scanActiveGoalFiles(ctx, root);
+	const pool = new Map<string, GoalRecord>();
+	for (const goal of goals) pool.set(goal.id, goal);
+	goalPoolCache.set(root, pool);
+	return goals;
+}
+
+/** Uncached full scan (used when the zero-op pool cache is empty). */
+function scanActiveGoalFiles(ctx: GoalFileContext, root: string): GoalRecord[] {
 	let entries: string[];
 	try {
 		const rootStat = fs.lstatSync(root);
@@ -348,20 +386,34 @@ export function readActiveGoalFiles(ctx: GoalFileContext): GoalRecord[] {
 }
 
 export function readActiveGoalPool(ctx: GoalFileContext): Map<string, GoalRecord> {
+	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	const cachedPool = goalPoolCache.get(root);
+	if (cachedPool) return new Map(cachedPool);
 	const pool = new Map<string, GoalRecord>();
-	for (const goal of readActiveGoalFiles(ctx)) {
+	for (const goal of scanActiveGoalFiles(ctx, root)) {
 		pool.set(goal.id, goal);
 	}
+	goalPoolCache.set(root, pool);
 	return pool;
 }
 
 /**
  * Parallel pool read (P1-7): fs.promises-based readdir + per-file stat/read
  * in parallel, seeding the P1-1 parse cache so subsequent sync reads hit it.
- * Used by session startup rehydration (loadState).
+ * Used by session startup rehydration (loadState). NAF: serves the zero-op
+ * pool cache when present; a cold read populates it so subsequent sync reads
+ * (reconcile, get_goal, prompts) are zero-op.
  */
 export async function readActiveGoalPoolAsync(ctx: GoalFileContext): Promise<Map<string, GoalRecord>> {
 	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	const cachedPool = goalPoolCache.get(root);
+	if (cachedPool) return new Map(cachedPool);
+	const pool = await scanActiveGoalFilesAsync(ctx, root);
+	goalPoolCache.set(root, pool);
+	return pool;
+}
+
+async function scanActiveGoalFilesAsync(ctx: GoalFileContext, root: string): Promise<Map<string, GoalRecord>> {
 	let names: string[];
 	try {
 		const rootStat = await fs.promises.lstat(root);

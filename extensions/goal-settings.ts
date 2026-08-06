@@ -38,17 +38,29 @@ export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
 /**
  * mtime+size-keyed cache for the settings file (P1-1): loadGoalSettings is on
  * the per-turn hot path (before_agent_start, queueContinuation, tool gates,
- * widget render) and previously sync-read the file every call. The cache
- * turns steady-state loads into one statSync per call. saveGoalSettingsFileConfig
- * invalidates the entry it wrote.
+ * widget render) and previously sync-read the file every call.
+ *
+ * NAF (2026-08-06): steady-state loads are now ZERO-op — the cache is served
+ * without any stat. External (non-extension) edits to the settings file go
+ * stale mid-session; every extension write (saveGoalSettingsFileConfig)
+ * invalidates the entry it wrote, so extension-mediated changes are always
+ * observed. Documented nuance in the naf spec PRODUCT.md.
  */
 interface SettingsFileCacheEntry {
-	mtimeMs: number;
-	size: number;
-	config: GoalSettings;
+	/** Missing/malformed file: cached so repeated loads are zero-op too. */
+	missing?: boolean;
+	config?: GoalSettings;
 }
 
 const settingsFileCache = new Map<string, SettingsFileCacheEntry>();
+
+/**
+ * Session boundary (session_start / resume): drop the zero-op settings cache
+ * so a new session always reads the settings file fresh from disk.
+ */
+export function invalidateGoalSettingsCache(): void {
+	settingsFileCache.clear();
+}
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
@@ -137,29 +149,23 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 
 /**
  * Load settings from the file on disk. Returns {} if file missing or invalid.
- * Cached by (resolved path, mtime, size) so steady-state reads are one stat.
+ * Zero-op session cache: the resolved path is read once per process/session
+ * (and after every extension save); steady-state loads do no fs ops.
  */
 export function loadGoalSettingsFileConfig(cwd: string, env?: NodeJS.ProcessEnv): GoalSettings {
 	const configPath = goalSettingsPath(cwd, env);
-	let stat: fs.Stats;
-	try {
-		stat = fs.statSync(configPath);
-	} catch {
-		settingsFileCache.delete(configPath);
-		return {};
-	}
 	const cached = settingsFileCache.get(configPath);
-	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-		return cached.config;
-	}
+	if (cached) return cached.missing ? {} : (cached.config ?? {});
+	let config: GoalSettings;
 	try {
-		const config = parseGoalSettings(JSON.parse(fs.readFileSync(configPath, "utf8")));
-		settingsFileCache.set(configPath, { mtimeMs: stat.mtimeMs, size: stat.size, config });
-		return config;
+		config = parseGoalSettings(JSON.parse(fs.readFileSync(configPath, "utf8")));
 	} catch {
-		// malformed JSON, etc. — use defaults
+		// missing or malformed — cache the empty result so repeated loads are zero-op
+		settingsFileCache.set(configPath, { missing: true });
 		return {};
 	}
+	settingsFileCache.set(configPath, { config });
+	return config;
 }
 
 /**

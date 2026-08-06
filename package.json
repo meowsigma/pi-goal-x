@@ -45,6 +45,8 @@
     "test:selfcheck": "node scripts/run-unit-tests.mjs --selfcheck",
     "bench": "node --import ./experiments/bench/bench-adapter-hooks.mjs --experimental-strip-types ./experiments/bench/run-bench.mjs",
     "bench:gate": "node --experimental-strip-types ./experiments/bench/b6-gate.mjs",
+    "bench:naf": "node --import ./experiments/bench/bench-adapter-hooks.mjs --experimental-strip-types ./experiments/bench/run-bench.mjs",
+    "bench:gate:naf": "node --experimental-strip-types ./experiments/bench/b6-gate.mjs naf",
     "test:e2e": "node scripts/run-unit-tests.mjs e2e"
   },
   "peerDependencies": {

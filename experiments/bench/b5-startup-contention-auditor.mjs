@@ -19,6 +19,8 @@ import {
 	startHarness,
 	focusedFixture,
 	cleanupFixture,
+	beginFsCount,
+	endFsCount,
 } from "./bench-common.mjs";
 import { allowChildProcess, withLatency } from "./guard-state.mjs";
 import { spawnContention } from "./node-child-process.mjs";
@@ -60,30 +62,38 @@ export async function run(baseline) {
 			const core = createGoalCore(makePi(), {});
 			const ctx = makeCtx(cwd);
 			const samples = [];
+			const opSamples = [];
 			for (let i = 0; i < 6; i++) {
+				beginFsCount();
 				const t0 = performance.now();
 				await core.loadState(ctx);
 				samples.push(performance.now() - t0);
+				opSamples.push(endFsCount());
 			}
 			samples.sort((a, b) => a - b);
+			opSamples.sort((a, b) => a - b);
 			const p50 = Math.round(samples[3] * 10) / 10;
 			const p95 = Math.round(samples[5] * 10) / 10;
 			// Slow-storage variant (25ms/op latency injection, P1-7 claim).
 			const latSamples = [];
+			const latOps = [];
 			for (let i = 0; i < 3; i++) {
+				beginFsCount();
 				const t0 = performance.now();
 				await withLatency(25, () => core.loadState(ctx));
 				latSamples.push(performance.now() - t0);
+				latOps.push(endFsCount());
 			}
 			latSamples.sort((a, b) => a - b);
+			latOps.sort((a, b) => a - b);
 			const latP50 = Math.round(latSamples[1] * 10) / 10;
 			baseline.add({
-				id: `B5.startup.${count}g`, label: `session startup loadState (${label}, parallel reads)`,
+				id: `B5.startup.${count}g`, label: `session startup loadState (${label}, parallel reads)`, ops: opSamples[0],
 				modules: "goal-state + storage/goal-files + goal-settings", fixture: `${count} open goals`, n: 6,
 				p50, p95, max: p95, notes: `mean ${Math.round(samples.reduce((a, b) => a + b, 0) / 6 * 10) / 10}ms; P1-7 parallel + cached`,
 			});
 			baseline.add({
-				id: `B5.startup.${count}g.lat25`, label: `session startup loadState (${label}, +25ms/op)`,
+				id: `B5.startup.${count}g.lat25`, label: `session startup loadState (${label}, +25ms/op)`, ops: latOps[0],
 				modules: "goal-state + storage/goal-files + goal-settings", fixture: `${count} open goals`, n: 3,
 				p50: latP50, p95: latP50, max: latP50, latency: "25ms/op",
 				notes: `P1-7 parallel reads amortise the per-op latency`,

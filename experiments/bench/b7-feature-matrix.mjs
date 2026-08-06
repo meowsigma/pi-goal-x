@@ -27,6 +27,13 @@ import { showTaskListOverlay } from "../../extensions/widgets/task-list-overlay.
 import { renderGoalWidgetLines, GoalWidgetComponent } from "../../extensions/widgets/goal-widget.ts";
 import { buildGoalRunningNotification } from "../../extensions/widgets/goal-notifications.ts";
 import { renderGoalEvent } from "../../extensions/goal-format.ts";
+import { appendGoalEvent } from "../../extensions/goal-ledger.ts";
+import { deriveGoalDashboardModel, flattenTaskTree, anchoredScrollOffset, deriveTaskListViewport } from "../../extensions/widgets/goal-dashboard-model.ts";
+import { renderCompactDashboard, renderExpandedDashboard, renderCurrentTaskBlock, renderActivityBlock, renderUnfocusedDashboard, renderAuditorDashboard, renderAuditResultCard } from "../../extensions/widgets/goal-dashboard-renderer.ts";
+import { deriveAuditorDashboardModel, deriveAuditResultCard } from "../../extensions/widgets/auditor-dashboard-model.ts";
+import { deriveTasksFromObjective } from "../../extensions/goal-task-derive.ts";
+import { countAllTasks } from "../../extensions/goal-task-count.ts";
+import { buildGoalStatusText } from "../../extensions/goal-status.ts";
 import { buildTaskSummary, validateTaskListProposal, buildCompletionReport } from "../../extensions/goal-policy.ts";
 import { buildGoalListText, goalSelectorLabel } from "../../extensions/goal-pool.ts";
 import { GoalAccounting, budgetLine, budgetRemaining } from "../../extensions/goal-accounting.ts";
@@ -263,6 +270,90 @@ export async function run(baseline) {
 
 	r = measure(() => unfocusedOpenGoalsPrompt(3), { n: 2000 });
 	baseline.add({ id: "B7.runtime.unfocusedPrompt", label: "unfocusedOpenGoalsPrompt", modules: "prompts/goal-prompts", fixture: "3 open goals", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+	// ── D. unified dashboard (0.24.0) + post-bench non-agent flows ────────
+	// The dashboard model + renderer shipped after the original B7 surface was
+	// built (0.24.0), so these rows close the coverage gap: every renderer and
+	// the hot derivations, at 20- and 50-task tree sizes.
+	{
+		const dcwd = makeFixtureCwd("b7-dash-");
+		try {
+			const dashGoal = makeGoalFiles(dcwd, 1)[0];
+			const nested = (parents, perParent) => {
+				const tasks = [];
+				for (let p = 0; p < parents; p++) {
+					tasks.push({ id: `t${p}`, title: `Dashboard parent task ${p} — descriptive title for width handling`, status: p % 3 === 0 ? "complete" : "pending", ...(p % 3 === 0 ? { evidence: "verified" } : { verificationContract: "verify and confirm the parent" }) });
+					for (let c = 0; c < perParent; c++) {
+						tasks.push({ id: `t${p}.${c}`, parentId: `t${p}`, title: `Subtask ${p}.${c} — child of ${p} with contract text`, status: c % 2 === 0 ? "complete" : "pending", ...(c % 2 === 0 ? { evidence: "verified" } : { verificationContract: "verify and confirm the subtask" }) });
+					}
+				}
+				return tasks;
+			};
+			const tasks20 = nested(5, 3); // 5 parents × 3 children = 20
+			const tasks50 = nested(10, 4); // 10 parents × 4 children = 50
+			dashGoal.taskList = { tasks: tasks20, blockCompletion: true, proposedAt: new Date().toISOString() };
+			dashGoal.currentTaskId = "t1";
+			const dashGoal50 = { ...dashGoal, taskList: { tasks: tasks50, blockCompletion: true, proposedAt: new Date().toISOString() }, currentTaskId: "t1" };
+			// activity feed: events for this specific goal id (makeLedger uses g0..g9)
+			const lctx = { cwd: dcwd };
+			for (let i = 0; i < 12; i++) {
+				appendGoalEvent(lctx, { type: i % 2 ? "task_complete" : "audit_result", goalId: dashGoal.id, taskId: `t${i % 20}`, evidence: "verified", verdict: "approved", report: "all checks passed", at: new Date(Date.UTC(2026, 8, 1) + i * 1000).toISOString() });
+			}
+			const dledger = readGoalLedger({ cwd: dcwd }).events;
+			const dashOpts = { focused: true, otherOpenGoals: 1, ledgerEvents: dledger, activityLimit: 8 };
+
+			r = measure(() => deriveGoalDashboardModel(dashGoal, dashOpts), { n: 100 });
+			baseline.add({ id: "B7.dashboard.model.20t", label: "deriveGoalDashboardModel (20 tasks, 12 events)", modules: "widgets/goal-dashboard-model + goal-activity + goal-core", fixture: "1 goal, 20 tasks, 12 events", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => deriveGoalDashboardModel(dashGoal50, dashOpts), { n: 100 });
+			baseline.add({ id: "B7.dashboard.model.50t", label: "deriveGoalDashboardModel (50 tasks, 12 events)", modules: "widgets/goal-dashboard-model + goal-activity + goal-core", fixture: "1 goal, 50 tasks, 12 events", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			const model20 = deriveGoalDashboardModel(dashGoal, dashOpts);
+			const model50 = deriveGoalDashboardModel(dashGoal50, dashOpts);
+
+			r = measure(() => renderCompactDashboard(model20, theme, 100), { n: 100 });
+			baseline.add({ id: "B7.dashboard.compact.20t", label: "renderCompactDashboard (20 tasks)", modules: "widgets/goal-dashboard-renderer", fixture: "1 goal, 20 tasks", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => renderExpandedDashboard(model20, theme, 100, { rows: 24 }), { n: 100 });
+			baseline.add({ id: "B7.dashboard.expanded.20t", label: "renderExpandedDashboard (20 tasks, 24 rows)", modules: "widgets/goal-dashboard-renderer", fixture: "1 goal, 20 tasks", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => renderExpandedDashboard(model50, theme, 100, { rows: 24 }), { n: 100 });
+			baseline.add({ id: "B7.dashboard.expanded.50t", label: "renderExpandedDashboard (50 tasks, 24 rows)", modules: "widgets/goal-dashboard-renderer", fixture: "1 goal, 50 tasks", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => renderCurrentTaskBlock(model20, theme, 100), { n: 100 });
+			baseline.add({ id: "B7.dashboard.currentTask", label: "renderCurrentTaskBlock (current task)", modules: "widgets/goal-dashboard-renderer", fixture: "1 goal, current task", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => renderActivityBlock(model20.recentActivity, theme, 100), { n: 200 });
+			baseline.add({ id: "B7.dashboard.activity", label: "renderActivityBlock (8 items)", modules: "widgets/goal-dashboard-renderer", fixture: "8 activity items", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => renderUnfocusedDashboard(3, theme, 100), { n: 200 });
+			baseline.add({ id: "B7.dashboard.unfocused", label: "renderUnfocusedDashboard (3 open goals)", modules: "widgets/goal-dashboard-renderer", fixture: "3 open goals", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			const auditorProgress = { phase: "running", label: "benchmark auditor", elapsedMs: 4200, percentage: 40, currentTool: "bash", currentToolArgs: "grep -r foo", recentOutput: ["inspecting files", "found 3 matches", "checking evidence"] };
+			r = measure(() => renderAuditorDashboard(deriveAuditorDashboardModel(auditorProgress, {}), theme, 100), { n: 100 });
+			baseline.add({ id: "B7.dashboard.auditor", label: "deriveAuditorDashboardModel + renderAuditorDashboard (running)", modules: "widgets/auditor-dashboard-model + widgets/goal-dashboard-renderer", fixture: "running audit", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => renderAuditResultCard(deriveAuditResultCard("disapproved", "Evidence missing for task t2; objective not fully met."), theme, 100), { n: 200 });
+			baseline.add({ id: "B7.dashboard.auditCard", label: "deriveAuditResultCard + renderAuditResultCard", modules: "widgets/auditor-dashboard-model + widgets/goal-dashboard-renderer", fixture: "disapproved verdict", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => { const nodes = flattenTaskTree(tasks50, "t1"); return anchoredScrollOffset(nodes, 24); }, { n: 500 });
+			baseline.add({ id: "B7.dashboard.anchoredScroll.50t", label: "flatten + anchoredScrollOffset (50 tasks)", modules: "widgets/goal-dashboard-model", fixture: "50-task tree", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => deriveTaskListViewport(50, 24, 7), { n: 2000 });
+			baseline.add({ id: "B7.dashboard.viewport", label: "deriveTaskListViewport (50 rows, 24 visible, offset 7)", modules: "widgets/goal-dashboard-model", fixture: "viewport math", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => buildGoalStatusText({ goal: dashGoal, focused: true, otherOpenGoals: 1, ledgerEvents: dledger }), { n: 100 });
+			baseline.add({ id: "B7.dashboard.statusText", label: "buildGoalStatusText standard (20 tasks)", modules: "goal-status + widgets/goal-dashboard-*", fixture: "1 goal, 20 tasks, 12 events", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => deriveTasksFromObjective("Checklist:\n- [ ] first step\n- [x] second step\n- [ ] third step with more text to parse\n- [ ] fourth step\n- [ ] fifth step with trailing detail"), { n: 500 });
+			baseline.add({ id: "B7.dashboard.deriveTasks", label: "deriveTasksFromObjective (5 markers)", modules: "goal-task-derive", fixture: "objective with 5 checklist markers", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+
+			r = measure(() => countAllTasks(tasks50), { n: 500 });
+			baseline.add({ id: "B7.dashboard.taskCount", label: "countAllTasks (50 tasks)", modules: "goal-task-count", fixture: "50-task tree", n: r.n, p50: r.p50, p95: r.p95, max: r.max, notes: `mean ${r.mean}ms` });
+		} finally {
+			cleanupFixture(dcwd);
+		}
+	}
 
 	return baseline;
 }

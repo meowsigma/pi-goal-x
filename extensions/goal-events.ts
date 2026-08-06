@@ -12,14 +12,14 @@ import {
 	isToolUseAssistantMessage,
 } from "./goal-format.ts";
 import { buildCompactionSummary } from "./goal-compaction.ts";
-import { latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
+import { latestAuditorResultForGoal, readGoalLedger, invalidateGoalLedgerCache } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
 import { formatTokenValue } from "./goal-core.ts";
-import { loadGoalSettings } from "./goal-settings.ts";
+import { loadGoalSettings, invalidateGoalSettingsCache } from "./goal-settings.ts";
 import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
 import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
 import { goalSelectorLabel } from "./goal-pool.ts";
-import {
+import { invalidateGoalPoolCache } from "./storage/goal-files.ts";import {
 	goalPrompt,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
@@ -229,6 +229,12 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// NAF: the zero-op read caches are session-scoped — a new session always
+		// re-reads settings/pool/ledger fresh from disk (cross-process and
+		// hand-edited changes are picked up at the session boundary).
+		invalidateGoalSettingsCache();
+		invalidateGoalPoolCache();
+		invalidateGoalLedgerCache();
 		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		await core.loadState(ctx);
 		core.installGoalToolProfile(!loadGoalSettings(ctx.cwd).disableTasks);

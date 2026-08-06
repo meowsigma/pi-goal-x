@@ -26,8 +26,14 @@ export interface GoalLock {
 // write now fails fast with a typed error instead of blocking the TUI for the
 // old 100×25ms ≈ 2.5s worst case; the optimistic revision check (goal-service)
 // is the real guard against concurrent writers.
+//
+// NAF (2026-08-06): the default window drops to 8×1ms ≈ 8ms of sleep (+ the
+// per-attempt staleness check ≈ 8ms) — 10x+ smaller main-thread block under
+// long contention. Brief contention (<10ms) still succeeds; long-held locks
+// fail fast and the caller defers the write (P1-3 turn buffer / persist-skip),
+// so the TUI never freezes on a busy lock.
 const DEFAULT_ACQUIRE_ATTEMPTS = 8;
-const DEFAULT_RETRY_MS = 25;
+const DEFAULT_RETRY_MS = 1;
 const DEFAULT_STALE_TTL_MS = 30_000;
 
 function safeLockName(goalId: string): string {

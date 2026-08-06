@@ -73,181 +73,62 @@ export type GoalLedgerAppendResult = { ok: true } | { ok: false; error: unknown 
  * both append attempts internally: the authoritative state write is never
  * rolled back after a ledger failure, but callers (GoalService) route failures
  * through the onDiagnostic hook so they stay observable.
+ *
+ * NAF: after a successful append the in-memory ledger cache is extended with
+ * the same event (sanitized), so the next readGoalLedger is zero-op and
+ * always current for extension-mediated writes.
  */
 export function appendGoalEvent(ctx: GoalLedgerContext, event: GoalLedgerEvent): GoalLedgerAppendResult {
-  const filePath = goalLedgerPath(ctx);
-  const dir = path.dirname(filePath);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch (err) {
-    return { ok: false, error: err };
-  }
-
-  const line = JSON.stringify(event) + "\n";
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  let appended = false;
-  try {
-    fs.writeFileSync(tempPath, line, { flag: "wx", encoding: "utf8" });
-    fs.appendFileSync(filePath, fs.readFileSync(tempPath, "utf8"), "utf8");
-    appended = true;
-  } catch (err) {
-    // If temp write fails, try direct append as fallback.
-    if (!appended) {
-      try {
-        fs.appendFileSync(filePath, line, "utf8");
-        appended = true;
-      } catch (fallbackErr) {
-        try {
-          fs.unlinkSync(tempPath);
-        } catch {
-          // Temp file may not exist; ignore cleanup failure.
-        }
-        return { ok: false, error: fallbackErr };
-      }
-    }
-  } finally {
-    if (appended) {
-      try {
-        fs.unlinkSync(tempPath);
-      } catch {
-        // Temp file may not exist; ignore cleanup failure.
-      }
-    }
-  }
-  return { ok: true };
+  const result = appendLedgerLines(ctx, [event]);
+  return result;
 }
 
 /**
  * Append several ledger events as one line block with the existing
  * temp-write→read→append durability (P1-8): one mkdir, one temp write, one
- * append, one unlink instead of N× the same sequence.
+ * append, one unlink instead of N× the same sequence. NAF: extends the
+ * in-memory ledger cache in one step too.
  */
 export function appendGoalEvents(ctx: GoalLedgerContext, events: GoalLedgerEvent[]): GoalLedgerAppendResult {
   if (events.length === 0) return { ok: true };
+  return appendLedgerLines(ctx, events);
+}
+
+function appendLedgerLines(ctx: GoalLedgerContext, events: GoalLedgerEvent[]): GoalLedgerAppendResult {
   const filePath = goalLedgerPath(ctx);
   const dir = path.dirname(filePath);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch (err) {
-    return { ok: false, error: err };
+  // NAF: per-dir memo — mkdir once per directory per process; steady-state
+  // appends skip it entirely (0 ops for the dir).
+  if (!ledgerDirsKnown.has(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      ledgerDirsKnown.add(dir);
+    } catch (err) {
+      return { ok: false, error: err };
+    }
   }
 
   const lines = events.map((event) => JSON.stringify(event) + "\n").join("");
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  let appended = false;
+  // NAF: direct O_APPEND write (one op) instead of the temp-write→read→append
+  // dance — a single JSONL line (or one batched block) is appended atomically
+  // by the OS; torn-line handling lives in the reader, not here.
   try {
-    fs.writeFileSync(tempPath, lines, { flag: "wx", encoding: "utf8" });
-    fs.appendFileSync(filePath, fs.readFileSync(tempPath, "utf8"), "utf8");
-    appended = true;
+    fs.appendFileSync(filePath, lines, "utf8");
   } catch (err) {
-    // If temp write fails, try direct append as fallback.
-    if (!appended) {
-      try {
-        fs.appendFileSync(filePath, lines, "utf8");
-        appended = true;
-      } catch (fallbackErr) {
-        try {
-          fs.unlinkSync(tempPath);
-        } catch {
-          // Temp file may not exist; ignore cleanup failure.
-        }
-        return { ok: false, error: fallbackErr };
-      }
-    }
-  } finally {
-    if (appended) {
-      try {
-        fs.unlinkSync(tempPath);
-      } catch {
-        // Temp file may not exist; ignore cleanup failure.
-      }
-    }
+    return { ok: false, error: err };
   }
+  extendLedgerCache(filePath, lines, events);
   return { ok: true };
 }
 
-export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
-  const filePath = goalLedgerPath(ctx);
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(filePath);
-  } catch {
-    ledgerCache.delete(filePath);
-    return { events: [], malformed: 0 };
-  }
-  const cached = ledgerCache.get(filePath);
-  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
-    // Unchanged on disk: O(1) — one statSync, no read, no parse (P1-2).
-    return { events: cached.events, malformed: cached.malformed };
-  }
-
-  let content: string;
-  try {
-    content = fs.readFileSync(filePath, "utf8");
-  } catch {
-    // Read failure: serve the last known-good cache rather than failing.
-    return cached ? { events: cached.events, malformed: cached.malformed } : { events: [], malformed: 0 };
-  }
-
-  // Parse only the tail we have not parsed yet. `chars` is a monotonic
-  // character offset into the file; truncation/rewrite (content shorter than
-  // the cached offset) falls back to a full parse.
-  const base = cached && content.length >= cached.chars ? cached : null;
-  const tail = base ? content.slice(base.chars) : content;
-
-  let parseText: string;
-  let consumedChars: number;
-  if (base) {
-    // Tail read: advance only past COMPLETE lines (ending in \n). A torn
-    // final line (another process appending concurrently) stays unparsed so
-    // the next read re-parses it instead of losing the event.
-    const nl = tail.lastIndexOf("\n");
-    if (nl === -1) {
-      parseText = "";
-      consumedChars = 0;
-    } else {
-      parseText = tail.slice(0, nl + 1);
-      consumedChars = nl + 1;
-    }
-  } else {
-    parseText = tail;
-    consumedChars = tail.length;
-  }
-
-  const newEvents: GoalLedgerEvent[] = [];
-  let newMalformed = 0;
-  for (const line of parseText.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (isValidLedgerEvent(parsed)) {
-        newEvents.push(sanitizeEvent(parsed));
-      } else {
-        newMalformed++;
-      }
-    } catch {
-      newMalformed++;
-    }
-  }
-
-  const events = base ? [...base.events, ...newEvents] : newEvents;
-  const malformed = (base?.malformed ?? 0) + newMalformed;
-  ledgerCache.set(filePath, {
-    size: stat.size,
-    mtimeMs: stat.mtimeMs,
-    chars: (base?.chars ?? 0) + consumedChars,
-    events,
-    malformed,
-  });
-  return { events, malformed };
-}
+/** Directories whose ledger file exists (per-dir mkdir memo). */
+const ledgerDirsKnown = new Set<string>();
 
 /**
- * Incremental ledger tail cache (P1-2): keyed by (size, mtimeMs) with a
- * monotonic character offset. Steady-state reads are one statSync; appends
- * parse only the appended bytes; truncation/rewrite falls back to a full
- * parse automatically.
+ * Zero-op ledger cache (NAF 2026-08-06): keyed by absolute ledger path.
+ * Steady-state reads serve the cache with no fs ops; appendGoalEvent(s)
+ * extend it in memory (see extendLedgerCache). External (non-extension)
+ * edits to the ledger go stale mid-session (documented in the naf spec).
  */
 interface LedgerCacheEntry {
   size: number;
@@ -258,6 +139,71 @@ interface LedgerCacheEntry {
 }
 
 const ledgerCache = new Map<string, LedgerCacheEntry>();
+
+/**
+ * Session boundary (session_start / resume): drop the zero-op ledger cache so
+ * a new session re-reads the ledger fresh from disk.
+ */
+export function invalidateGoalLedgerCache(): void {
+	ledgerCache.clear();
+}
+
+/** Keep the zero-op ledger cache in sync with an in-process append (no fs ops). */
+function extendLedgerCache(filePath: string, lines: string, events: GoalLedgerEvent[]): void {
+  const cached = ledgerCache.get(filePath);
+  if (!cached) return;
+  const sanitized: GoalLedgerEvent[] = [];
+  for (const event of events) sanitized.push(sanitizeEvent(event));
+  ledgerCache.set(filePath, {
+    size: cached.size + lines.length,
+    mtimeMs: cached.mtimeMs,
+    chars: cached.chars + lines.length,
+    events: [...cached.events, ...sanitized],
+    malformed: cached.malformed,
+  });
+}
+
+export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
+  const filePath = goalLedgerPath(ctx);
+  const cached = ledgerCache.get(filePath);
+  if (cached) {
+    // NAF zero-op steady state: no stat, no read, no parse. The cache is kept
+    // current by extendLedgerCache on every in-process append; external
+    // (non-extension) edits to the ledger go stale mid-session (documented).
+    return { events: cached.events, malformed: cached.malformed };
+  }
+  return readGoalLedgerCold(ctx, filePath);
+}
+
+/** Cold read: full file read + parse, populating the zero-op cache. */
+function readGoalLedgerCold(ctx: GoalLedgerContext, filePath: string): GoalLedgerReadResult {
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, "utf8");
+  } catch {
+    // Missing or unreadable: cache the empty result so repeated reads are zero-op.
+    ledgerCache.set(filePath, { size: 0, mtimeMs: 0, chars: 0, events: [], malformed: 0 });
+    return { events: [], malformed: 0 };
+  }
+  const events: GoalLedgerEvent[] = [];
+  let malformed = 0;
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (isValidLedgerEvent(parsed)) {
+        events.push(sanitizeEvent(parsed));
+      } else {
+        malformed++;
+      }
+    } catch {
+      malformed++;
+    }
+  }
+  ledgerCache.set(filePath, { size: content.length, mtimeMs: 0, chars: content.length, events, malformed });
+  return { events, malformed };
+}
 
 function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -372,6 +318,12 @@ export function reconstructGoalLedger(events: GoalLedgerEvent[]): ReconstructedL
   const goals = new Map<string, ReconstructedGoalState>();
   const terminalGoals = new Map<string, ReconstructedGoalState>();
   let focusedGoalId: string | null = null;
+  // NAF: generation-based focus tracking — a focus event bumps a counter and
+  // records the generation on the focused goal (O(1)) instead of clearing
+  // every goal's flag (O(goals) per focus event, quadratic on focus-dense
+  // ledgers). latestFocus is materialized once at the end.
+  let focusGeneration = 0;
+  const focusGenByGoal = new Map<string, number>();
 
   for (const event of events) {
     switch (event.type) {
@@ -387,16 +339,14 @@ export function reconstructGoalLedger(events: GoalLedgerEvent[]): ReconstructedL
       }
       case "goal_focused": {
         focusedGoalId = event.goalId;
-        for (const g of goals.values()) g.latestFocus = false;
-        for (const g of terminalGoals.values()) g.latestFocus = false;
+        focusGeneration++;
         const state = goals.get(event.goalId) ?? terminalGoals.get(event.goalId);
-        if (state) state.latestFocus = true;
+        if (state) focusGenByGoal.set(event.goalId, focusGeneration);
         break;
       }
       case "goal_unfocused": {
         focusedGoalId = null;
-        for (const g of goals.values()) g.latestFocus = false;
-        for (const g of terminalGoals.values()) g.latestFocus = false;
+        focusGeneration++;
         break;
       }
       case "goal_paused": {
@@ -464,6 +414,10 @@ export function reconstructGoalLedger(events: GoalLedgerEvent[]): ReconstructedL
       }
     }
   }
+
+  // Materialize the generation-based focus flags (O(goals) once, not per event).
+  for (const g of goals.values()) g.latestFocus = focusGenByGoal.get(g.goalId) === focusGeneration;
+  for (const g of terminalGoals.values()) g.latestFocus = focusGenByGoal.get(g.goalId) === focusGeneration;
 
   // If the focused goal was moved to terminal (e.g., aborted/completed), clear focus.
   if (focusedGoalId && !goals.has(focusedGoalId)) {

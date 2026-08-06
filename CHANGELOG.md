@@ -10,7 +10,36 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [Unreleased]
 
-## [0.24.0] — 2026-08-06
+### Changed (performance — non-agent flows ≥10x on most hot paths)
+
+- Zero-op write-through session caches for settings, the goal pool, and the
+  ledger: steady-state per-turn reads no longer touch disk at all (previously
+  stat+read per call). Caches are invalidated by every extension write and
+  reset at the session boundary, so all extension-mediated changes are always
+  observed; the lock + revision check still guards cross-process writes.
+- Ledger appends are direct O_APPEND writes with a per-directory mkdir memo
+  (was temp-write→read→append→unlink per event; batched appends are one
+  write). `appendGoalEvents` keeps the in-memory ledger cache current.
+- Lock acquisition default window shrinks to ~10ms (was ~200ms): contended
+  writes fail fast and the caller defers via the turn buffer instead of
+  freezing the TUI.
+- Ledger reconstruction uses generation-based focus tracking (O(1) per focus
+  event instead of clearing every goal's flag — quadratic on focus-dense
+  ledgers).
+- Prompt task-list block compaction (formatting-only; pending task + contract
+  on one line).
+
+### Benchmarks
+
+- Agent-free harness extended to the 0.24.0 unified-dashboard surface
+  (15 new rows) and campaign-isolated before/after baselines
+  (`experiments/bench/campaigns.mjs`; `npm run bench:naf`, `bench:gate:naf`,
+  `classify.mjs`, `diff-bench.mjs`). Headline after numbers on this machine:
+  pool scan @25ms/op 1.6s→0, settings load 33→0ms, per-turn reads 13→0 fs
+  ops, startup 104→0 fs ops, lock contention 245→~17ms, ledger
+  reconstruction 6.4→0.6ms @10k events, 4-event ledger append 20→1 fs op.
+
+
 
 ### Added
 

@@ -34,15 +34,11 @@ type RenderColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error
 const H = "─";
 const V = "│";
 
-/** Outer box frame: light steel gray-blue (mdLink) — clearly lighter than the
- * interior rules and in the same hue family as pi's own borders. */
+/** Box chrome: the entire frame — corners, top/bottom dashes, left/right
+ * edges and interior rules — is one tone: light steel gray-blue (mdLink).
+ * Only the content inside is colour-coded. */
 function frame(theme: Theme, value: string): string {
 	return theme.fg("mdLink", value);
-}
-
-/** Interior rules: theme gray (muted) — subtle hierarchy inside the frame. */
-function border(theme: Theme, value: string): string {
-	return theme.fg("muted", value);
 }
 
 function fit(value: string, width: number): string {
@@ -51,8 +47,8 @@ function fit(value: string, width: number): string {
 
 function boxHeader(theme: Theme, width: number, left: string, right = ""): string {
 	const inner = Math.max(4, width - 2);
-	// The leading/trailing dashes belong to the frame, so they carry the same
-	// color as the fill; only the corners stay plain.
+	// One-tone frame line: corners, leading/trailing dashes and fill all carry
+	// the frame color; only the brand inside stays accent.
 	const l = `${frame(theme, H)} ${left}`;
 	const r = right ? ` ${right} ${frame(theme, H)}` : "";
 	const fixed = visibleWidth(l) + visibleWidth(r);
@@ -61,41 +57,41 @@ function boxHeader(theme: Theme, width: number, left: string, right = ""): strin
 		const budget = Math.max(4, inner - visibleWidth(r) - 4);
 		const l2 = `${frame(theme, H)} ${fit(left, budget)}`;
 		const fill = Math.max(1, inner - visibleWidth(l2) - visibleWidth(r));
-		return `╭${l2}${frame(theme, H.repeat(fill))}${r}╮`;
+		return `${frame(theme, "╭")}${l2}${frame(theme, H.repeat(fill))}${r}${frame(theme, "╮")}`;
 	}
 	const fill = Math.max(1, inner - fixed);
-	return `╭${l}${frame(theme, H.repeat(fill))}${r}╮`;
+	return `${frame(theme, "╭")}${l}${frame(theme, H.repeat(fill))}${r}${frame(theme, "╮")}`;
 }
 
 function boxLine(theme: Theme, width: number, content: string): string {
 	const inner = Math.max(2, width - 2);
 	const contentFit = fit(content, inner - 1);
 	const pad = Math.max(0, inner - 1 - visibleWidth(contentFit));
-	return `${V} ${contentFit}${" ".repeat(pad)}${V}`;
+	return `${frame(theme, V)} ${contentFit}${" ".repeat(pad)}${frame(theme, V)}`;
 }
 
 function boxRule(theme: Theme, width: number): string {
-	return `├${border(theme, H.repeat(Math.max(1, width - 2)))}┤`;
+	return frame(theme, `├${H.repeat(Math.max(1, width - 2))}┤`);
 }
 
 /** Section separator with a label: `├─ Tasks ──────────┤` (§5.1). */
 function boxSectionRule(theme: Theme, width: number, label: string): string {
 	const inner = Math.max(4, width - 2);
-	const left = border(theme, `${H} ${label} `);
+	const left = frame(theme, `${H} ${label} `);
 	const fill = Math.max(1, inner - visibleWidth(left));
-	return `├${left}${border(theme, H.repeat(fill))}┤`;
+	return `${frame(theme, "├")}${left}${frame(theme, H.repeat(fill))}${frame(theme, "┤")}`;
 }
 
 function boxFooter(theme: Theme, width: number, content: string): string {
 	const inner = Math.max(4, width - 2);
 	if (!content) {
-		return `╰${frame(theme, H.repeat(inner))}╯`;
+		return frame(theme, `╰${H.repeat(inner)}╯`);
 	}
 	// The footer is one frame tone: leading dash, hint text and trailing fill
 	// all carry the frame color, so the blue-gray spans the whole line.
 	const l = frame(theme, `${H} ${fit(content, inner - 4)}`);
 	const fill = Math.max(1, inner - visibleWidth(l));
-	return `╰${l}${frame(theme, H.repeat(fill))}╯`;
+	return `${frame(theme, "╰")}${l}${frame(theme, H.repeat(fill))}${frame(theme, "╯")}`;
 }
 
 // ── §5.2 status symbols / colors ────────────────────────────────────────────

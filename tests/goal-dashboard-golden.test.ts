@@ -201,11 +201,16 @@ test("palette: one-tone frame lines, gray rules, muted percentage, colour-coded 
 	renderExpandedDashboard(model, colorTheme, 100);
 	const byColor = (c: string) => captured.filter(([col]) => col === c).map(([, v]) => v);
 	const mdLink = byColor("mdLink");
-	// The outer frame is a light steel gray-blue (mdLink); interior rules stay
-	// the theme's gray (muted); the old dark border token is gone.
+	// The chrome is ONE tone: corners, top/bottom dashes, left/right edges
+	// and interior rules all carry the same light steel gray-blue (mdLink).
 	assert.ok(mdLink.some((v) => /^─+$/.test(v)), "outer frame fill is light (mdLink)");
+	assert.ok(mdLink.includes("│"), "vertical edges are frame-colored (mdLink)");
+	for (const glyph of ["╭", "╮", "├", "┤", "╰", "╯"]) {
+		assert.ok(mdLink.includes(glyph), `${glyph} corner is frame-colored`);
+	}
 	assert.equal(byColor("borderMuted").length, 0, "the dark borderMuted token is not used");
-	assert.ok(byColor("muted").some((v) => /^─+$/.test(v)), "interior rule fills use the theme gray (muted)");
+	assert.equal(byColor("muted").some((v) => /^─+$/.test(v)), false, "no muted dashes: the rules share the frame color");
+	assert.ok(mdLink.some((v) => v === "─ Tasks "), "section-rule label is part of the frame tone");
 	// Frame lines are one tone: the blue-gray must appear on BOTH the left
 	// and the right of every frame line (regression: it used to read muted on
 	// one side and mdLink on the other).
@@ -214,7 +219,6 @@ test("palette: one-tone frame lines, gray rules, muted percentage, colour-coded 
 	assert.equal(byColor("muted").some((v) => v.includes("Ctrl+Shift+T")), false, "footer hint no longer muted");
 	assert.ok(mdLink.some((v) => v.includes("12m47s")), "header usage meta is frame-colored");
 	assert.ok(mdLink.some((v) => v.includes("Add CSV export to reports")), "header title is frame-colored");
-	assert.ok(byColor("muted").some((v) => v === "─ Tasks "), "section-rule label is part of the muted rule");
 	// Task markers are colour-coded pastel: pending amber, complete green, skipped gray.
 	assert.ok(byColor("mdHeading").includes("·"), "pending marker is pastel amber");
 	assert.ok(byColor("success").includes("✓"), "complete marker is muted green");

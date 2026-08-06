@@ -52,9 +52,9 @@ Compact rows, in order:
    column, truncated amber titles, and a `… +N more` overflow line when the
    list is longer than the row budget (5 rows at wide, 4 medium, 3 narrow, 2
    minimal). The current task is fully highlighted in the theme's accent
-   color (marker, id, title). The outer box frame is drawn in the theme's
-   light steel gray-blue (`mdLink`) with interior rules in the theme's gray
-   (`muted`).
+   color (marker, id, title). The whole box chrome — top/bottom frame,
+   left/right edges, corners and interior rules — is drawn in one tone: the
+   theme's light steel gray-blue (`mdLink`).
 6. Current task: `Current  t3 · Add the download button` (id and title in the
    accent color).
 7. Current-task subtask progress (`2/3 · 67%`) when the current task has

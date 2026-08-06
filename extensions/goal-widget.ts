@@ -128,16 +128,13 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			}
 			// §10: Escape collapses the expanded dashboard before it can pause the
 			// goal; Ctrl+Shift+T toggles compact/expanded (§19.5). While the
-			// compact widget holds scroll focus, Escape disengages it instead of
-			// pausing; ↑/↓/PgUp/PgDn/Home/End scroll the focused dashboard
-			// (expanded, or compact while scroll focus is engaged). Editor
-			// keybindings are untouched whenever the dashboard is not focused.
+			// expanded dashboard is open it owns the plain arrow keys; the
+			// compact widget scrolls with Ctrl+Shift chords that pi never binds
+			// (the editor owns ↑/↓/PgUp/PgDn), so no focus state is needed and
+			// editor keybindings are untouched whenever the dashboard is not
+			// focused.
 			if (matchesKey(data, "escape") && core.isDashboardExpanded()) {
 				core.toggleDashboardExpanded();
-				return { consume: true };
-			}
-			if (matchesKey(data, "escape") && core.goalWidgetComponentRef?.current?.isCompactScrollFocusActive()) {
-				core.goalWidgetComponentRef.current.clearScrollFocus();
 				return { consume: true };
 			}
 			if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
@@ -149,23 +146,23 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// expanded task views (the task-list overlay is merged into the
 			// dashboard; §10).
 			if (matchesKey(data, "ctrl+shift+t")) {
-				core.goalWidgetComponentRef?.current?.clearScrollFocus();
 				core.toggleDashboardExpanded();
 				return { consume: true };
 			}
 
-			// F6 — engage/disengage compact scroll focus so ↑/↓/PgUp/PgDn scroll
-			// the compact task list without touching editor navigation (§9.6).
-			if (matchesKey(data, "f6") && !core.isDashboardExpanded()) {
-				core.goalWidgetComponentRef?.current?.toggleCompactScrollFocus();
-				return { consume: true };
-			}
-
-			// Navigation keys scroll the focused dashboard (expanded, or compact
-			// while scroll focus is engaged).
+			// Navigation keys: plain arrows scroll the expanded dashboard (it is
+			// modal while open); Ctrl+Shift+↑/↓/PgUp/PgDn/Home/End scroll the
+			// compact task list — free chords, consumed only when the compact
+			// list overflows (§9.6).
 			if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown") || matchesKey(data, "home") || matchesKey(data, "end")) {
 				const key = matchesKey(data, "up") ? "up" : matchesKey(data, "down") ? "down" : matchesKey(data, "pageUp") ? "pageUp" : matchesKey(data, "pageDown") ? "pageDown" : matchesKey(data, "home") ? "home" : "end";
 				if (core.goalWidgetComponentRef?.current?.handleNavigationKey(key)) {
+					return { consume: true };
+				}
+			}
+			if (matchesKey(data, "ctrl+shift+up") || matchesKey(data, "ctrl+shift+down") || matchesKey(data, "ctrl+shift+pageUp") || matchesKey(data, "ctrl+shift+pageDown") || matchesKey(data, "ctrl+shift+home") || matchesKey(data, "ctrl+shift+end")) {
+				const key = matchesKey(data, "ctrl+shift+up") ? "up" : matchesKey(data, "ctrl+shift+down") ? "down" : matchesKey(data, "ctrl+shift+pageUp") ? "pageUp" : matchesKey(data, "ctrl+shift+pageDown") ? "pageDown" : matchesKey(data, "ctrl+shift+home") ? "home" : "end";
+				if (core.goalWidgetComponentRef?.current?.handleCompactScrollKey(key)) {
 					return { consume: true };
 				}
 			}

@@ -190,7 +190,7 @@ export function renderAuditResultCardView(
 	return renderAuditResultCard(deriveAuditResultCard(view.verdict, view.report), theme, width);
 }
 
-export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean; ledgerEvents?: GoalLedgerEvent[]; expanded?: boolean; debug?: boolean; model?: GoalDashboardModel | null; compactScrollOffset?: number; expandedScrollOffset?: number; expandedTaskRows?: number; scrollFocus?: boolean } = {}): string[] {
+export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean; ledgerEvents?: GoalLedgerEvent[]; expanded?: boolean; debug?: boolean; model?: GoalDashboardModel | null; compactScrollOffset?: number; expandedScrollOffset?: number; expandedTaskRows?: number } = {}): string[] {
 	// When auditor progress is active, show the structured audit dashboard
 	// instead of the normal goal widget (§15.3).
 	if (options.auditorProgress) {
@@ -214,7 +214,7 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	if (!model) return [];
 	const lines = options.expanded
 		? renderExpandedDashboard(model, theme, safeWidth, { scrollOffset: options.expandedScrollOffset, rows: options.expandedTaskRows })
-		: renderCompactDashboard(model, theme, safeWidth, { scrollOffset: options.compactScrollOffset, scrollFocus: options.scrollFocus });
+		: renderCompactDashboard(model, theme, safeWidth, { scrollOffset: options.compactScrollOffset });
 	return clampLinesToWidth(lines, width);
 }
 
@@ -236,7 +236,6 @@ export class GoalWidgetComponent implements Component {
 	// bookkeeping (a new completion re-anchors to the latest completed task).
 	private compactScrollOffset = 0;
 	private expandedScrollOffset = 0;
-	private compactScrollFocus = false;
 	private lastRenderWidth = 100;
 	private lastSeenGoalId: string | undefined;
 	private lastSeenLatestCompletedAt: string | undefined;
@@ -345,7 +344,6 @@ export class GoalWidgetComponent implements Component {
 			compactScrollOffset: this.compactScrollOffset,
 			expandedScrollOffset: this.expandedScrollOffset,
 			expandedTaskRows: expandedTaskViewportRows(this.lastRenderWidth),
-			scrollFocus: this.compactScrollFocus,
 		});
 		if (this.getDebugMode()) {
 			lines.push(...this.renderDebugPanel(width));
@@ -376,54 +374,48 @@ export class GoalWidgetComponent implements Component {
 		this.expandedScrollOffset = anchoredScrollOffset(model.taskTree, expandedTaskViewportRows(this.lastRenderWidth));
 	}
 
-	/** Whether the compact widget currently holds scroll focus (F6). */
-	isCompactScrollFocusActive(): boolean {
-		return this.compactScrollFocus;
-	}
-
 	/**
-	 * Toggle compact scroll focus (F6). Engages only when a compact task list
-	 * with overflow is visible; returns the new focus state.
+	 * Scroll the compact task list with a Ctrl+Shift chord (§9.6). The chords
+	 * are free in pi (the editor owns the plain arrows), so no focus state is
+	 * needed — but they are consumed only when the compact list actually
+	 * overflows its viewport, so they never swallow keystrokes for a short
+	 * list. Returns true when the key was consumed.
 	 */
-	toggleCompactScrollFocus(): boolean {
-		const goal = this.getGoal();
+	handleCompactScrollKey(key: "up" | "down" | "pageUp" | "pageDown" | "home" | "end"): boolean {
 		const settings = this.getSettings();
+		const goal = this.getGoal();
 		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
 			focused: true,
 			otherOpenGoals: Math.max(0, this.getOpenGoalCount() - 1),
 			ledgerEvents: this.getLedgerEvents(),
 			tasksDisabled: settings.disableTasks === true,
 		}) : null;
-		const topLevel = model?.taskTree.filter((n) => n.depth === 0) ?? [];
+		const list = model?.taskTree.filter((n) => n.depth === 0) ?? [];
 		const rows = compactTaskViewportRows(this.lastRenderWidth);
-		if (topLevel.length <= rows) {
-			this.compactScrollFocus = false;
-			return false;
-		}
-		this.compactScrollFocus = !this.compactScrollFocus;
-		if (!this.compactScrollFocus) this.compactScrollOffset = anchoredScrollOffset(topLevel, rows);
+		if (list.length <= rows) return false;
+		let offset = clampScrollOffset(this.compactScrollOffset, list.length, rows);
+		if (key === "up") offset -= 1;
+		else if (key === "down") offset += 1;
+		else if (key === "pageUp") offset -= taskViewportPageSize(rows);
+		else if (key === "pageDown") offset += taskViewportPageSize(rows);
+		else if (key === "home") offset = 0;
+		else if (key === "end") offset = maxScrollOffset(list.length, rows);
+		offset = clampScrollOffset(offset, list.length, rows);
+		this.compactScrollOffset = offset;
 		this.tui.requestRender();
-		return this.compactScrollFocus;
-	}
-
-	/** Drop compact scroll focus (Esc while engaged, or expanding). */
-	clearScrollFocus(): void {
-		if (!this.compactScrollFocus) return;
-		this.compactScrollFocus = false;
-		this.tui.requestRender();
+		return true;
 	}
 
 	/**
-	 * Handle a navigation key for the focused dashboard. Returns true when the
-	 * key was consumed (dashboard focused and a scrollable list exists). The
-	 * expanded dashboard is always focused; the compact widget only while
-	 * scroll focus is engaged. Clamps at both ends; Home/End jump to the
-	 * edges; PgUp/PgDn page by one viewport.
+	 * Handle a navigation key for the expanded dashboard. The expanded
+	 * dashboard is modal — while it is open it owns the arrow keys (like the
+	 * session tree or model selector), so plain ↑/↓/PgUp/PgDn scroll the task
+	 * tree and Esc collapses. Returns true when the key was consumed.
+	 * Clamps at both ends; Home/End jump to the edges; PgUp/PgDn page by one
+	 * viewport.
 	 */
 	handleNavigationKey(key: "up" | "down" | "pageUp" | "pageDown" | "home" | "end"): boolean {
-		const expanded = this.getExpanded();
-		const focused = expanded || this.compactScrollFocus;
-		if (!focused) return false;
+		if (!this.getExpanded()) return false;
 		const settings = this.getSettings();
 		const goal = this.getGoal();
 		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
@@ -432,16 +424,12 @@ export class GoalWidgetComponent implements Component {
 			ledgerEvents: this.getLedgerEvents(),
 			tasksDisabled: settings.disableTasks === true,
 		}) : null;
-		const list = expanded
-			? model?.taskTree ?? []
-			: model?.taskTree.filter((n) => n.depth === 0) ?? [];
+		const list = model?.taskTree ?? [];
 		if (list.length === 0) return false;
-		const rows = expanded
-			? expandedTaskViewportRows(this.lastRenderWidth)
-			: compactTaskViewportRows(this.lastRenderWidth);
+		const rows = expandedTaskViewportRows(this.lastRenderWidth);
 		const maxO = maxScrollOffset(list.length, rows);
 		if (maxO <= 0) return false;
-		let offset = expanded ? this.expandedScrollOffset : this.compactScrollOffset;
+		let offset = clampScrollOffset(this.expandedScrollOffset, list.length, rows);
 		if (key === "up") offset -= 1;
 		else if (key === "down") offset += 1;
 		else if (key === "pageUp") offset -= taskViewportPageSize(rows);
@@ -449,8 +437,7 @@ export class GoalWidgetComponent implements Component {
 		else if (key === "home") offset = 0;
 		else if (key === "end") offset = maxO;
 		offset = clampScrollOffset(offset, list.length, rows);
-		if (expanded) this.expandedScrollOffset = offset;
-		else this.compactScrollOffset = offset;
+		this.expandedScrollOffset = offset;
 		this.tui.requestRender();
 		return true;
 	}

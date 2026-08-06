@@ -242,7 +242,7 @@ export function renderCompactDashboard(
 	model: GoalDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { footerHint?: string; scrollOffset?: number; scrollFocus?: boolean } = {},
+	opts: { footerHint?: string; scrollOffset?: number } = {},
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
@@ -279,14 +279,16 @@ export function renderCompactDashboard(
 	}
 
 	// §9.2/§9.6 compact task list: a window over the top-level tasks, anchored
-	// by default so the most recently completed tasks are visible; ↑/↓ keys
-	// (when the widget holds scroll focus) move the window. Subtasks of the
-	// current task stay inline via the subtask progress line below.
+	// by default so the most recently completed tasks are visible; when the
+	// list overflows the window, the footer advertises Ctrl+Shift+↑↓ to scroll
+	// it. Subtasks of the current task stay inline via the subtask progress
+	// line below.
 	const topLevel = model.taskTree.filter((node) => node.depth === 0);
+	const compactRows = compactTaskViewportRows(safeWidth);
+	const listOverflows = topLevel.length > compactRows;
 	if (topLevel.length > 0) {
-		const rows = compactTaskViewportRows(safeWidth);
-		const offset = opts.scrollOffset ?? anchoredScrollOffset(topLevel, rows);
-		const viewport = deriveTaskListViewport(topLevel.length, rows, offset);
+		const offset = opts.scrollOffset ?? anchoredScrollOffset(topLevel, compactRows);
+		const viewport = deriveTaskListViewport(topLevel.length, compactRows, offset);
 		lines.push(boxSectionRule(theme, safeWidth, "Tasks"));
 		for (const row of renderCompactTaskRows(theme, topLevel, viewport, inner)) {
 			lines.push(boxLine(theme, safeWidth, row));
@@ -334,7 +336,15 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${dim(theme, `File     ${model.filePath}`)}`));
 	}
 
-	lines.push(boxFooter(theme, safeWidth, opts.footerHint ?? (opts.scrollFocus ? "↑↓/PgUp/PgDn: scroll · Esc done" : spec.footerHint)));
+	const footerHint = opts.footerHint
+		?? (listOverflows
+			? mode === "minimal"
+				? "↑↓: scroll"
+				: mode === "narrow"
+					? "Ctrl+Shift+↑↓: scroll"
+					: "Ctrl+Shift+T: expand · Ctrl+Shift+↑↓: scroll"
+			: spec.footerHint);
+	lines.push(boxFooter(theme, safeWidth, footerHint));
 	return lines;
 }
 

@@ -651,7 +651,13 @@ const PGUP = "\x1b[5~";
 const PGDN = "\x1b[6~";
 const HOME = "\x1b[H";
 const END = "\x1b[F";
-const F6 = "\x1b[17~";
+// Ctrl+Shift chords (free in pi — the editor owns the plain arrows).
+const CS_UP = "\x1b[1;6A";
+const CS_DOWN = "\x1b[1;6B";
+const CS_HOME = "\x1b[1;6H";
+const CS_END = "\x1b[1;6F";
+const CS_PGUP = "\x1b[5;6~";
+const CS_PGDN = "\x1b[6;6~";
 
 /** 30 top-level tasks with t5 and t20 completed (t20 latest, mid-list): both
  * the compact (5 rows @100) and expanded (20 rows @100) views overflow, the
@@ -724,43 +730,62 @@ test("compact default viewport is anchored to the most recently completed tasks"
 	assert.match(text, /… \+10 more tasks/, "pending tasks after the anchor stay reachable below");
 });
 
-test("arrows are not consumed when the compact dashboard is not focused", () => {
+test("plain arrows are never consumed in compact mode; the editor keeps them", () => {
 	const h = scrollHarness(false);
 	h.component.render(100);
 	h.fire(UP);
 	h.fire(DOWN);
 	h.fire(PGUP);
 	h.fire(PGDN);
-	assert.deepEqual(h.consumed, [], "editor keeps the arrow keys when the widget is not focused");
+	assert.deepEqual(h.consumed, [], "plain arrow/page keys belong to the editor in compact mode");
 });
 
-test("F6 engages compact scroll focus; arrows scroll and Esc disengages without pausing", () => {
+test("Ctrl+Shift+↑/↓ scroll the compact list one row; Esc is untouched", () => {
 	const h = scrollHarness(false);
 	h.component.render(100);
-	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/);
-	h.fire(F6);
-	assert.ok(h.consumed.some((c) => c.startsWith("c:")), "F6 is consumed");
-	assert.equal(h.component.isCompactScrollFocusActive(), true);
-	h.fire(UP);
+	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/, "anchored window hides the earliest tasks");
+	h.fire(CS_UP);
+	assert.ok(h.consumed.includes("c:" + CS_UP), "Ctrl+Shift+↑ is consumed");
 	assert.match(h.component.render(100).join("\n"), /↑ 14 more tasks/, "up scrolls the compact window");
-	h.fire(DOWN);
+	h.fire(CS_DOWN);
 	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/, "down scrolls the compact window back");
-	// Esc disengages scroll focus — it must not pause the goal
-	h.fire("\u001b");
-	assert.equal(h.component.isCompactScrollFocusActive(), false);
-	assert.equal(h.consumed.includes("pause"), false, "Esc while scroll-focused must not pause");
+	// plain arrows and Esc still reach the editor afterwards — nothing to disengage
 	h.fire(UP);
-	assert.equal(h.consumed.filter((c) => c === "c:" + UP).length, 1, "only the focused ↑ was consumed; after Esc the arrows reach the editor");
+	h.fire("\u001b");
+	assert.equal(h.consumed.filter((c) => c === "c:" + UP).length, 0, "plain ↑ is never consumed");
+	assert.equal(h.consumed.includes("c:\u001b"), false, "Esc is not consumed when not expanded");
 });
 
-test("compact scroll focus shows a scroll hint in the footer", () => {
+test("Ctrl+Shift+Home/End/PgUp/PgDn jump and page in the compact list", () => {
 	const h = scrollHarness(false);
-	assert.match(h.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand tasks/);
-	h.fire(F6);
-	assert.match(h.component.render(100).join("\n"), /↑↓\/PgUp\/PgDn: scroll · Esc done/);
+	h.component.render(100);
+	h.fire(CS_HOME);
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/, "home jumps to the top");
+	assert.match(h.component.render(100).join("\n"), /[✓▸·~] t1\s/, "the earliest task row is visible");
+	h.fire(CS_END);
+	assert.match(h.component.render(100).join("\n"), /↑ 25 more tasks/, "end jumps to the tail (max offset 25)");
+	assert.doesNotMatch(h.component.render(100).join("\n"), /… \+\d+ more tasks/);
+	h.fire(CS_PGDN); // at max: clamped, still consumed
+	assert.match(h.component.render(100).join("\n"), /↑ 25 more tasks/);
+	h.fire(CS_PGUP); // page up 5 rows → offset 20
+	assert.match(h.component.render(100).join("\n"), /↑ 20 more tasks/);
 });
 
-test("F6 does not engage scroll focus when the compact list fits", () => {
+test("compact overflow shows the scroll hint in the footer; a short list does not", () => {
+	const overflowing = scrollHarness(false);
+	assert.match(overflowing.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand · Ctrl\+Shift\+↑↓: scroll/);
+	const narrow = scrollHarness(false);
+	assert.match(narrow.component.render(40).join("\n"), /↑↓: scroll/, "minimal layout shortens the hint");
+	const g = goal({ taskList: { tasks: [
+		{ id: "t1", title: "One", status: "pending" },
+		{ id: "t2", title: "Two", status: "pending" },
+		{ id: "t3", title: "Three", status: "pending" },
+	], blockCompletion: false, proposedAt: testProposedAt } });
+	const short = scrollHarness(false, g);
+	assert.match(short.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand tasks/, "no overflow → no scroll hint");
+});
+
+test("Ctrl+Shift chords are not consumed when the compact list fits", () => {
 	const g = goal({ taskList: { tasks: [
 		{ id: "t1", title: "One", status: "pending" },
 		{ id: "t2", title: "Two", status: "pending" },
@@ -768,10 +793,9 @@ test("F6 does not engage scroll focus when the compact list fits", () => {
 	], blockCompletion: false, proposedAt: testProposedAt } });
 	const h = scrollHarness(false, g);
 	h.component.render(100);
-	h.fire(F6);
-	assert.equal(h.component.isCompactScrollFocusActive(), false, "no overflow → focus never engages");
-	h.fire(DOWN);
-	assert.equal(h.consumed.filter((c) => c.startsWith("c:")).length, 1, "only F6 was consumed; arrows reach the editor");
+	h.fire(CS_UP);
+	h.fire(CS_DOWN);
+	assert.deepEqual(h.consumed, [], "nothing to scroll → chords pass through");
 });
 
 test("expanded mode scrolls the task tree with arrows, Home, End, and page keys", () => {
@@ -793,18 +817,19 @@ test("expanded mode scrolls the task tree with arrows, Home, End, and page keys"
 	assert.ok(h.consumed.filter((c) => c.startsWith("c:")).length >= 6, "every navigation key is consumed while expanded");
 });
 
-test("expanding clears compact scroll focus; collapsing returns arrows to the editor", () => {
+test("Ctrl+Shift+T toggles expansion; plain arrows scroll only while expanded", () => {
 	const h = scrollHarness(false);
 	h.component.render(100);
-	h.fire(F6);
-	assert.equal(h.component.isCompactScrollFocusActive(), true);
-	h.fire(CTRL_SHIFT_T); // expand — clears scroll focus
+	h.fire(CS_UP); // compact scroll — chord
+	assert.ok(h.consumed.includes("c:" + CS_UP));
+	h.fire(CTRL_SHIFT_T); // expand
 	assert.equal(h.expanded(), true);
-	assert.equal(h.component.isCompactScrollFocusActive(), false);
+	h.fire(UP); // expanded is modal → plain arrow scrolls
+	assert.ok(h.consumed.includes("c:" + UP));
 	h.fire("\u001b"); // collapse
 	assert.equal(h.expanded(), false);
 	h.fire(UP);
-	assert.equal(h.consumed.filter((c) => c.startsWith("c:")).length, 3, "only F6 + Ctrl+Shift+T + Esc consumed; arrows reach the editor");
+	assert.equal(h.consumed.filter((c) => c.startsWith("c:")).length, 4, "chord + Ctrl+Shift+T + expanded ↑ + Esc consumed; plain ↑ reaches the editor after collapse");
 });
 
 test("a new completion re-anchors the viewport to the latest completed task", () => {
@@ -819,11 +844,12 @@ test("a new completion re-anchors the viewport to the latest completed task", ()
 	});
 	// anchored to t20 → compact window t16..t20
 	assert.match(component.render(100).join("\n"), /↑ 15 more tasks/);
-	// engage compact scroll focus, then scroll to the top
-	assert.equal(component.toggleCompactScrollFocus(), true, "compact list overflows → focus engages");
-	component.handleNavigationKey("home");
+	// scroll to the top with the compact chord
+	assert.equal(component.handleCompactScrollKey("home"), true, "compact list overflows → chord consumed");
 	assert.doesNotMatch(component.render(100).join("\n"), /↑ \d+ more tasks/);
 	assert.match(component.render(100).join("\n"), /[✓▸·~] t1\s/, "the earliest task row is visible after scrolling up");
+	// a short list: the chord is inert
+	assert.equal(component.handleCompactScrollKey("down"), true, "still overflows → consumed");
 	// a new completion (t9, later than t20) arrives → re-anchor to t9
 	const tasks = (current.taskList!.tasks as GoalTask[]).map((t) => ({ ...t }));
 	tasks[8] = { ...tasks[8]!, status: "complete", completedAt: "2026-01-01T12:00:00.000Z" };

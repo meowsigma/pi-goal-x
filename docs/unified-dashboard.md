@@ -110,22 +110,28 @@ the window starts at the top; when a new task completes the window re-anchors
 to it. `↑ N more tasks` / `… +N more tasks` indicator rows mark rows hidden
 above and below the window.
 
-| Key | Action |
-| --- | --- |
-| `↑` / `↓` | Scroll one task row (window anchored at the latest completion by default) |
-| `PgUp` / `PgDn` | Scroll one page of task rows |
-| `Home` / `End` | Jump to the top / bottom of the list |
-| `F6` | Engage/disengage compact scrolling so the arrow keys scroll the compact widget instead of the editor |
-| `Esc` | Disengage compact scrolling; collapse the expanded dashboard |
+pi has no separate focus — the prompt editor owns the plain arrow keys — so
+the two views scroll differently:
 
-Scrolling keys are active only while the dashboard is focused: the expanded
-dashboard is focused while open (arrows scroll the full task tree, `Esc`
-collapses), and the compact widget is focused once `F6` engages scrolling
-(the footer shows `↑↓/PgUp/PgDn: scroll · Esc done`). Otherwise the arrow and
-page keys belong to the editor — typing and navigation are never hijacked.
-`/goal-status` renders the same anchored window as a static snapshot (it is
-not interactive). The window and its indicators are width-safe at every
-layout width.
+| View | Key | Action |
+| --- | --- | --- |
+| Expanded (modal) | `↑` / `↓` | Scroll one task row |
+| Expanded (modal) | `PgUp` / `PgDn` | Scroll one page of task rows |
+| Expanded (modal) | `Home` / `End` | Jump to the top / bottom of the list |
+| Compact (inline) | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` | Scroll one task row |
+| Compact (inline) | `Ctrl+Shift+PgUp` / `Ctrl+Shift+PgDn` | Scroll one page |
+| Compact (inline) | `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Jump to the top / bottom |
+
+While the expanded dashboard is open it is modal and owns the plain arrow
+keys (like the session tree or model selector); `Esc` collapses it. The
+compact widget never touches the editor's arrows — it scrolls with the
+`Ctrl+Shift` chords, which pi leaves unbound, so typing and navigation are
+never hijacked. The chords are consumed only when the compact list actually
+overflows its viewport; on a short list they pass through unused. When the
+list overflows, the compact footer advertises the chords
+(`Ctrl+Shift+↑↓: scroll`). `/goal-status` renders the same anchored window as
+a static snapshot (it is not interactive). The window and its indicators are
+width-safe at every layout width.
 
 ## Status states
 
@@ -189,9 +195,9 @@ auditor's findings, and returns to the normal dashboard so work can continue.
 | Key | Action |
 | --- | --- |
 | `Ctrl+Shift+T` | Toggle the dashboard between compact and expanded |
-| `↑` / `↓`, `PgUp` / `PgDn`, `Home` / `End` | Scroll the focused task list (see [Scrolling the task list](#scrolling-the-task-list)) |
-| `F6` | Engage/disengage compact scrolling |
-| `Esc` | Disengage compact scrolling or collapse the expanded dashboard; otherwise pause the goal |
+| `↑` / `↓`, `PgUp` / `PgDn`, `Home` / `End` | Scroll the expanded task tree (see [Scrolling the task list](#scrolling-the-task-list)) |
+| `Ctrl+Shift+↑` / `Ctrl+Shift+↓`, `Ctrl+Shift+PgUp` / `Ctrl+Shift+PgDn`, `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Scroll the compact task list |
+| `Esc` | Collapse the expanded dashboard; otherwise pause the goal |
 | `Esc` (during audit) | Stop the audit and choose to continue working or complete without audit |
 
 ## Width behavior

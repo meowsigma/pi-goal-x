@@ -27,14 +27,20 @@ import {
 import type { GoalActivityItem } from "../goal-activity.ts";
 import { truncateText } from "../goal-core.ts";
 
-type RenderColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text" | "mdHeading">;
+type RenderColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text" | "mdHeading" | "mdLink">;
 
 // ── §5.1 border system ──────────────────────────────────────────────────────
 
 const H = "─";
 const V = "│";
 
-/** Box borders: theme-appropriate gray (muted) instead of dim. */
+/** Outer box frame: light steel gray-blue (mdLink) — clearly lighter than the
+ * interior rules and in the same hue family as pi's own borders. */
+function frame(theme: Theme, value: string): string {
+	return theme.fg("mdLink", value);
+}
+
+/** Interior rules: theme gray (muted) — subtle hierarchy inside the frame. */
 function border(theme: Theme, value: string): string {
 	return theme.fg("muted", value);
 }
@@ -53,10 +59,10 @@ function boxHeader(theme: Theme, width: number, left: string, right = ""): strin
 		const budget = Math.max(4, inner - visibleWidth(r) - 4);
 		const l2 = `${H} ${fit(left, budget)}`;
 		const fill = Math.max(1, inner - visibleWidth(l2) - visibleWidth(r) - 1);
-		return `╭${l2}${border(theme, H.repeat(fill))}${r}╮`;
+		return `╭${l2}${frame(theme, H.repeat(fill))}${r}╮`;
 	}
 	const fill = Math.max(1, inner - fixed);
-	return `╭${l}${border(theme, H.repeat(fill))}${r}╮`;
+	return `╭${l}${frame(theme, H.repeat(fill))}${r}╮`;
 }
 
 function boxLine(theme: Theme, width: number, content: string): string {
@@ -81,11 +87,11 @@ function boxSectionRule(theme: Theme, width: number, label: string): string {
 function boxFooter(theme: Theme, width: number, content: string): string {
 	const inner = Math.max(4, width - 2);
 	if (!content) {
-		return `╰${border(theme, H.repeat(inner))}╯`;
+		return `╰${frame(theme, H.repeat(inner))}╯`;
 	}
 	const l = `${H} ${muted(theme, content)}`;
 	const fill = Math.max(1, inner - visibleWidth(l) - 1);
-	return `╰${l}${border(theme, H.repeat(fill))}╯`;
+	return `╰${l}${frame(theme, H.repeat(fill))}╯`;
 }
 
 // ── §5.2 status symbols / colors ────────────────────────────────────────────
@@ -193,11 +199,12 @@ function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, av
 	const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark));
 	const title = fit(node.title, titleBudget);
 	const markerText = theme.fg(marker.color, marker.symbol);
-	const colored = node.isCurrent
-		? `${markerText} ${accent(theme, `${node.id}  ${title}`)}`
-		: `${markerText} ${amber(theme, `${node.id}  ${title}`)}`;
-	const line = `${indentText}${colored}${contractMark}`;
-	return line;
+	// Colour-coded: the id shares the marker color (amber pending, green
+	// complete, gray skipped, teal current); titles stay amber, the current
+	// task is fully accent.
+	const idText = node.isCurrent ? accent(theme, node.id) : theme.fg(marker.color, node.id);
+	const titleText = node.isCurrent ? accent(theme, title) : amber(theme, title);
+	return `${indentText}${markerText} ${idText}  ${titleText}${contractMark}`;
 }
 
 /**
@@ -211,7 +218,7 @@ function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, av
 function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewport: TaskListViewport, available: number): string[] {
 	const rows: string[] = [];
 	if (viewport.hiddenAbove > 0) {
-		rows.push(dim(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`));
+		rows.push(muted(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`));
 	}
 	const shown = nodes.slice(viewport.offset, viewport.offset + viewport.rows);
 	const idWidth = shown.length === 0 ? 0 : Math.min(10, Math.max(...shown.map((node) => node.id.length)));
@@ -223,11 +230,13 @@ function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewpor
 		const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark));
 		const title = fit(node.title, titleBudget);
 		const markerText = theme.fg(marker.color, marker.symbol);
-		const body = node.isCurrent ? accent(theme, `${id}  ${title}`) : amber(theme, `${id}  ${title}`);
-		rows.push(`${markerText} ${body}${contractMark}`);
+		// Colour-coded: id shares the marker color; titles amber; current accent.
+		const idText = node.isCurrent ? accent(theme, id) : theme.fg(marker.color, id);
+		const body = node.isCurrent ? accent(theme, title) : amber(theme, title);
+		rows.push(`${markerText} ${idText}  ${body}${contractMark}`);
 	}
 	if (viewport.hiddenBelow > 0) {
-		rows.push(dim(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`));
+		rows.push(muted(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`));
 	}
 	return rows;
 }
@@ -262,7 +271,7 @@ export function renderCompactDashboard(
 	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
 		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
 		: "";
-	lines.push(boxHeader(theme, safeWidth, `pi-goal-x ─ ${model.title}`, muted(theme, usageRight)));
+	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ─ ${model.title}`, muted(theme, usageRight)));
 
 	// Status line.
 	if (model.status.code === "complete") {
@@ -276,15 +285,17 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, bits.join(" · ")));
 	}
 
-	// Budget (when configured).
+	// Budget (when configured): fuel gauge + amount, amber until the budget is
+	// exhausted, then soft red.
 	if (model.budget) {
-		lines.push(boxLine(theme, safeWidth, `${theme.fg("mdHeading", "⛽")} ${muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)}`));
+		const fuel = model.budget.used >= model.budget.total ? "error" : "mdHeading";
+		lines.push(boxLine(theme, safeWidth, `${theme.fg(fuel as RenderColor, "⛽")} ${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
 	}
 
 	// Overall task progress (§9.1).
 	if (model.taskProgress) {
 		const bar = progressBar(theme, model.taskProgress.percentage, spec.barWidth);
-		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Tasks")}  ${bar} ${model.taskProgress.completed}/${model.taskProgress.total} · ${model.taskProgress.percentage}%`));
+		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Tasks")}  ${bar} ${accent(theme, `${model.taskProgress.completed}/${model.taskProgress.total}`)} · ${muted(theme, `${model.taskProgress.percentage}%`)}`));
 	}
 
 	// §9.2/§9.6 compact task list: a window over the top-level tasks, anchored
@@ -312,16 +323,17 @@ export function renderCompactDashboard(
 	// Current task (persisted focus or inferred first pending).
 	if (model.currentTask) {
 		if (mode === "minimal") {
-			lines.push(boxLine(theme, safeWidth, `${accent(theme, "▸")} ${fit(model.currentTask.title, inner - 3)}`));
+			lines.push(boxLine(theme, safeWidth, `${accent(theme, "▸")} ${accent(theme, fit(model.currentTask.title, inner - 3))}`));
 		} else {
-			lines.push(boxLine(theme, safeWidth, `${muted(theme, "Current")}  ${accent(theme, model.currentTask.id)} · ${fit(model.currentTask.title, inner - visibleWidth(`Current  ${model.currentTask.id} · `))}`));
+			const titleBudget = inner - visibleWidth(`Current  ${model.currentTask.id} · `);
+			lines.push(boxLine(theme, safeWidth, `${muted(theme, "Current")}  ${accent(theme, model.currentTask.id)} · ${accent(theme, fit(model.currentTask.title, titleBudget))}`));
 		}
 	}
 
 	// Current-task subtask progress (§9.3).
 	if (model.currentTask && model.currentTask.totalSubtasks > 0 && mode !== "minimal") {
 		const bar = progressBar(theme, model.currentTask.subtaskPercentage, spec.barWidth);
-		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Subtasks")} ${bar} ${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks} · ${model.currentTask.subtaskPercentage}%`));
+		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Subtasks")} ${bar} ${accent(theme, `${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks}`)} · ${muted(theme, `${model.currentTask.subtaskPercentage}%`)}`));
 	}
 
 	// Goal-level verification (§11.1): truncated first line in compact.
@@ -331,7 +343,7 @@ export function renderCompactDashboard(
 
 	// Blocked details (§4.5).
 	if (model.status.code === "blocked") {
-		if (model.status.reason) lines.push(boxLine(theme, safeWidth, `${theme.fg("error", "Blocker")}  ${fit(model.status.reason, inner - 10)}`));
+		if (model.status.reason) lines.push(boxLine(theme, safeWidth, `${theme.fg("error", "Blocker")}  ${muted(theme, fit(model.status.reason, inner - 10))}`));
 		if (spec.showPauseAction && model.status.suggestedAction) lines.push(boxLine(theme, safeWidth, `${muted(theme, "Action")}   ${fit(model.status.suggestedAction, inner - 9)}`));
 	}
 
@@ -382,7 +394,7 @@ export function renderExpandedDashboard(
 	const usageRight = mode !== "minimal" && (model.usage.activeSeconds > 0 || model.usage.tokens > 0)
 		? `${model.usage.elapsedLabel} · ${model.usage.tokenLabel}`
 		: "";
-	lines.push(boxHeader(theme, safeWidth, `pi-goal-x ─ ${model.title}`, muted(theme, usageRight)));
+	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ─ ${model.title}`, muted(theme, usageRight)));
 
 	const symbol = STATUS_SYMBOL[model.status.code];
 	const color = STATUS_COLOR[model.status.code];

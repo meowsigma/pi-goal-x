@@ -288,7 +288,7 @@ Always visible above the editor while a goal is focused:
 └─ Esc/Ctrl+Shift+T: collapse ────────────────────────────────────────┘
 ```
 
-Every rendered line is width-aware: the dashboard adapts to wide, medium, narrow, and very-narrow terminals and never overflows the available width. It follows a pastel theme palette with a monochrome fallback: gray borders, pastel-amber task rows with colour-coded markers (✓ complete green, ▸ current teal, ~ skipped gray, · pending amber), and status symbols in their state color.
+Every rendered line is width-aware: the dashboard adapts to wide, medium, narrow, and very-narrow terminals and never overflows the available width. It follows a pastel theme palette with a monochrome fallback: a light steel-gray-blue outer frame (`mdLink`) with gray interior rules, pastel-amber task rows with colour-coded markers and ids (✓ complete green, ▸ current teal, ~ skipped gray, · pending amber), accent-tinted progress and brand, and status symbols in their state color.
 
 The task list is a scrollable **window** that by default is anchored to the most recently completed task — recent completions stay visible instead of the earliest tasks. The expanded dashboard is modal and scrolls with the plain `↑/↓`, `PgUp/PgDn`, and `Home/End` keys; the compact widget keeps the editor's arrows untouched and scrolls with the free `Ctrl+Shift+↑/↓` chords (pi leaves those unbound). A new completion re-anchors the window.
 

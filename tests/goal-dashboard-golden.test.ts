@@ -189,7 +189,7 @@ test("unfocused panel is width-safe at every width", () => {
 	}
 });
 
-test("palette: gray borders, pastel task rows, accent current task (§5)", () => {
+test("palette: light frame, gray rules, colour-coded compact rows (§5)", () => {
 	const captured: Array<[string, string]> = [];
 	const colorTheme = {
 		fg: (color: string, value: string) => { captured.push([color, value]); return value; },
@@ -199,16 +199,25 @@ test("palette: gray borders, pastel task rows, accent current task (§5)", () =>
 	assert.ok(model);
 	renderCompactDashboard(model, colorTheme, 100);
 	renderExpandedDashboard(model, colorTheme, 100);
-	// Box borders come from the theme's gray (muted), never raw white/dim.
-	assert.ok(captured.some(([c]) => c === "muted"), "box borders use muted (theme gray)");
-	assert.equal(captured.some(([c]) => c === "borderMuted"), false);
-	// Task markers are colour-coded pastel: pending amber, complete green, skipped gray.
 	const byColor = (c: string) => captured.filter(([col]) => col === c).map(([, v]) => v);
+	// The outer frame is a light steel gray-blue (mdLink); interior rules stay
+	// the theme's gray (muted); the old dark border token is gone.
+	assert.ok(byColor("mdLink").some((v) => /^─+$/.test(v)), "outer frame fill is light (mdLink)");
+	assert.equal(byColor("borderMuted").length, 0, "the dark borderMuted token is not used");
+	assert.ok(byColor("muted").some((v) => /^─+$/.test(v)), "interior rule fills use the theme gray (muted)");
+	// Task markers are colour-coded pastel: pending amber, complete green, skipped gray.
 	assert.ok(byColor("mdHeading").includes("·"), "pending marker is pastel amber");
 	assert.ok(byColor("success").includes("✓"), "complete marker is muted green");
 	assert.ok(byColor("muted").includes("~"), "skipped marker is gray");
+	// Task ids share the marker color; titles stay pastel amber; the current
+	// task is fully accent (marker, id, title).
+	assert.ok(byColor("success").some((v) => v.includes("t1") || v.includes("t2")), "completed ids are muted green");
 	assert.ok(byColor("mdHeading").some((v) => v.includes("Review reports page")), "task titles are pastel amber");
-	assert.ok(byColor("accent").some((v) => v.includes("t3")), "current task stays accent (teal)");
+	assert.ok(byColor("accent").some((v) => v.includes("t3")), "current task id stays accent (teal)");
+	assert.ok(byColor("accent").some((v) => v.includes("Add the download button")), "current task title is accent too");
+	// The compact header brand is teal; progress fractions are accent.
+	assert.ok(byColor("accent").some((v) => v.includes("pi-goal-x")), "brand is accent");
+	assert.ok(byColor("accent").some((v) => v.includes("/")), "progress fractions are accent");
 	// No blinding #ffff00-style warning anywhere.
 	assert.equal(byColor("warning").length, 0, "the bright warning color is not used in the dashboard");
 });

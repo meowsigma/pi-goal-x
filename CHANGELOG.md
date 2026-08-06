@@ -83,14 +83,17 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ### Changed
 
-- **Dashboard palette (pastel)**: box borders are drawn in the theme's gray
-  (`muted`) instead of the dark `borderMuted`; task rows are pastel amber
-  (`mdHeading`) — the theme's soft markdown-heading yellow rather than the
-  bright `warning` — with colour-coded markers (✓ complete muted green,
-  ▸ current teal, ~ skipped gray, · pending amber). Blocked/budget states
-  use the soft red/amber instead of neon yellow, and the header meta and
-  footer hints are muted. Everything still follows the theme with a
-  monochrome fallback.
+- **Dashboard palette (pastel)**: the outer box frame is drawn in the theme's
+  light steel gray-blue (`mdLink`) — clearly lighter than the old dark
+  `borderMuted` and in the same hue family as pi's own borders — while the
+  interior rules stay in the theme's gray (`muted`) for hierarchy. Task rows
+  are pastel amber (`mdHeading`) with colour-coded markers *and ids* (✓
+  complete muted green, ▸ current teal, ~ skipped gray, · pending amber),
+  and the current task is fully accent (marker, id, title). The header brand,
+  progress fractions, and budget gauge are tinted; blocked/budget states use
+  soft red/amber instead of neon yellow, and the header meta and footer
+  hints are muted. Everything still follows the theme with a monochrome
+  fallback.
 - The task-overlay shortcut (`Ctrl+Shift+T`) now toggles the unified
   dashboard instead of opening a separate overlay.
 - Prompt task blocks surface the persisted current task with its contract.

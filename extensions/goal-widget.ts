@@ -127,9 +127,17 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				return { consume: true };
 			}
 			// §10: Escape collapses the expanded dashboard before it can pause the
-			// goal; Ctrl+Shift+T toggles compact/expanded (§19.5).
+			// goal; Ctrl+Shift+T toggles compact/expanded (§19.5). While the
+			// compact widget holds scroll focus, Escape disengages it instead of
+			// pausing; ↑/↓/PgUp/PgDn/Home/End scroll the focused dashboard
+			// (expanded, or compact while scroll focus is engaged). Editor
+			// keybindings are untouched whenever the dashboard is not focused.
 			if (matchesKey(data, "escape") && core.isDashboardExpanded()) {
 				core.toggleDashboardExpanded();
+				return { consume: true };
+			}
+			if (matchesKey(data, "escape") && core.goalWidgetComponentRef?.current?.isCompactScrollFocusActive()) {
+				core.goalWidgetComponentRef.current.clearScrollFocus();
 				return { consume: true };
 			}
 			if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
@@ -141,8 +149,25 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// expanded task views (the task-list overlay is merged into the
 			// dashboard; §10).
 			if (matchesKey(data, "ctrl+shift+t")) {
+				core.goalWidgetComponentRef?.current?.clearScrollFocus();
 				core.toggleDashboardExpanded();
 				return { consume: true };
+			}
+
+			// F6 — engage/disengage compact scroll focus so ↑/↓/PgUp/PgDn scroll
+			// the compact task list without touching editor navigation (§9.6).
+			if (matchesKey(data, "f6") && !core.isDashboardExpanded()) {
+				core.goalWidgetComponentRef?.current?.toggleCompactScrollFocus();
+				return { consume: true };
+			}
+
+			// Navigation keys scroll the focused dashboard (expanded, or compact
+			// while scroll focus is engaged).
+			if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown") || matchesKey(data, "home") || matchesKey(data, "end")) {
+				const key = matchesKey(data, "up") ? "up" : matchesKey(data, "down") ? "down" : matchesKey(data, "pageUp") ? "pageUp" : matchesKey(data, "pageDown") ? "pageDown" : matchesKey(data, "home") ? "home" : "end";
+				if (core.goalWidgetComponentRef?.current?.handleNavigationKey(key)) {
+					return { consume: true };
+				}
 			}
 
 			// Debug keybindings are inert unless PI_GOAL_DEBUG is set (P1-13).

@@ -4,6 +4,7 @@ import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { renderGoalWidgetLines, renderAuditorWidgetLines, renderAuditResultCardView, GoalWidgetComponent, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
+import type { GoalTask } from "../extensions/goal-record.ts";
 import { createMockTUI, createMockTheme } from "./tui-test-utils.ts";
 
 const theme = {
@@ -640,4 +641,194 @@ test("ledger events flow into the dashboard recent-activity feed", () => {
 	});
 	const text = component.render(100).join("\n");
 	assert.match(text, /Started “T1”\./, "ledger task_started maps to readable activity with the task title");
+});
+
+// ── §9.6 task-list scrolling ─────────────────────────────────────────────────
+
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
+const PGUP = "\x1b[5~";
+const PGDN = "\x1b[6~";
+const HOME = "\x1b[H";
+const END = "\x1b[F";
+const F6 = "\x1b[17~";
+
+/** 30 top-level tasks with t5 and t20 completed (t20 latest, mid-list): both
+ * the compact (5 rows @100) and expanded (20 rows @100) views overflow, the
+ * anchored window is a middle slice that can scroll in BOTH directions, and
+ * the earliest task row is hidden by default. */
+function manyTasksGoal(): GoalWidgetRecord {
+	const tasks: GoalTask[] = Array.from({ length: 30 }, (_, i) => ({
+		id: `t${i + 1}`,
+		title: `Task number ${i + 1}`,
+		status: "pending" as const,
+	}));
+	tasks[4] = { ...tasks[4]!, status: "complete", completedAt: "2026-01-01T10:00:00.000Z" };
+	tasks[19] = { ...tasks[19]!, status: "complete", completedAt: "2026-01-01T11:00:00.000Z" };
+	return goal({ taskList: { tasks, blockCompletion: false, proposedAt: testProposedAt } });
+}
+
+function scrollHarness(initialExpanded = false, g: GoalWidgetRecord = manyTasksGoal()) {
+	let expanded = initialExpanded;
+	const consumed: string[] = [];
+	let inputCb: ((data: string) => unknown) | undefined;
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => g,
+		getOpenGoalCount: () => 1,
+		getExpanded: () => expanded,
+		getSettings: () => ({}),
+	});
+	const ctx = {
+		hasUI: true,
+		ui: {
+			onTerminalInput: (cb: unknown) => { inputCb = cb as (data: string) => unknown; return () => {}; },
+			notify: () => {},
+		},
+	} as never;
+	const core = {
+		goalModalDepth: 0,
+		auditProgress: null,
+		state: { goal: null },
+		pauseActiveGoal: () => { consumed.push("pause"); },
+		abortAudit: () => { consumed.push("abort-audit"); },
+		isDashboardExpanded: () => expanded,
+		toggleDashboardExpanded: () => { expanded = !expanded; consumed.push("toggle"); },
+		goalWidgetComponentRef: { current: component },
+		terminalInputUnsubscribe: null,
+	} as never;
+	syncTerminalInputPause(core as never, ctx as never);
+	return {
+		fire: (data: string) => {
+			const result = inputCb?.(data);
+			if (result && typeof result === "object" && (result as { consume?: boolean }).consume) {
+				consumed.push(`c:${data}`);
+			}
+			return result;
+		},
+		expanded: () => expanded,
+		consumed,
+		component,
+	};
+}
+
+test("compact default viewport is anchored to the most recently completed tasks", () => {
+	const lines = renderGoalWidgetLines(manyTasksGoal(), theme, 100);
+	const text = lines.join("\n");
+	assert.match(text, /↑ 15 more tasks/, "earliest tasks are hidden above the anchored window");
+	assert.match(text, /Task number 20/, "the latest completion is the last visible row");
+	assert.match(text, /Task number 16/, "the window is a middle slice around the anchor");
+	assert.doesNotMatch(text, /[✓▸·~] t1\s/, "the earliest task row is not shown");
+	assert.match(text, /… \+10 more tasks/, "pending tasks after the anchor stay reachable below");
+});
+
+test("arrows are not consumed when the compact dashboard is not focused", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	h.fire(UP);
+	h.fire(DOWN);
+	h.fire(PGUP);
+	h.fire(PGDN);
+	assert.deepEqual(h.consumed, [], "editor keeps the arrow keys when the widget is not focused");
+});
+
+test("F6 engages compact scroll focus; arrows scroll and Esc disengages without pausing", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/);
+	h.fire(F6);
+	assert.ok(h.consumed.some((c) => c.startsWith("c:")), "F6 is consumed");
+	assert.equal(h.component.isCompactScrollFocusActive(), true);
+	h.fire(UP);
+	assert.match(h.component.render(100).join("\n"), /↑ 14 more tasks/, "up scrolls the compact window");
+	h.fire(DOWN);
+	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/, "down scrolls the compact window back");
+	// Esc disengages scroll focus — it must not pause the goal
+	h.fire("\u001b");
+	assert.equal(h.component.isCompactScrollFocusActive(), false);
+	assert.equal(h.consumed.includes("pause"), false, "Esc while scroll-focused must not pause");
+	h.fire(UP);
+	assert.equal(h.consumed.filter((c) => c === "c:" + UP).length, 1, "only the focused ↑ was consumed; after Esc the arrows reach the editor");
+});
+
+test("compact scroll focus shows a scroll hint in the footer", () => {
+	const h = scrollHarness(false);
+	assert.match(h.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand tasks/);
+	h.fire(F6);
+	assert.match(h.component.render(100).join("\n"), /↑↓\/PgUp\/PgDn: scroll · Esc done/);
+});
+
+test("F6 does not engage scroll focus when the compact list fits", () => {
+	const g = goal({ taskList: { tasks: [
+		{ id: "t1", title: "One", status: "pending" },
+		{ id: "t2", title: "Two", status: "pending" },
+		{ id: "t3", title: "Three", status: "pending" },
+	], blockCompletion: false, proposedAt: testProposedAt } });
+	const h = scrollHarness(false, g);
+	h.component.render(100);
+	h.fire(F6);
+	assert.equal(h.component.isCompactScrollFocusActive(), false, "no overflow → focus never engages");
+	h.fire(DOWN);
+	assert.equal(h.consumed.filter((c) => c.startsWith("c:")).length, 1, "only F6 was consumed; arrows reach the editor");
+});
+
+test("expanded mode scrolls the task tree with arrows, Home, End, and page keys", () => {
+	const h = scrollHarness(true);
+	h.component.render(100); // expanded rows 20 over 30 nodes; anchor t20 → offset 0
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/, "anchored window starts at the top");
+	assert.match(h.component.render(100).join("\n"), /Task number 20/, "the latest completion is the last visible row");
+	h.fire(DOWN);
+	assert.match(h.component.render(100).join("\n"), /↑ 1 more task/, "down moves the expanded window");
+	h.fire(HOME);
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/, "home jumps to the top");
+	h.fire(UP); // at top: clamped, still consumed
+	h.fire(END);
+	assert.match(h.component.render(100).join("\n"), /↑ 10 more tasks/, "end jumps to the tail (max offset 10)");
+	h.fire(PGDN); // at max: clamped, still consumed
+	assert.match(h.component.render(100).join("\n"), /↑ 10 more tasks/);
+	h.fire(PGUP); // page up 20 rows → top
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks/);
+	assert.ok(h.consumed.filter((c) => c.startsWith("c:")).length >= 6, "every navigation key is consumed while expanded");
+});
+
+test("expanding clears compact scroll focus; collapsing returns arrows to the editor", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	h.fire(F6);
+	assert.equal(h.component.isCompactScrollFocusActive(), true);
+	h.fire(CTRL_SHIFT_T); // expand — clears scroll focus
+	assert.equal(h.expanded(), true);
+	assert.equal(h.component.isCompactScrollFocusActive(), false);
+	h.fire("\u001b"); // collapse
+	assert.equal(h.expanded(), false);
+	h.fire(UP);
+	assert.equal(h.consumed.filter((c) => c.startsWith("c:")).length, 3, "only F6 + Ctrl+Shift+T + Esc consumed; arrows reach the editor");
+});
+
+test("a new completion re-anchors the viewport to the latest completed task", () => {
+	let current = manyTasksGoal();
+	const { tui } = createMockTUI();
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+	// anchored to t20 → compact window t16..t20
+	assert.match(component.render(100).join("\n"), /↑ 15 more tasks/);
+	// engage compact scroll focus, then scroll to the top
+	assert.equal(component.toggleCompactScrollFocus(), true, "compact list overflows → focus engages");
+	component.handleNavigationKey("home");
+	assert.doesNotMatch(component.render(100).join("\n"), /↑ \d+ more tasks/);
+	assert.match(component.render(100).join("\n"), /[✓▸·~] t1\s/, "the earliest task row is visible after scrolling up");
+	// a new completion (t9, later than t20) arrives → re-anchor to t9
+	const tasks = (current.taskList!.tasks as GoalTask[]).map((t) => ({ ...t }));
+	tasks[8] = { ...tasks[8]!, status: "complete", completedAt: "2026-01-01T12:00:00.000Z" };
+	current = { ...current, taskList: { tasks, blockCompletion: false, proposedAt: testProposedAt } };
+	const text = component.render(100).join("\n");
+	assert.match(text, /↑ 4 more tasks/, "re-anchored window shows the new completion (offset 4)");
+	assert.match(text, /Task number 9/, "the newest completion is visible at the bottom of the window");
 });

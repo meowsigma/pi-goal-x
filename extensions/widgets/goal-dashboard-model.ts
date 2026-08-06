@@ -333,6 +333,18 @@ export function compactTaskViewportRows(width: number): number {
 	return 2;
 }
 
+/**
+ * Task-row budget for the expanded dashboard's task-tree window by terminal
+ * width. The widget uses this to keep the expanded panel bounded and
+ * scrollable; callers that want the full tree pass rows = totalRows.
+ */
+export function expandedTaskViewportRows(width: number): number {
+	if (width >= 100) return 20;
+	if (width >= 70) return 16;
+	if (width >= 50) return 12;
+	return 8;
+}
+
 /** PgUp/PgDn step: one viewport (a page) of rows. */
 export function taskViewportPageSize(rows: number): number {
 	return Math.max(1, Math.floor(rows));

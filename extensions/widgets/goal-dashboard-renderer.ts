@@ -14,11 +14,15 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
+	anchoredScrollOffset,
+	compactTaskViewportRows,
+	deriveTaskListViewport,
 	formatAuditElapsed,
 	formatBudget,
 	type DashboardStatusCode,
 	type DashboardTaskNode,
 	type GoalDashboardModel,
+	type TaskListViewport,
 } from "./goal-dashboard-model.ts";
 import type { GoalActivityItem } from "../goal-activity.ts";
 import { truncateText } from "../goal-core.ts";
@@ -188,18 +192,20 @@ function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, av
 }
 
 /**
- * Compact task-list rows (§9.2): top-level tasks shown by default with colored
- * markers and truncated titles, id column aligned, and a "+N more" overflow
- * line so the widget height stays bounded. The current task's subtasks stay
- * inline via the subtask progress line in the compact dashboard.
+ * Compact task-list rows (§9.2, §9.6): top-level tasks shown in a window over
+ * the plan-ordered list with colored markers and truncated titles, an aligned
+ * id column, and `↑ N more` / `… +N more` indicator rows so the widget height
+ * stays bounded. The window is a viewport (offset + rows) derived from the
+ * shared model — the default (anchored) offset is computed by the caller when
+ * no explicit offset is given.
  */
-function renderCompactTaskRows(theme: Theme, model: GoalDashboardModel, mode: LayoutMode, available: number): string[] {
-	const topLevel = model.taskTree.filter((node) => node.depth === 0);
-	if (topLevel.length === 0) return [];
-	const maxRows = mode === "wide" ? 5 : mode === "medium" ? 4 : mode === "narrow" ? 3 : 2;
-	const shown = topLevel.slice(0, maxRows);
-	const idWidth = Math.min(10, Math.max(...shown.map((node) => node.id.length)));
+function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewport: TaskListViewport, available: number): string[] {
 	const rows: string[] = [];
+	if (viewport.hiddenAbove > 0) {
+		rows.push(dim(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`));
+	}
+	const shown = nodes.slice(viewport.offset, viewport.offset + viewport.rows);
+	const idWidth = shown.length === 0 ? 0 : Math.min(10, Math.max(...shown.map((node) => node.id.length)));
 	for (const node of shown) {
 		const marker = taskMarker(node);
 		const contractMark = node.verificationContract ? dim(theme, " ☑") : "";
@@ -211,9 +217,8 @@ function renderCompactTaskRows(theme: Theme, model: GoalDashboardModel, mode: La
 		const body = node.isCurrent ? accent(theme, `${id}  ${title}`) : `${id}  ${title}`;
 		rows.push(`${markerText} ${body}${contractMark}`);
 	}
-	const hidden = topLevel.length - shown.length;
-	if (hidden > 0) {
-		rows.push(dim(theme, `… +${hidden} more task${hidden === 1 ? "" : "s"}`));
+	if (viewport.hiddenBelow > 0) {
+		rows.push(dim(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`));
 	}
 	return rows;
 }
@@ -237,7 +242,7 @@ export function renderCompactDashboard(
 	model: GoalDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { footerHint?: string } = {},
+	opts: { footerHint?: string; scrollOffset?: number; scrollFocus?: boolean } = {},
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
@@ -273,14 +278,19 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Tasks")}  ${bar} ${model.taskProgress.completed}/${model.taskProgress.total} · ${model.taskProgress.percentage}%`));
 	}
 
-	// §9.2 compact task list: top-level tasks shown by default with colored
-	// markers, truncated titles, aligned id column, and a "+N more" overflow
-	// line (height-bounded per layout mode). Subtasks of the current task stay
-	// inline via the subtask progress line below.
-	const compactTasks = renderCompactTaskRows(theme, model, mode, inner);
-	if (compactTasks.length > 0) {
+	// §9.2/§9.6 compact task list: a window over the top-level tasks, anchored
+	// by default so the most recently completed tasks are visible; ↑/↓ keys
+	// (when the widget holds scroll focus) move the window. Subtasks of the
+	// current task stay inline via the subtask progress line below.
+	const topLevel = model.taskTree.filter((node) => node.depth === 0);
+	if (topLevel.length > 0) {
+		const rows = compactTaskViewportRows(safeWidth);
+		const offset = opts.scrollOffset ?? anchoredScrollOffset(topLevel, rows);
+		const viewport = deriveTaskListViewport(topLevel.length, rows, offset);
 		lines.push(boxSectionRule(theme, safeWidth, "Tasks"));
-		for (const row of compactTasks) lines.push(boxLine(theme, safeWidth, row));
+		for (const row of renderCompactTaskRows(theme, topLevel, viewport, inner)) {
+			lines.push(boxLine(theme, safeWidth, row));
+		}
 	}
 
 	// §9.4: all top-level tasks done and no current task → "All tasks complete".
@@ -324,18 +334,26 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${dim(theme, `File     ${model.filePath}`)}`));
 	}
 
-	lines.push(boxFooter(theme, safeWidth, opts.footerHint ?? spec.footerHint));
+	lines.push(boxFooter(theme, safeWidth, opts.footerHint ?? (opts.scrollFocus ? "↑↓/PgUp/PgDn: scroll · Esc done" : spec.footerHint)));
 	return lines;
 }
 
 // ── EXPANDED DASHBOARD (§4.2) ───────────────────────────────────────────────
 
 /**
- * The full dashboard: goal header, status, usage, progress, complete task
- * tree, current-task details with contract/evidence, verification, and recent
- * activity. Replaces the separate task overlay.
+ * The full dashboard: goal header, status, usage, progress, a window over the
+ * task tree, current-task details with contract/evidence, verification, and
+ * recent activity. Replaces the separate task overlay. The task-tree window
+ * defaults to the whole tree; pass `rows` (and optionally `scrollOffset`) to
+ * bound the panel for interactive scrolling — the default offset anchors to
+ * the most recently completed task.
  */
-export function renderExpandedDashboard(model: GoalDashboardModel, theme: Theme, width: number): string[] {
+export function renderExpandedDashboard(
+	model: GoalDashboardModel,
+	theme: Theme,
+	width: number,
+	opts: { scrollOffset?: number; rows?: number } = {},
+): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
 	const spec = specFor(mode);
@@ -368,12 +386,24 @@ export function renderExpandedDashboard(model: GoalDashboardModel, theme: Theme,
 		lines.push(boxLine(theme, safeWidth, `${bar} ${model.taskProgress.completed}/${model.taskProgress.total} tasks · ${model.taskProgress.percentage}%`));
 	}
 
-	// Tasks section: the complete recursive tree (§9.2).
+	// Tasks section: a window over the recursive tree (§9.2, §9.6). With no
+	// explicit rows the whole tree is shown (backward compatible); with a row
+	// budget the panel stays bounded and ↑/↓ keys move the window.
 	if (model.taskTree.length > 0) {
 		lines.push(boxSectionRule(theme, safeWidth, "Tasks"));
-		for (const node of model.taskTree) {
+		const totalRows = model.taskTree.length;
+		const rows = opts.rows ?? totalRows;
+		const offset = opts.scrollOffset ?? anchoredScrollOffset(model.taskTree, rows);
+		const viewport = deriveTaskListViewport(totalRows, rows, offset);
+		if (viewport.hiddenAbove > 0) {
+			lines.push(boxLine(theme, safeWidth, dim(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`)));
+		}
+		for (const node of model.taskTree.slice(viewport.offset, viewport.offset + viewport.rows)) {
 			const indent = Math.min(node.depth, 6);
 			lines.push(boxLine(theme, safeWidth, renderTaskRow(theme, node, indent, inner)));
+		}
+		if (viewport.hiddenBelow > 0) {
+			lines.push(boxLine(theme, safeWidth, dim(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`)));
 		}
 	}
 

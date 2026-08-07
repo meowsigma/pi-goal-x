@@ -8,7 +8,7 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
-## [Unreleased]
+## [0.25.3] — 2026-08-07
 
 ### Changed
 
@@ -30,11 +30,13 @@ with the `0.x` prefix indicating pre-1.0 development.
 ### Added
 
 - The compact goal dashboard shows the focused goal's independent-auditor
-  status on a muted, width-safe line (`Auditor  on · Ctrl+Shift+A: off`);
-  `Ctrl+Shift+A` toggles it per-goal from the UI — persisted to the goal
-  file (revision-safe), with an `auditor_toggled` ledger event, a dashboard
-  refresh, and a notification. Inert when no goal is focused, a goal modal
-  is open, or the goal is complete.
+  status as a minimal dot integrated into the bottom-right of the box
+  border: green (`●`) when the auditor is on, gray when off. `Ctrl+Shift+A`
+  toggles it per-goal from the UI — persisted to the goal file
+  (revision-safe), with an `auditor_toggled` ledger event, a dashboard
+  refresh, and a notification; wide/medium footers advertise the chord, and
+  the toggle is inert when no goal is focused, a goal modal is open, or the
+  goal is complete.
 
 ## [0.25.2] — 2026-08-07
 

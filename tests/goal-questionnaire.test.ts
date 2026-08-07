@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createMockExtensionContext, createMockTheme, createMockTUI } from "./tui-test-utils.ts";
 import {
 	computeDialogLineLimit,
 	formatQuestionnaireAnswers,
@@ -8,6 +9,7 @@ import {
 	normalizeQuestionnaireQuestions,
 	proposalDialogFailureMessage,
 	proposalDecisionFromQuestionnaireResult,
+	runGoalQuestionnaire,
 	shouldAutoConfirmProposal,
 	type GoalQuestionnaireResult,
 } from "../extensions/goal-questionnaire.ts";
@@ -65,6 +67,55 @@ test("headless question sufficiency blocks vague-topic default fabrication", () 
 		topic: "在 sandbox 当前目录创建 hello.txt，内容为 Hello, Goal!，不要修改其他文件。",
 		questionText: "如果 hello.txt 已存在，应该覆盖还是停止？",
 	}), true);
+});
+
+// Realistic repro content from the reported bug: the agent asked "via uv too?"
+// while the goal panel + chat frame (19 lines) left only 10 dialog rows on a
+// 24-row terminal; the option labels wrap over multiple lines.
+const REPRO_QUESTION_TEXT = "via uv too?";
+const REPRO_OPTION_LABELS = [
+	"Dev toolchain only (recommended): pyproject.toml with [tool.uv] package=false, [dependency-groups] dev (pytest, pytest-benchmark), pytest config moved in; committed uv.lock; `uv sync` + `uv run pytest benchmarks/`; requirements-dev.txt and pytest.ini removed; runtime/zipapp/battery stay stdlib-only and uv-free",
+	"Also pin a dev Python via uv (.python-version, e.g. 3.12) while the runtime floor stays >=3.9",
+	"Also manage the built artifact with uv (uv tool install of the zipapp) — note: the zipapp is self-contained, uv adds nothing there",
+	"Write your own answer...",
+];
+
+/**
+ * Open a single-question goal_question dialog against a TUI that exposes
+ * terminal.rows and previousLines (pi's regular-renderer frame cache), so the
+ * terminal-height churn guard actually engages, and return the rendered lines.
+ */
+function renderGoalQuestionDialog(args: { rows: number; baseFrameLines: number }, width = 100): string[] {
+	const ctx = createMockExtensionContext();
+	void runGoalQuestionnaire(ctx, [{
+		id: "question",
+		question: REPRO_QUESTION_TEXT,
+		options: REPRO_OPTION_LABELS,
+		recommended: 0,
+	}]);
+	const record = ctx._customCalls[0];
+	assert.ok(record, "goal_question opens a custom dialog");
+	const { tui } = createMockTUI();
+	const augmented = Object.assign(tui, {
+		terminal: { rows: args.rows },
+		previousLines: Array.from({ length: args.baseFrameLines }, () => "x"),
+	});
+	const theme = createMockTheme();
+	const component = record.factory(augmented, theme, {}, () => {});
+	return (component as { render(w: number): string[] }).render(width);
+}
+
+test("regression: agent question stays readable when the goal panel leaves little room (rows=24, baseFrame=19)", () => {
+	// Reported repro: a goal_question dialog opened while the pi-goal-x goal
+	// panel + chat frame consumed 19 rows of a 24-row terminal. The churn guard
+	// bounds the dialog to 10 lines and tail-slices it — which dropped the top
+	// border AND the question text, leaving only option fragments + footer.
+	const lines = renderGoalQuestionDialog({ rows: 24, baseFrameLines: 19 });
+	assert.ok(lines.length <= 10, "dialog stays within the terminal-height bound");
+	assert.match(lines[0], /^─+$/, "top border must be visible");
+	assert.ok(lines.some((l) => l.includes(REPRO_QUESTION_TEXT)), "question text must be visible");
+	assert.ok(lines.some((l) => l.includes("Dev toolchain only")), "recommended first option must be visible");
+	assert.match(lines[lines.length - 1], /^─+$/, "bottom border must be visible");
 });
 
 test("proposal confirmation helpers keep headless and cancel semantics stable", () => {

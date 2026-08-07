@@ -29,6 +29,20 @@ export interface GoalQuestionnaireResult {
 
 export type ProposalDecision = "confirm" | "continue" | "cancel";
 
+/**
+ * Bound a custom dialog using the regular renderer's frame cache when
+ * available. The pi 0.84 fullscreen renderer does not expose that cache, so
+ * reserve four rows for host chrome and use the remaining terminal height.
+ */
+export function computeDialogLineLimit(args: { terminalRows?: number; baseFrameLines?: number }): number | undefined {
+	const rows = args.terminalRows;
+	if (!rows || rows <= 0) return undefined;
+	if (args.baseFrameLines && args.baseFrameLines > 0) {
+		return Math.min(rows, Math.max(10, rows - args.baseFrameLines + 1));
+	}
+	return Math.min(rows, Math.max(4, rows - 4));
+}
+
 export function normalizeQuestionnaireQuestions(rawQuestions: GoalQuestionnaireQuestion[]): GoalQuestionnaireQuestion[] {
 	const seenIds = new Set<string>();
 	return rawQuestions.map((q, i) => {
@@ -114,7 +128,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		const tuiInfo = tui as unknown as { terminal?: { rows?: number }; previousLines?: string[] };
 		const terminalRows = tuiInfo.terminal?.rows;
 		const baseFrame = tuiInfo.previousLines?.length;
-		const maxDialogLines = terminalRows && baseFrame ? Math.max(10, terminalRows - baseFrame + 1) : undefined;
+		const maxDialogLines = computeDialogLineLimit({ terminalRows, baseFrameLines: baseFrame });
 		let currentTab = 0;
 		let optionIndex = 0;
 		let inputMode = false;

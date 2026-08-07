@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+	computeDialogLineLimit,
 	formatQuestionnaireAnswers,
 	isHeadlessQuestionSufficientForDraft,
 	normalizeQuestionnaireQuestions,
@@ -24,6 +25,16 @@ test("normalizeQuestionnaireQuestions trims ids, de-duplicates, filters options,
 			{ id: "q3", question: "Empty id?", options: [], recommended: undefined, allowCustom: true },
 		],
 	);
+});
+
+test("dialog line limit supports pi 0.83 frames and pi 0.84 docked/fullscreen frames", () => {
+	assert.equal(computeDialogLineLimit({ terminalRows: 46, baseFrameLines: 38 }), 10);
+	assert.equal(computeDialogLineLimit({ terminalRows: 46, baseFrameLines: 20 }), 27);
+	assert.equal(computeDialogLineLimit({ terminalRows: 46 }), 42);
+	assert.equal(computeDialogLineLimit({ terminalRows: 8 }), 4);
+	assert.equal(computeDialogLineLimit({ terminalRows: 8, baseFrameLines: 20 }), 8);
+	assert.equal(computeDialogLineLimit({ terminalRows: 3 }), 3);
+	assert.equal(computeDialogLineLimit({}), undefined);
 });
 
 test("formatQuestionnaireAnswers emits stable Q/A records with context and options", () => {

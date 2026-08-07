@@ -8,7 +8,42 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
-## [0.25.4] — 2026-08-07
+## [0.26.0] — 2026-08-07
+
+### Fixed
+
+- The goal-draft confirmation dialog no longer silently drops the
+  "Tasks proposed for confirmation" section (or other contract sections)
+  when the terminal is short. The bounded frame now keeps the dialog head,
+  the tasks section, and the Confirm/Continue/Cancel options with footer
+  within the height limit, sacrificing only the objective-box middle
+  in-frame; the complete goal — every objective-contract section and every
+  task line — is rendered into the scrollable terminal buffer the moment a
+  proposal is made, so nothing is omitted and the user can scroll to re-read
+  the full draft while deciding. The churn-guard invariant is preserved (the
+  opened frame never exceeds the screen, so scrollback is never wiped),
+  content that fits renders byte-identically, and no paging or new dialog
+  chrome was added.
+- Agent question dialogs no longer render unbounded on short terminals: the
+  dialog height limit now falls back to reserving four rows for host chrome
+  when the previous-frame height is unavailable (pi 0.84 fullscreen
+  renderer), keeping questions readable.
+
+### Changed
+
+- Bumped `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and
+  `@earendil-works/pi-tui` to 0.84.1.
+- Goal auto-continuation now starts only after the agent fully settles
+  (`agent_settled`) instead of at `agent_end`, avoiding polling a stale busy
+  context for minutes on pi 0.84 while retries, compaction, and queued
+  messages drain.
+
+### Documentation
+
+- Added spec docs for the question-readability fix and the goal-draft
+  tasks-visibility fix (PRODUCT/TECH/MILESTONES under `specs/`).
+
+---
 
 ### Changed
 

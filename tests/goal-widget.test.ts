@@ -185,7 +185,7 @@ test("renderGoalWidgetLines shows top-level task progress (§9.1, skipped counts
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	assert.match(lines.join("\n"), /Tasks  \[.*\] 2\/3 · 67%/);
+	assert.match(lines.join("\n"), /Tasks · ✓2 done · 1 open/);
 });
 
 test("renderGoalWidgetLines shows the current task (first pending, inferred)", () => {
@@ -201,7 +201,7 @@ test("renderGoalWidgetLines shows the current task (first pending, inferred)", (
 		},
 	}), theme, 100);
 	const body = lines.join("\n");
-	assert.match(body, /Tasks  \[.*\] 1\/3 · 33%/);
+	assert.match(body, /Tasks · ✓1 done · 2 open/);
 	assert.match(body, /Current  t2 · Task 2/);
 });
 
@@ -216,7 +216,7 @@ test("renderGoalWidgetLines shows 'All tasks complete' when all done (§9.4)", (
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	assert.match(lines.join("\n"), /Tasks  \[.*\] 2\/2 · 100%/);
+	assert.match(lines.join("\n"), /Tasks · ✓2 done · 0 open/);
 	assert.match(lines.join("\n"), /Current  All tasks complete/);
 });
 
@@ -244,7 +244,7 @@ test("renderGoalWidgetLines shows subtask progress for the current parent task (
 			proposedAt: testProposedAt,
 		},
 	}), theme, 100);
-	assert.match(lines.join("\n"), /Subtasks \[.*\] 2\/2 · 100%/);
+	assert.match(lines.join("\n"), /· Sub 2\/2 \[.*\]/, "subtask bar sits beside the task bar in the header");
 });
 
 test("renderGoalWidgetLines infers a pending subtask as current at any depth", () => {

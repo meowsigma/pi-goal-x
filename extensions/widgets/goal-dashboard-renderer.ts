@@ -77,12 +77,23 @@ function boxRule(theme: Theme, width: number): string {
 	return frame(theme, `├${H.repeat(Math.max(1, width - 2))}┤`);
 }
 
-/** Section separator with a label: `├─ Tasks ──────────┤` (§5.1). */
-function boxSectionRule(theme: Theme, width: number, label: string): string {
+/** Section separator with a label and optional right-side content:
+ * `├─ Tasks ──── [████░] · Sub 2/3 [██░░] ┤` (§5.1). The right content
+ * (e.g. the header progress bars) always survives; the label truncates when
+ * tight. Hardened so label + right never exceed the inner width: the fill is
+ * `max(0, …)` and the truncation budget leaves room for the `─ ` prefix and
+ * trailing space. */
+function boxSectionRule(theme: Theme, width: number, label: string, right = ""): string {
 	const inner = Math.max(4, width - 2);
 	const left = frame(theme, `${H} ${label} `);
-	const fill = Math.max(1, inner - visibleWidth(left));
-	return `${frame(theme, "├")}${left}${frame(theme, H.repeat(fill))}${frame(theme, "┤")}`;
+	const r = right ? ` ${right} ` : "";
+	let l = left;
+	if (visibleWidth(left) + visibleWidth(r) > inner) {
+		const budget = Math.max(4, inner - visibleWidth(r) - 3);
+		l = frame(theme, `${H} ${fit(label, budget)} `);
+	}
+	const fill = Math.max(0, inner - visibleWidth(l) - visibleWidth(r));
+	return `${frame(theme, "├")}${l}${frame(theme, H.repeat(fill))}${r}${frame(theme, "┤")}`;
 }
 
 function boxFooter(theme: Theme, width: number, content: string): string {
@@ -145,6 +156,11 @@ function layoutMode(width: number): LayoutMode {
 
 interface LayoutSpec {
 	barWidth: number;
+	/** Compact progress bar width inside the Tasks header row (bar at the end). */
+	headerBarWidth: number;
+	/** Subtask progress bar width inside the Tasks header row, beside the task
+	 * bar (wide/medium/narrow; minimal omits the segment — unused there). */
+	subtaskBarWidth: number;
 	showPath: boolean;
 	showPauseAction: boolean;
 	footerHint: string;
@@ -153,13 +169,13 @@ interface LayoutSpec {
 function specFor(mode: LayoutMode): LayoutSpec {
 	switch (mode) {
 		case "wide":
-			return { barWidth: 26, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks" };
+			return { barWidth: 26, headerBarWidth: 8, subtaskBarWidth: 4, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks" };
 		case "medium":
-			return { barWidth: 18, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks" };
+			return { barWidth: 18, headerBarWidth: 6, subtaskBarWidth: 3, showPath: true, showPauseAction: true, footerHint: "Ctrl+Shift+T: expand tasks" };
 		case "narrow":
-			return { barWidth: 12, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand" };
+			return { barWidth: 12, headerBarWidth: 5, subtaskBarWidth: 2, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand" };
 		case "minimal":
-			return { barWidth: 8, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand" };
+			return { barWidth: 8, headerBarWidth: 4, subtaskBarWidth: 2, showPath: false, showPauseAction: false, footerHint: "Ctrl+Shift+T: expand" };
 	}
 }
 
@@ -232,15 +248,19 @@ function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewpor
 	for (const node of shown) {
 		const marker = taskMarker(node);
 		const contractMark = node.verificationContract ? dim(theme, " ☑") : "";
+		// §9.3 compact subtask marker: direct-child done/total for tasks that
+		// have subtasks, muted so it stays annotation — the current-task bar
+		// below carries the visual weight.
+		const subtaskMark = node.totalSubtasks > 0 ? muted(theme, ` ▸ ${node.completedSubtasks}/${node.totalSubtasks}`) : "";
 		const id = node.id.padEnd(idWidth);
 		const prefix = `${marker.symbol} ${id}  `;
-		const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark));
+		const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark) - visibleWidth(subtaskMark));
 		const title = fit(node.title, titleBudget);
 		const markerText = theme.fg(marker.color, marker.symbol);
 		// Colour-coded: id shares the marker color; titles amber; current accent.
 		const idText = node.isCurrent ? accent(theme, id) : theme.fg(marker.color, id);
 		const body = node.isCurrent ? accent(theme, title) : amber(theme, title);
-		rows.push(`${markerText} ${idText}  ${body}${contractMark}`);
+		rows.push(`${markerText} ${idText}  ${body}${contractMark}${subtaskMark}`);
 	}
 	if (viewport.hiddenBelow > 0) {
 		rows.push(muted(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`));
@@ -291,25 +311,38 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${theme.fg(fuel as RenderColor, "⛽")} ${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
 	}
 
-	// Overall task progress (§9.1). The fraction is muted like the percent:
-	// only the bar itself stays colourful.
-	if (model.taskProgress) {
-		const bar = progressBar(theme, model.taskProgress.percentage, spec.barWidth);
-		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Tasks")}  ${bar} ${muted(theme, `${model.taskProgress.completed}/${model.taskProgress.total} · ${model.taskProgress.percentage}%`)}`));
-	}
+	// §9.1 compact task counts + progress bars live in the Tasks header row
+	// (below); the standalone progress lines were removed in favor of it.
 
 	// §9.2/§9.6 compact task list: a window over the top-level tasks, anchored
 	// by default so the most recently completed tasks are visible; when the
 	// list overflows the window, the footer advertises Ctrl+Shift+↑↓ to scroll
-	// it. Subtasks of the current task stay inline via the subtask progress
-	// line below.
+	// it. The current task's subtask progress lives in the header segment, and
+	// per-row subtask markers show which tasks have subtasks.
 	const topLevel = model.taskTree.filter((node) => node.depth === 0);
 	const compactRows = compactTaskViewportRows(safeWidth);
 	const listOverflows = topLevel.length > compactRows;
 	if (topLevel.length > 0) {
 		const offset = opts.scrollOffset ?? anchoredScrollOffset(topLevel, compactRows);
 		const viewport = deriveTaskListViewport(topLevel.length, compactRows, offset);
-		lines.push(boxSectionRule(theme, safeWidth, "Tasks"));
+		// §9.1/§9.3 header row: counts first (`✓N done · M open`, skipped
+		// counts as done), compact task progress bar, then the current task's
+		// subtask progress bar beside it (` · Sub done/total `, wide/medium;
+		// narrow drops the word `Sub` so the full counts fit at 50 cols;
+		// minimal omits the segment — counts + task bar alone cannot share 38
+		// inner columns with a second bar). All muted: the header stays one
+		// frame-tone block. The standalone compact progress lines were removed
+		// in favor of this row.
+		const headerLabel = model.taskProgress
+			? `Tasks · ✓${model.taskProgress.completed} done · ${model.taskProgress.total - model.taskProgress.completed} open`
+			: "Tasks";
+		let headerRight = model.taskProgress ? progressBar(theme, model.taskProgress.percentage, spec.headerBarWidth) : "";
+		if (model.currentTask && model.currentTask.totalSubtasks > 0 && mode !== "minimal") {
+			const subBar = progressBar(theme, model.currentTask.subtaskPercentage, spec.subtaskBarWidth);
+			const subWord = mode === "narrow" ? "" : "Sub ";
+			headerRight += `${muted(theme, ` · ${subWord}`)}${muted(theme, `${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks}`)} ${subBar}`;
+		}
+		lines.push(boxSectionRule(theme, safeWidth, headerLabel, headerRight));
 		for (const row of renderCompactTaskRows(theme, topLevel, viewport, inner)) {
 			lines.push(boxLine(theme, safeWidth, row));
 		}
@@ -330,11 +363,9 @@ export function renderCompactDashboard(
 		}
 	}
 
-	// Current-task subtask progress (§9.3).
-	if (model.currentTask && model.currentTask.totalSubtasks > 0 && mode !== "minimal") {
-		const bar = progressBar(theme, model.currentTask.subtaskPercentage, spec.barWidth);
-		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Subtasks")} ${bar} ${muted(theme, `${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks}`)} · ${muted(theme, `${model.currentTask.subtaskPercentage}%`)}`));
-	}
+	// Current-task subtask progress moved into the Tasks header row (§9.3);
+	// the standalone compact Subtasks progress line was removed. (The
+	// expanded dashboard's Current-task block still shows it.)
 
 	// Goal-level verification (§11.1): truncated first line in compact.
 	if (model.goalVerificationContract && mode !== "minimal") {

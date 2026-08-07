@@ -211,7 +211,7 @@ test("palette: neutral-gray chrome, colour-coded content (§5)", () => {
 	for (const glyph of ["╭", "╮", "├", "┤", "╰", "╯"]) {
 		assert.ok(muted.includes(glyph), `${glyph} corner is neutral gray`);
 	}
-	assert.ok(muted.some((v) => v === "─ Tasks "), "section-rule label is part of the frame tone");
+	assert.ok(muted.some((v) => v.startsWith("─ Tasks")), "section-rule label is part of the frame tone");
 	// Frame lines are one tone: the gray must appear on BOTH the left and the
 	// right of every frame line (regression: it used to read muted on one
 	// side and mdLink on the other).
@@ -234,10 +234,11 @@ test("palette: neutral-gray chrome, colour-coded content (§5)", () => {
 	assert.ok(byColor("accent").some((v) => v.includes("pi-goal-x")), "brand is accent");
 	assert.ok(muted.some((v) => /^█+$/.test(v)), "progress bar fill is neutral gray");
 	assert.ok(byColor("dim").some((v) => /^░+$/.test(v)), "progress bar empty cells are dim");
-	// No accent progress numbers remain: the tasks percentage and the current
-	// task's subtask fraction are both neutral gray.
-	assert.ok(muted.some((v) => /^\d+\/\d+ · \d+%$/.test(v)), "tasks percentage is neutral gray");
+	// No accent progress numbers remain: the tasks counts, the header bar
+	// fraction and the current task's subtask fraction are all neutral gray.
+	assert.ok(muted.some((v) => /✓\d+ done · \d+ open/.test(v)), "task counts live in the muted header row");
 	assert.ok(muted.some((v) => /^\d+\/\d+$/.test(v)), "subtask fraction is neutral gray");
+	assert.ok(muted.some((v) => /^ ▸ \d+\/\d+$/.test(v)), "per-row subtask marker is neutral gray");
 	assert.equal(byColor("accent").some((v) => /^\d+\/\d+/.test(v)), false, "no accent progress fractions remain");
 	// No blinding #ffff00-style warning anywhere.
 	assert.equal(byColor("warning").length, 0, "the bright warning color is not used in the dashboard");
@@ -316,7 +317,7 @@ test("expanded: rows + scrollOffset window the tree with indicators; full tree b
 	assert.match(full, /Task number 30/);
 });
 
-test("compact: running with tasks at 100 shows status, progress, current, contract, file", () => {
+test("compact: running with tasks at 100 shows status, header counts + bar, current, contract, file", () => {
 	const model = modelFor(withTasks(fiveTaskTree(), { currentTaskId: "t3", verificationContract: "Run npm test with zero failures." }));
 	assert.ok(model);
 	const lines = renderCompactDashboard(model, theme, 100);
@@ -324,15 +325,20 @@ test("compact: running with tasks at 100 shows status, progress, current, contra
 	assert.match(lines[0], /^╭─ pi-goal-x ─ Add CSV export to reports/);
 	assert.doesNotMatch(lines[0], /12m47s/, "usage moved from the header into the status line");
 	assert.match(lines[1], /goal: running \[12m47s 18\.2K\] \(\+2 open\)/);
-	assert.match(text, /├─ Tasks /);
+	// Header row: counts first (skipped counted as done → ✓3), task bar, then
+	// the current task's subtask bar beside it (`· Sub 2/3`); the standalone
+	// compact progress lines are gone.
+	assert.match(text, /├─ Tasks · ✓3 done · 2 open ─+ \[.*\] · Sub 2\/3 \[.*\] ┤/);
+	assert.doesNotMatch(text, /Tasks  \[.*\] \d\/\d · \d+%/, "standalone compact progress line is gone");
+	assert.doesNotMatch(text, /Subtasks \[.*\] 2\/3 · 67%/, "standalone compact subtask line is gone from compact");
 	assert.match(text, /✓ t1  Review reports page and data source/);
-	assert.match(text, /▸ t3  Add the download button/);
+	assert.match(text, /▸ t3  Add the download button ☑ ▸ 2\/3/);
 	assert.match(text, /· t4  Add documentation/);
 	assert.match(text, /~ t5  Add and run tests/);
+	assert.doesNotMatch(text, /· t4  Add documentation ▸/, "leaf tasks show no subtask marker");
 	assert.doesNotMatch(text, /\+[0-9]+ more task/, "all five top-level tasks fit at 100 cols");
-	assert.match(text, /Tasks  \[.*\] 3\/5 · 60%/);
 	assert.match(text, /Current  t3 · Add the download button/);
-	assert.match(text, /Subtasks \[.*\] 2\/3 · 67%/);
+	assert.match(text, /· Sub 2\/3 \[.*\]/, "subtask bar sits beside the task bar in the header");
 	assert.match(text, /Verify   Run npm test with zero failures/);
 	assert.match(text, /File     \.pi\/goals\/active_goal_g1\.md/);
 	assert.match(lines.at(-1) ?? "", /Ctrl\+Shift\+T: expand tasks/);
@@ -344,7 +350,7 @@ test("compact: minimal mode at 40 keeps the essential summary", () => {
 	const lines = renderCompactDashboard(model, theme, 40);
 	const text = lines.join("\n");
 	assert.match(text, /goal: running/);
-	assert.match(text, /Tasks  \[.*\] 3\/5 · 60%/);
+	assert.match(text, /Tasks · ✓3 done · 2 open/);
 	assert.match(text, /▸ Add the download button/);
 	assert.doesNotMatch(text, /Other goals/);
 	assert.doesNotMatch(text, /File/);
@@ -385,7 +391,7 @@ test("compact: complete state shows the §4.7 message", () => {
 	assert.ok(model);
 	const text = renderCompactDashboard(model, theme, 100).join("\n");
 	assert.match(text, /All required work is complete/);
-	assert.match(text, /5\/5 · 100%/);
+	assert.match(text, /✓5 done · 0 open/);
 });
 
 // ---------------------------------------------------------------------------

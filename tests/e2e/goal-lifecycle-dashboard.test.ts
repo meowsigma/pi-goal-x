@@ -232,12 +232,12 @@ test("full guided lifecycle: create → focus → tasks → audit → archive (�
 		// §9.1: a skipped top-level task counts as done toward the main bar.
 		await callTool(h, "update_goal_task", "skip-1", { task_id: "t5", status: "skipped", reason: "Covered by t2" });
 
-		// ── Step 7: compact dashboard shows 3/5 · 60% + current + subtasks + contract ──
+		// ── Step 7: compact dashboard shows header counts + bar + current + subtasks + contract ──
 		goal = currentGoal(cwd)!;
 		const compact = dashboardText(goal, false, cwd);
-		assert.match(compact, /3\/5 · 60%/, "compact dashboard shows 3/5 · 60%");
+		assert.match(compact, /Tasks · ✓3 done · 2 open/, "compact header shows done/open counts");
 		assert.match(compact, /Current  t3 · Add the download button/, "current task shown");
-		assert.match(compact, /Subtasks \[.*\] 2\/3 · 67%/, "subtask progress shown");
+		assert.match(compact, /· Sub 2\/3 \[.*\]/, "subtask bar sits beside the task bar in the header");
 		assert.match(compact, /Verify   Run npm test \(0 failures\)/, "verification contract shown");
 		assert.match(compact, /File     \.pi\/goals\/active_goal_/, "file path shown");
 
@@ -259,7 +259,7 @@ test("full guided lifecycle: create → focus → tasks → audit → archive (�
 		await callTool(h, "update_goal_task", "comp-6", { task_id: "t3", status: "complete", evidence: "Button works" });
 		await callTool(h, "update_goal_task", "comp-7", { task_id: "t4", status: "complete", evidence: "Docs written" });
 		goal = currentGoal(cwd)!;
-		assert.match(dashboardText(goal, false, cwd), /5\/5 · 100%/, "all tasks done");
+		assert.match(dashboardText(goal, false, cwd), /✓5 done · 0 open/, "all tasks done");
 
 		// ── Step 11: request completion ─────────────────────────────────────
 		const completion = await callTool(h, "update_goal", "complete-1", { status: "complete" });

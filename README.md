@@ -249,17 +249,15 @@ Verify that the generated report contains every required section.
 Always visible above the editor while a goal is focused:
 
 ```text
-╭─ pi-goal-x ─ Add CSV export to reports ─────── 12m47s · 18.2K tok ─╮
-│ ● In progress · Focused: yes · Other goals: 2                      │
-│ Tasks  [██████░░░░] 3/5 · 60%                                      │
-├─ Tasks ────────────────────────────────────────────────────────────┤
+╭─ pi-goal-x ─ Add CSV export to reports ────────────────────────────╮
+│ goal: running [12m47s 18.2K] (+2 open)                             │
+├─ Tasks · ✓3 done · 2 open ──────────── [█████░░░] · Sub 2/3 [██░░] ┤
 │ ✓ t1  Review reports page and data source                          │
 │ ✓ t2  Implement filtered CSV export                                │
-│ ▸ t3  Add the download button                                      │
+│ ▸ t3  Add the download button ☑ ▸ 2/3                              │
 │ · t4  Add documentation                                            │
 │ … +1 more task                                                     │
 │ Current  t3 · Add the download button                              │
-│ Subtasks [███████░░░] 2/3 · 67%                                    │
 │ Verify   Run npm test with zero failures.                          │
 │ File     .pi/goals/active_goal_...                                 │
 ╰─ Ctrl+Shift+T: expand tasks ───────────────────────────────────────╯

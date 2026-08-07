@@ -21,49 +21,54 @@ activity are never fabricated for display.
 Always visible above the editor while a goal is focused:
 
 ```text
-╭─ pi-goal-x ─ Add CSV export to reports────────────── 12m47s · 18.2K tok ─╮
-│ ● In progress · Focused: yes · Other goals: 2                            │
-│ Tasks  [███████████░░░░░░░] 3/5 · 60%                                    │
-├─ Tasks ─────────────────────────────────────────────────────────────────┤
-│ ✓ t1  Review reports page and data source                                │
-│ ✓ t2  Implement filtered CSV export                                      │
-│ ▸ t3  Add the download button                                            │
-│ · t4  Add documentation                                                  │
-│ … +1 more task                                                           │
-│ Current  t3 · Add the download button                                    │
-│ Subtasks [████████████░░░░░░] 2/3 · 67%                                  │
-│ Verify   Run npm test with zero failures.                                │
-│ File     .pi/goals/active_goal_g1.md                                     │
-╰─ Ctrl+Shift+T: expand tasks─────────────────────────────────────────────╯
+╭─ pi-goal-x ─ Add CSV export to reports ────────────────────────────────────────────────╮
+│ goal: running [12m47s 18.2K] (+2 open)                                                 │
+├─ Tasks · ✓3 done · 2 open ─────────────────────────────────── [████░░] · Sub 2/3 [██░] ┤
+│ ✓ t1  Review reports page and data source                                              │
+│ ✓ t2  Implement filtered CSV export                                                    │
+│ ▸ t3  Add the download button ☑ ▸ 2/3                                                  │
+│ · t4  Add documentation                                                                │
+│ … +1 more task                                                                         │
+│ Current  t3 · Add the download button                                                  │
+│ Verify   Run npm test with zero failures.                                              │
+│ File     .pi/goals/active_goal_g1.md                                                   │
+╰─ Ctrl+Shift+T: expand tasks ───────────────────────────────────────────────────────────╯
 ```
 
 Compact rows, in order:
 
-1. Header (rounded corners): title plus elapsed time and token usage.
-2. Status: colored symbol + explicit label, focus state, other open goals
-   (`·`-separated). Colors come from the theme with a monochrome fallback.
+1. Header (rounded corners): title. (Usage lives in the status line below,
+   not in the header.)
+2. Status: `goal: <status> [<elapsed> <tokens>] (+N open)` — the same
+   terminology as the pi footer status line.
 3. Token budget (when configured): `⛽ Budget 18.2K / 50K · 36%`.
-4. Top-level task progress (`3/5 · 60%`); a skipped top-level task counts as
-   done (§9.1). The whole progress element is neutral gray — bar fill and
-   empty cells included — so nothing in the progress info is colourful.
+4. Tasks header row: `Tasks · ✓N done · M open` with the compact task
+   progress bar, then the current task's subtask bar beside it
+   (` · Sub done/total ` + bar — the word `Sub` is dropped in narrow mode so
+   the full counts still fit at 50 columns, and the segment is omitted
+   entirely in minimal mode, where the counts and task bar alone use all
+   available space). `N` counts top-level tasks complete **or skipped** — a
+   skipped top-level task counts as done (§9.1) — and `M` counts pending
+   tasks. The subtask segment appears only when the current task has direct
+   children. The whole header row is neutral gray (label, counts, bar fill,
+   and empty cells) so nothing in the progress info is colourful.
 5. Task list section: the top-level tasks shown by default in **pastel
    amber** (`mdHeading`) with colour-coded markers and ids (✓ complete muted
    green, ▸ current teal, ~ skipped gray, · pending amber), an aligned id
    column, truncated amber titles, and a `… +N more` overflow line when the
    list is longer than the row budget (5 rows at wide, 4 medium, 3 narrow, 2
-   minimal). The current task is fully highlighted in the theme's accent
-   color (marker, id, title). The whole box chrome — top/bottom frame,
-   left/right edges, corners and interior rules — is drawn in one tone: the
-   theme's neutral gray (`muted`). No blue tinge.
+   minimal). Tasks that have direct subtasks show a muted `▸ done/total`
+   marker at the end of their row (leaf tasks show none). The current task
+   is fully highlighted in the theme's accent color (marker, id, title). The
+   whole box chrome — top/bottom frame, left/right edges, corners and
+   interior rules — is drawn in one tone: the theme's neutral gray
+   (`muted`). No blue tinge.
 6. Current task: `Current  t3 · Add the download button` (id and title in the
    accent color).
-7. Current-task subtask progress (`2/3 · 67%`) when the current task has
-   direct children (the current task's subtasks stay inline). The subtask
-   bar and its fraction are neutral gray like the top-level progress.
-8. Goal-level verification contract (first line, truncated).
-9. Blocked or paused detail (reason, suggested action).
-10. Active (or archived) goal file path.
-11. Footer with the expansion shortcut. The whole footer line — leading dash,
+7. Goal-level verification contract (first line, truncated).
+8. Blocked or paused detail (reason, suggested action).
+9. Active (or archived) goal file path.
+10. Footer with the expansion shortcut. The whole footer line — leading dash,
     shortcut hint and trailing fill — is drawn in one frame tone (the
     neutral-gray `muted`), so the color spans the full width with no two-tone
     split; the header line is likewise one tone with only the `pi-goal-x`

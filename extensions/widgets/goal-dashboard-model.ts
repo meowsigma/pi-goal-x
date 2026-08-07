@@ -90,6 +90,10 @@ export interface DashboardTaskNode {
 	evidence?: string;
 	/** Completion timestamp (when status is complete) — the scroll anchor (§9.6). */
 	completedAt?: string;
+	/** Direct-child subtask total — 0 for a leaf task (§9.3 rule: direct children only). */
+	totalSubtasks: number;
+	/** Direct children complete or skipped (same "done" rule as §9.1). */
+	completedSubtasks: number;
 }
 
 export interface GoalDashboardModelOptions {
@@ -187,6 +191,8 @@ export function flattenTaskTree(tasks: readonly GoalTask[] | undefined, currentT
 	if (!tasks) return nodes;
 	const walk = (list: readonly GoalTask[], depth: number): void => {
 		for (const t of list) {
+			const children = t.subtasks ?? [];
+			const completed = children.filter((c) => c.status === "complete" || c.status === "skipped").length;
 			nodes.push({
 				id: t.id,
 				title: t.title,
@@ -196,8 +202,10 @@ export function flattenTaskTree(tasks: readonly GoalTask[] | undefined, currentT
 				verificationContract: t.verificationContract,
 				evidence: t.evidence,
 				completedAt: t.completedAt,
+				totalSubtasks: children.length,
+				completedSubtasks: completed,
 			});
-			if (t.subtasks && t.subtasks.length > 0) walk(t.subtasks, depth + 1);
+			if (children.length > 0) walk(children, depth + 1);
 		}
 	};
 	walk(tasks, 0);

@@ -195,6 +195,36 @@ test("tree nodes carry verification contracts and evidence", () => {
 	assert.equal(t3?.verificationContract, "The button downloads a CSV using the active filters.");
 });
 
+test("tree nodes carry direct-child subtask counts for the compact marker", () => {
+	const nodes = flattenTaskTree(fiveTaskList());
+	const t3 = nodes.find((n) => n.id === "t3");
+	// t3 has three direct children, two complete → 2/3; skipped counts as done.
+	assert.equal(t3?.totalSubtasks, 3);
+	assert.equal(t3?.completedSubtasks, 2);
+	// Leaves carry zero counts.
+	for (const id of ["t1", "t2", "t4", "t5"]) {
+		assert.equal(nodes.find((n) => n.id === id)?.totalSubtasks, 0);
+		assert.equal(nodes.find((n) => n.id === id)?.completedSubtasks, 0);
+	}
+	// Subtask nodes are leaves too.
+	assert.equal(nodes.find((n) => n.id === "t3.1")?.totalSubtasks, 0);
+});
+
+test("tree node subtask counts count skipped children as done", () => {
+	const tasks = [
+		task("a", "A", {
+			subtasks: [
+				task("a.1", "A1", { status: "complete" }),
+				task("a.2", "A2", { status: "skipped", skipReason: "Covered" }),
+				task("a.3", "A3"),
+			],
+		}),
+	];
+	const node = flattenTaskTree(tasks)[0]!;
+	assert.equal(node.totalSubtasks, 3);
+	assert.equal(node.completedSubtasks, 2);
+});
+
 // ---------------------------------------------------------------------------
 // Task-list viewport / scroll (§9.6)
 // ---------------------------------------------------------------------------
@@ -209,6 +239,8 @@ function nodesWithCompletions(completed: Array<[string, string]>): DashboardTask
 			status: entry ? ("complete" as const) : ("pending" as const),
 			depth: 0,
 			isCurrent: false,
+			totalSubtasks: 0,
+			completedSubtasks: 0,
 			...(entry ? { completedAt: entry[1] } : {}),
 		};
 	});
@@ -232,11 +264,11 @@ test("latestCompletedNodeIndex returns -1 without completed/timestamped tasks", 
 	assert.equal(latestCompletedNodeIndex([]), -1);
 	assert.equal(latestCompletedNodeIndex(nodesWithCompletions([])), -1);
 	// status complete but no completedAt (legacy) does not qualify
-	const legacy = [{ id: "t1", title: "A", status: "complete" as const, depth: 0, isCurrent: false }];
+	const legacy = [{ id: "t1", title: "A", status: "complete" as const, depth: 0, isCurrent: false, totalSubtasks: 0, completedSubtasks: 0 }];
 	assert.equal(latestCompletedNodeIndex(legacy), -1);
 	// skipped tasks never qualify
 	const skipped = [
-		{ id: "t1", title: "A", status: "skipped" as const, depth: 0, isCurrent: false, completedAt: "2026-01-01T10:00:00.000Z" },
+		{ id: "t1", title: "A", status: "skipped" as const, depth: 0, isCurrent: false, completedAt: "2026-01-01T10:00:00.000Z", totalSubtasks: 0, completedSubtasks: 0 },
 	];
 	assert.equal(latestCompletedNodeIndex(skipped), -1);
 });
@@ -268,6 +300,8 @@ test("anchoredScrollOffset bottom-anchors the latest completion as the last visi
 		status: "pending" as const,
 		depth: 0,
 		isCurrent: false,
+		totalSubtasks: 0,
+		completedSubtasks: 0,
 	}));
 	longList[1] = { ...longList[1]!, status: "complete", completedAt: "2026-01-01T10:00:00.000Z" };
 	longList[11] = { ...longList[11]!, status: "complete", completedAt: "2026-01-01T11:00:00.000Z" };

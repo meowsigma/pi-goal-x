@@ -19,6 +19,19 @@ with the `0.x` prefix indicating pre-1.0 development.
   status line. The focused-goal footer line at the bottom of the pi screen is
   removed — the widget is the single home for goal status (the unfocused
   `goal: unfocused [N open]` hint is kept).
+- Goal widget (compact dashboard): the `Tasks` section header now carries
+  the top-level counts (`Tasks · ✓N done · M open`, skipped counted as
+  done) plus a compact progress bar at the end of the row; the standalone
+  `Tasks  [bar] X/Y · %` progress line is removed from the compact view
+  (the expanded dashboard keeps its Progress section). Task rows with
+  direct subtasks show a muted `▸ done/total` marker.
+- Goal widget (compact dashboard): the current task's subtask progress bar
+  moved **beside** the task progress bar in the `Tasks` header row
+  (`· Sub done/total` + bar, shown only when the current task has
+  subtasks; narrow mode drops the `Sub` word so the full counts fit at 50
+  columns, minimal mode omits the segment) and the standalone compact
+  `Subtasks  [bar] 2/3 · 67%` line was removed — the expanded dashboard's
+  Current-task block keeps its subtask line.
 
 ## [0.25.1] — 2026-08-06
 

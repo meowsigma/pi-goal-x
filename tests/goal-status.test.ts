@@ -80,9 +80,9 @@ test("standard mode renders the compact dashboard from the shared model (§13.1)
 	assert.match(text, /✓ t1  Review reports page and data source/);
 	// The five-task list overflows the medium-status width (78 cols).
 	assert.match(text, /… \+1 more task/);
-	assert.match(text, /Tasks  \[.*\] 3\/5 · 60%/);
+	assert.match(text, /Tasks · ✓3 done · 2 open/);
 	assert.match(text, /Current  t3 · Add the download button/);
-	assert.match(text, /Subtasks \[.*\] 2\/3 · 67%/);
+	assert.match(text, /· Sub 2\/3 \[.*\]/, "subtask bar sits beside the task bar in the compact header");
 	assert.match(text, /Verify   Run npm test with zero failures/);
 	assert.match(text, /File     \.pi\/goals\/active_goal_g1\.md/);
 });

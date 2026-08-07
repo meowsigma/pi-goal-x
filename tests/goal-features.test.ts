@@ -12,7 +12,8 @@ import { buildGoalTaskDetailBlock } from "../extensions/goal-format.ts";
 import { deriveTasksFromObjective } from "../extensions/goal-task-derive.ts";
 import { createGoalCore } from "../extensions/goal-state.ts";
 import { createGoal } from "../extensions/goal-record.ts";
-import { writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
+import { readGoalLedger } from "../extensions/goal-ledger.ts";
+import { parseGoalFile, writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
 import { showTaskListOverlay } from "../extensions/widgets/task-list-overlay.ts";
 import { toggleTaskViaService, syncTerminalInputPause } from "../extensions/goal-widget.ts";
 import { renderGoalWidgetLines } from "../extensions/widgets/goal-widget.ts";
@@ -151,6 +152,66 @@ describe("F3 interactive overlay toggle", () => {
 			assert.equal(res.ok, true);
 			const afterReopen = h.core.state.goal!;
 			assert.equal(afterReopen.taskList!.tasks[0]!.status, "pending");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("F7 auditor toggle (Ctrl+Shift+A)", () => {
+	it("toggleGoalAuditor flips per-goal skipAuditor, persists it, records the event, and notifies", async () => {
+		const cwd = fixtureCwd();
+		try {
+			const goal = writeActiveGoalFile({ cwd }, makeGoal({ objective: "Auditor toggle test" }));
+			const h = coreHarness(cwd);
+			await h.core.loadState(h.ctx as never);
+			h.core.setFocusedGoalId(goal.id, h.ctx as never, "selected", { recordLedger: false });
+			assert.equal(h.core.state.goal?.skipAuditor, undefined, "auditor on by default");
+
+			h.core.toggleGoalAuditor(h.ctx as never);
+			assert.equal(h.core.state.goal?.skipAuditor, true, "toggle disables the auditor in memory");
+			let toggled = readGoalLedger({ cwd }).events.filter((e) => e.type === "auditor_toggled");
+			assert.equal(toggled.length, 1, "one auditor_toggled event");
+			assert.equal((toggled[0] as any).enabled, false, "event records the new disabled state");
+			assert.ok(h.notifies.some((n) => n.msg.includes("Auditor disabled")), "disabling is announced");
+			const onDisk = parseGoalFile(path.join(cwd, h.core.state.goal!.activePath!))!;
+			assert.equal(onDisk.skipAuditor, true, "skipAuditor persisted to the goal file");
+
+			h.core.toggleGoalAuditor(h.ctx as never);
+			assert.equal(h.core.state.goal?.skipAuditor, undefined, "toggling again enables the auditor");
+			toggled = readGoalLedger({ cwd }).events.filter((e) => e.type === "auditor_toggled");
+			assert.equal(toggled.length, 2, "second event recorded");
+			assert.equal((toggled[1] as any).enabled, true, "second event records the enabled state");
+			const onDisk2 = parseGoalFile(path.join(cwd, h.core.state.goal!.activePath!))!;
+			assert.equal(onDisk2.skipAuditor, undefined, "enabling clears the persisted skipAuditor");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("toggleGoalAuditor is inert with no focused goal", async () => {
+		const cwd = fixtureCwd();
+		try {
+			const h = coreHarness(cwd);
+			await h.core.loadState(h.ctx as never);
+			h.core.toggleGoalAuditor(h.ctx as never);
+			assert.ok(h.notifies.some((n) => n.msg.includes("No focused goal")), "no-goal guard announces");
+			assert.equal(readGoalLedger({ cwd }).events.filter((e) => e.type === "auditor_toggled").length, 0, "no event without a goal");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("toggleGoalAuditor is inert for a complete goal", async () => {
+		const cwd = fixtureCwd();
+		try {
+			const goal = makeGoal({ objective: "Complete toggle test" });
+			const h = coreHarness(cwd);
+			await h.core.loadState(h.ctx as never);
+			h.core.setGoal({ ...goal, status: "complete" }, h.ctx as never, true);
+			h.core.toggleGoalAuditor(h.ctx as never);
+			assert.ok(h.notifies.some((n) => n.msg.includes("complete; the auditor no longer applies")), "complete-goal guard announces");
+			assert.equal(h.core.state.goal?.skipAuditor, undefined, "no mutation on a complete goal");
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}

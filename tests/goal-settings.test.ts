@@ -17,6 +17,8 @@ import {
 	parseGoalSettings,
 	loadGoalSettingsFileConfig,
 	loadGoalSettings,
+	saveGoalSettingsFileConfig,
+	effectiveSettingsReport,
 	type GoalSettings,
 } from "../extensions/goal-settings.ts";
 
@@ -225,6 +227,51 @@ test("loadGoalSettings: both flags disabled via file", () => {
 		const result = loadGoalSettings(dir, {});
 		assert.equal(result.disableTasks, true);
 		assert.equal(result.disableContracts, true);
+	});
+});
+
+// ── objectiveMaxChars (goal length limit setting) ────────────────────────
+
+test("parseGoalSettings: objectiveMaxChars accepted as number or string, 0 allowed", () => {
+	assert.deepEqual(parseGoalSettings({ objectiveMaxChars: 0 }), { objectiveMaxChars: 0 });
+	assert.deepEqual(parseGoalSettings({ objectiveMaxChars: 5000 }), { objectiveMaxChars: 5000 });
+	assert.deepEqual(parseGoalSettings({ objectiveMaxChars: "2500" }), { objectiveMaxChars: 2500 });
+	assert.deepEqual(parseGoalSettings({ objectiveMaxChars: -1 }), {}, "negative rejected (invalid settings ignored)");
+	assert.deepEqual(parseGoalSettings({ objectiveMaxChars: 1.5 }), {}, "non-integer rejected");
+});
+
+test("loadGoalSettings: objectiveMaxChars defaults to no limit and honors the env override", () => {
+	withTempDir((dir) => {
+		const configPath = goalSettingsPath(dir);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, JSON.stringify({ objectiveMaxChars: 2000 }), "utf8");
+		assert.equal(loadGoalSettings(dir, {}).objectiveMaxChars, 2000, "file config read");
+		assert.equal(loadGoalSettings(dir, { PI_GOAL_OBJECTIVE_MAX_CHARS: "8000" }).objectiveMaxChars, 8000, "env var overrides file");
+	});
+	assert.equal(loadGoalSettings("/tmp/does-not-exist", {}).objectiveMaxChars, undefined, "unset = no limit");
+});
+
+test("saveGoalSettingsFileConfig: objectiveMaxChars persists (including 0) and clears", () => {
+	withTempDir((dir) => {
+		saveGoalSettingsFileConfig(dir, { objectiveMaxChars: 5000 });
+		const loaded = loadGoalSettingsFileConfig(dir);
+		assert.equal(loaded.objectiveMaxChars, 5000, "persisted value round-trips");
+		saveGoalSettingsFileConfig(dir, { objectiveMaxChars: 0 });
+		assert.equal(loadGoalSettingsFileConfig(dir).objectiveMaxChars, 0, "0 (no limit) persists explicitly");
+		saveGoalSettingsFileConfig(dir, {});
+		assert.equal(loadGoalSettingsFileConfig(dir).objectiveMaxChars, undefined, "cleared when omitted");
+	});
+});
+
+test("effectiveSettingsReport: objectiveMaxChars row shows the effective value and provenance", () => {
+	withTempDir((dir) => {
+		const configPath = goalSettingsPath(dir);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, JSON.stringify({ objectiveMaxChars: 3000 }), "utf8");
+		const lines = effectiveSettingsReport(dir, {});
+		const row = lines.find((l) => l.startsWith("  max objective length"));
+		assert.ok(row, "report includes the max objective length row");
+		assert.match(row!, /3000 \(file\)/);
 	});
 });
 

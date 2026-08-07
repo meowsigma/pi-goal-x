@@ -116,6 +116,12 @@ test("formatBudget summarizes used/total/percentage", () => {
 // Status derivation
 // ---------------------------------------------------------------------------
 
+test("auditorEnabled derives from the goal's persisted skipAuditor (§auditor-toggle)", () => {
+	// Unset/absent → on (the global default); skipAuditor: true → off.
+	assert.equal(model().auditorEnabled, true, "no per-goal setting keeps the auditor on");
+	assert.equal(model({ skipAuditor: true }).auditorEnabled, false, "skipAuditor: true turns the auditor off");
+});
+
 test("status maps lifecycle states to explicit display codes", () => {
 	assert.deepEqual(deriveGoalStatus(goal()), { code: "running", label: "In progress", footerLabel: "running" });
 	assert.deepEqual(deriveGoalStatus(goal({ autoContinue: false })), { code: "idle", label: "Idle", footerLabel: "active" });

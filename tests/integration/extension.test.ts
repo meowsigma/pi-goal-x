@@ -389,7 +389,7 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 9, `all nine rows rendered, got: ${lines.join(" | ")}`);
+				assert.equal(lines.length, 10, `all ten rows rendered, got: ${lines.join(" | ")}`);
 				assert.ok(lines.some((l) => l === "  auditor disabled: true"));
 				assert.ok(lines.some((l) => l === "  provider: anthropic"));
 				assert.ok(lines.some((l) => l === "  model: (default)"));
@@ -399,6 +399,7 @@ describe("five-tool handler integration", () => {
 				assert.ok(lines.some((l) => l === "  subtaskDepth: 3"));
 				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false"));
 				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0"));
+				assert.ok(lines.some((l) => l === "  max objective length (0 = none): 0"), "objective length row defaults to 0");
 			} finally {
 				f.cleanup();
 			}

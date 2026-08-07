@@ -10,6 +10,32 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [Unreleased]
 
+### Changed
+
+- Goal tweaks now auto-resume a stalled goal: confirming `/goal-tweak` on a
+  paused or blocked goal transitions it to `active` (pause metadata cleared,
+  `goal_resumed` ledger event with reason `tweak`, accounting and
+  auto-continuation restarted). `budget_limited` remains a hard resource
+  gate; an already-active goal is unchanged.
+- Tweak drafting defaults the auditor toggle to the goal's persisted per-goal
+  setting (`skipAuditor`) instead of the global `auditor disabled` setting,
+  so the auditor on/off status survives a `/goal-tweak` unchanged (global
+  settings remain the fallback when the goal has no per-goal value).
+- The hard 4000-character objective limit is removed. Goal objective length
+  is now governed by a new `objectiveMaxChars` setting (`0`/unset = no
+  limit, the default), configurable via the settings menu or
+  `PI_GOAL_OBJECTIVE_MAX_CHARS`, and enforced consistently across
+  `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
+
+### Added
+
+- The compact goal dashboard shows the focused goal's independent-auditor
+  status on a muted, width-safe line (`Auditor  on · Ctrl+Shift+A: off`);
+  `Ctrl+Shift+A` toggles it per-goal from the UI — persisted to the goal
+  file (revision-safe), with an `auditor_toggled` ledger event, a dashboard
+  refresh, and a notification. Inert when no goal is focused, a goal modal
+  is open, or the goal is complete.
+
 ## [0.25.2] — 2026-08-07
 
 ### Changed

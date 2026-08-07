@@ -4,7 +4,8 @@
  * Verifies:
  *  - exactly three advertised goal tools when tasks are disabled;
  *  - create_goal is real, objective-explicit, focuses, reports other-open goals,
- *    enforces the 1-4000 character objective bound, and accepts token_budget;
+ *    honors the configurable max objective length setting (no limit by default),
+ *    and accepts token_budget;
  *  - get_goal returns the complete stable snapshot;
  *  - update_goal(complete) runs the audit WITHOUT a verification-summary
  *    parameter (audit from actual evidence); approval archives, rejection stays
@@ -200,17 +201,41 @@ test("create_goal accepts token_budget and sisyphus mode", async () => {
 	}
 });
 
-test("create_goal rejects objectives over 4000 characters", async () => {
+test("create_goal accepts long objectives by default (no hard 4000 limit)", async () => {
 	const f = makeFixture();
 	try {
 		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 		await start(h);
 		const create = h.tools.get("create_goal")!;
 		const result = await (create.execute as any)("create-3", {
-			objective: "x".repeat(4001),
+			objective: "x".repeat(5000),
 		}, undefined, undefined, h.ctx);
 		const text = result.content?.[0]?.text ?? "";
-		assert.ok(text.includes("exceeds 4000 characters"), `must reject oversized objective, got: ${text.slice(0, 120)}`);
+		assert.ok(text.includes("x".repeat(40)), "long objective is accepted when no max objective length is configured");
+		assert.equal(activeGoalFiles(f.cwd).length, 2, "the long-objective goal is created alongside the fixture goal");
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("create_goal enforces the configured max objective length setting", async () => {
+	const f = makeFixture();
+	try {
+		writeFileSync(path.join(f.cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ objectiveMaxChars: 100 }));
+		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+		await start(h);
+		const create = h.tools.get("create_goal")!;
+		const rejected = await (create.execute as any)("create-4", {
+			objective: "x".repeat(101),
+		}, undefined, undefined, h.ctx);
+		const text = rejected.content?.[0]?.text ?? "";
+		assert.ok(text.includes("exceeds 100 characters"), `must reject objectives over the configured limit, got: ${text.slice(0, 120)}`);
+		assert.equal(activeGoalFiles(f.cwd).length, 1, "no goal is created when the objective is over the limit (fixture goal only)");
+		const accepted = await (create.execute as any)("create-5", {
+			objective: "x".repeat(100),
+		}, undefined, undefined, h.ctx);
+		assert.ok(accepted.content?.[0]?.text ?? "", "objective exactly at the limit is accepted");
+		assert.equal(activeGoalFiles(f.cwd).length, 2, "at-limit objective creates the goal");
 	} finally {
 		f.cleanup();
 	}

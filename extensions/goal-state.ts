@@ -121,6 +121,8 @@ export interface GoalCore {
 	archiveCurrentGoal(ctx: ExtensionContext, reason: StopReason | undefined): GoalRecord | null;
 	stopActiveGoal(status: Exclude<GoalStatus, "active">, reason: StopReason | undefined, ctx: ExtensionContext): void;
 	pauseActiveGoal(ctx: ExtensionContext): void;
+	/** §auditor-toggle: flip the focused goal's persisted per-goal skipAuditor and record the ledger event. */
+	toggleGoalAuditor(ctx: ExtensionContext): void;
 	queueContinuation(ctx: ExtensionContext, force?: boolean): void;
 	flushGoalTransaction(ctx: ExtensionContext): void;
 	replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow?: boolean, verificationContract?: string, tokenBudget?: number): void;
@@ -810,6 +812,38 @@ export function createGoalCore(
 		ctx.ui.notify("Goal paused.", "info");
 	}
 
+	/**
+	 * §auditor-toggle: flip the focused goal's independent-auditor setting.
+	 * Persisted per-goal (revision-safe via goalService.apply), recorded as an
+	 * auditor_toggled ledger event, reflected in the dashboard, and announced.
+	 * Inert when no goal is focused or the goal is complete; the widget's
+	 * modal-depth guard keeps it inert while a goal modal is open.
+	 */
+	function toggleGoalAuditor(ctx: ExtensionContext): void {
+		if (!state.goal) {
+			ctx.ui.notify("No focused goal to toggle the auditor for.", "info");
+			return;
+		}
+		if (state.goal.status === "complete") {
+			ctx.ui.notify("This goal is complete; the auditor no longer applies.", "info");
+			return;
+		}
+		const nextEnabled = state.goal.skipAuditor === true;
+		const result = goalService.apply(ctx, {
+			reconcile: false,
+			refreshFromDisk: true,
+			mutate: (g) => ({ ...g, skipAuditor: g.skipAuditor === true ? undefined : true, updatedAt: nowIso() }),
+			ledger: (written) => [{ type: "auditor_toggled" as const, goalId: written.id, enabled: nextEnabled, at: written.updatedAt }],
+		});
+		if (!result.ok) {
+			ctx.ui.notify("Could not toggle the auditor: " + result.message, "error");
+			return;
+		}
+		goalService.flushTurn(ctx); // P1-3: user-visible setting change persists now, not at turn end
+		updateUI(ctx);
+		ctx.ui.notify(nextEnabled ? "Auditor enabled for this goal." : "Auditor disabled for this goal.", "info");
+	}
+
 	function flushGoalTransaction(ctx: ExtensionContext): void {
 		goalService.flushTurn(ctx);
 	}
@@ -994,6 +1028,7 @@ export function createGoalCore(
 		archiveCurrentGoal,
 		stopActiveGoal,
 		pauseActiveGoal,
+		toggleGoalAuditor,
 		queueContinuation,
 		flushGoalTransaction,
 		touchGoalActivity,

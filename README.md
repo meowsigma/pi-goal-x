@@ -251,6 +251,7 @@ Always visible above the editor while a goal is focused:
 ```text
 ╭─ pi-goal-x ─ Add CSV export to reports ────────────────────────────╮
 │ goal: running [12m47s 18.2K] (+2 open)                             │
+│ Auditor  on · Ctrl+Shift+A: off                                     │
 ├─ Tasks · ✓3 done · 2 open ──────────── [█████░░░] · Sub 2/3 [██░░] ┤
 │ ✓ t1  Review reports page and data source                          │
 │ ✓ t2  Implement filtered CSV export                                │
@@ -351,7 +352,7 @@ Settings are stored in:
 .pi/pi-goal-x-settings.json
 ```
 
-Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, and completion auditing.
+Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, and completion auditing. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
 
 ## License
 

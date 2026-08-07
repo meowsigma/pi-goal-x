@@ -17,8 +17,8 @@ import goalExtension from "../extensions/goal.ts";
 import { parseGoalFile, writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
 import { readGoalLedger } from "../extensions/goal-ledger.ts";
 import { goalSettingsPath } from "../extensions/goal-settings.ts";
-import { proposalText, type ActiveGoalDraft } from "../extensions/goal-drafting.ts";
-import type { GoalRecord } from "../extensions/goal-record.ts";
+import { proposalText, DRAFT_ENTRY, type ActiveGoalDraft } from "../extensions/goal-drafting.ts";
+import { createGoal, type GoalRecord } from "../extensions/goal-record.ts";
 
 interface Harness {
 	ctx: ExtensionContext;
@@ -701,6 +701,225 @@ test("a tweak confirmation persists the auditor choice in the same transaction",
 		assert.ok(after.objective.includes("Revised objective"), "objective updated");
 		assert.equal(after.skipAuditor, true, "skipAuditor mutated in the tweak transaction");
 		assert.ok(ledgerEvents(cwd).some((e) => e.type === "goal_tweaked"), "tweak recorded");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+// ── §tweak-resume: a confirmed tweak revives a stalled goal ──────────────
+
+test("a tweak confirmation resumes a paused goal (active, pause metadata cleared, goal_resumed event)", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-resume-paused-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await h.commands.get("goal-pause")!.handler("", h.ctx);
+		const paused = firstGoal(cwd);
+		assert.equal(paused.status, "paused", "goal paused before the tweak");
+		assert.equal(paused.stopReason, "user", "pause records the stop reason");
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const pending = runProposal(h, proposalParams("Revised objective after pause", { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		const result = await pending;
+		assert.match(result.content[0].text, /tweak confirmed/);
+		const after = firstGoal(cwd);
+		assert.equal(after.id, paused.id, "same goal revised");
+		assert.equal(after.status, "active", "paused goal resumed by the tweak");
+		assert.equal(after.autoContinue, true, "resume re-arms auto-continuation");
+		assert.equal(after.stopReason, undefined, "stopReason cleared");
+		assert.equal(after.pauseReason, undefined, "pauseReason cleared");
+		assert.equal(after.pauseSuggestedAction, undefined, "pauseSuggestedAction cleared");
+		assert.ok(after.objective.includes("Revised objective after pause"), "objective updated");
+		const events = ledgerEvents(cwd);
+		assert.ok(events.some((e) => e.type === "goal_tweaked"), "goal_tweaked recorded");
+		const resumed = events.filter((e) => e.type === "goal_resumed");
+		assert.equal(resumed.length, 1, "exactly one goal_resumed event");
+		assert.equal((resumed[0] as any).reason, "tweak", "resume reason is the tweak");
+		assert.equal(h.activeTools().includes("goal_questionnaire"), false, "tweak draft cleared after confirmation");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("a tweak confirmation resumes a blocked goal", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-resume-blocked-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		const update = h.tools.get("update_goal")!;
+		const blockedResult = await (update.execute as any)("update-b", { status: "blocked" }, undefined, undefined, h.ctx);
+		assert.ok(blockedResult?.terminate === true, "blocked terminates the turn");
+		assert.equal(firstGoal(cwd).status, "blocked", "goal blocked before the tweak");
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const pending = runProposal(h, proposalParams("Revised objective after block", { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+		const after = firstGoal(cwd);
+		assert.equal(after.status, "active", "blocked goal resumed by the tweak");
+		assert.equal(after.autoContinue, true, "resume re-arms auto-continuation");
+		assert.equal(after.stopReason, undefined, "stopReason cleared");
+		const resumed = ledgerEvents(cwd).filter((e) => e.type === "goal_resumed");
+		assert.equal(resumed.length, 1, "exactly one goal_resumed event");
+		assert.equal((resumed[0] as any).reason, "tweak", "resume reason is the tweak");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("a tweak confirmation leaves a budget_limited goal behind its hard budget gate", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-resume-budget-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const seeded = { ...createGoal({ objective: "Seed budget-limited objective", autoContinue: true, sisyphus: false }), status: "budget_limited" as const };
+		writeActiveGoalFile({ cwd }, seeded);
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		assert.equal(firstGoal(cwd).status, "budget_limited", "seeded budget_limited goal focused");
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const pending = runProposal(h, proposalParams("Revised while budget-limited", { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+		const after = firstGoal(cwd);
+		assert.equal(after.status, "budget_limited", "budget_limited is a hard gate: the tweak must not resume it");
+		assert.ok(after.objective.includes("Revised while budget-limited"), "objective still revised");
+		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_resumed").length, 0, "no resume event for a budget_limited goal");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("a tweak confirmation on an active goal stays active without a resume event", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-resume-active-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const pending = runProposal(h, proposalParams("Revised while active", { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+		const after = firstGoal(cwd);
+		assert.equal(after.status, "active", "active goal stays active");
+		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_resumed").length, 0, "no resume event when the goal was already active");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+// ── §tweak-persist: the auditor toggle defaults to the goal's own setting ─
+
+test("tweak drafting defaults the auditor toggle to the goal's persisted skipAuditor", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-auditor-default-off-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const seeded = createGoal({ objective: "Auditor-off seed objective", autoContinue: true, sisyphus: false, skipAuditor: true });
+		writeActiveGoalFile({ cwd }, seeded);
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const drafts = h.entries().filter((e) => (e as any).customType === DRAFT_ENTRY);
+		assert.ok(drafts.length > 0, "draft session entry recorded");
+		const last = drafts[drafts.length - 1] as any;
+		assert.equal(last?.data?.auditorEnabled, false, "tweak draft defaults to the goal's persisted auditor-off setting");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("tweak drafting defaults the auditor toggle on when the goal has no per-goal setting", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-auditor-default-on-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const drafts = h.entries().filter((e) => (e as any).customType === DRAFT_ENTRY);
+		const last = drafts[drafts.length - 1] as any;
+		assert.equal(last?.data?.auditorEnabled, true, "tweak draft defaults the auditor on without a per-goal or global disable");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("tweak drafting falls back to global settings when the goal has no per-goal auditor setting", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-auditor-global-fallback-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		writeSettings(cwd, { disabled: true });
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const drafts = h.entries().filter((e) => (e as any).customType === DRAFT_ENTRY);
+		const last = drafts[drafts.length - 1] as any;
+		assert.equal(last?.data?.auditorEnabled, false, "tweak draft falls back to the global auditor-disabled setting");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+// ── §objective-limit: the objective length limit is a configurable setting ─
+
+test("propose_goal_draft accepts long objectives by default (no hard 4000 limit)", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-long-objective-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const long = "x".repeat(5000);
+		const pending = runProposal(h, proposalParams(long, { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		const result = await pending;
+		assert.match(result.content[0].text, /tweak confirmed/);
+		assert.equal(firstGoal(cwd).objective.length, long.length, "long objective survives without a configured limit");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("propose_goal_draft enforces the configured max objective length setting", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-limit-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		writeSettings(cwd, { objectiveMaxChars: 20 });
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
+		const pending = runProposal(h, proposalParams("x".repeat(21), { sisyphus: false }));
+		const result = await pending;
+		assert.match(result.content[0].text, /at most 20 characters \(21 given\)/);
+		assert.equal(firstGoal(cwd).objective, "Initial objective", "oversized proposal must not mutate the goal");
+		// An at-limit objective is accepted.
+		const okPending = runProposal(h, proposalParams("y".repeat(20), { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		const ok = await okPending;
+		assert.match(ok.content[0].text, /tweak confirmed/);
+		assert.equal(firstGoal(cwd).objective.length, 20, "at-limit objective is accepted");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("/goal-tweak command rejects an oversized replacement per the configured limit", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-limit-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		writeSettings(cwd, { objectiveMaxChars: 30 });
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await h.commands.get("goal-tweak")!.handler("x".repeat(31), h.ctx);
+		assert.equal(h.activeTools().includes("goal_questionnaire"), false, "no draft starts for an oversized replacement");
+		assert.equal(firstGoal(cwd).objective, "Initial objective", "goal unchanged");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}

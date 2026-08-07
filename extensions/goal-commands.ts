@@ -262,6 +262,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", section: "Goal behavior", kind: "boolean" },
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
+		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "disableTasks", label: "disableTasks", section: "Task tracking", kind: "boolean" },
 		{ key: "subtaskDepth", label: "subtaskDepth", section: "Task tracking", kind: "positiveInteger" },
 		{ key: "disabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean" },
@@ -276,6 +277,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		}
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
+		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
 		return config[key] ?? "(default)";
 	}
 
@@ -343,8 +345,9 @@ export function registerGoalCommands(core: GoalCore): void {
 				const input = await ctx.ui.input(`Set ${row.label}`, settingsValue(config, key));
 				if (input === undefined) continue;
 				// Row-driven lower bound: subtaskDepth is a nesting depth (min 1);
-				// stallTimeoutMinutes defaults to 0 meaning "no stall timeout".
-				const min = row.key === "stallTimeoutMinutes" ? 0 : 1;
+				// stallTimeoutMinutes and objectiveMaxChars default to 0 meaning
+				// "off / no limit".
+				const min = (row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars") ? 0 : 1;
 				// Full-string decimal validation: no partial parseInt. Rejects
 				// 1.5, 1x, negatives, infinity, and unsafe integers alike.
 				const trimmed = input.trim();
@@ -478,9 +481,12 @@ export function registerGoalCommands(core: GoalCore): void {
 			ctx.ui.notify("Provide the replacement objective: /goal-tweak <new objective>", "info");
 			return;
 		}
-		if (trimmed.length > 4000) {
-			ctx.ui.notify(`Replacement objective exceeds 4000 characters (${trimmed.length}).`, "warning");
-			return;
+		if (trimmed.length > (loadGoalSettings(ctx.cwd).objectiveMaxChars ?? 0)) {
+			const max = loadGoalSettings(ctx.cwd).objectiveMaxChars;
+			if (max !== undefined && max > 0) {
+				ctx.ui.notify(`Replacement objective exceeds ${max} characters (${trimmed.length}).`, "warning");
+				return;
+			}
 		}
 		await startGoalDrafting(core, ctx, "tweak", trimmed, currentGoal);
 	}

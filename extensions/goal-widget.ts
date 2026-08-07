@@ -162,6 +162,16 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				return { consume: true };
 			}
 
+			// Ctrl+Shift+A — toggle the focused goal's independent auditor.
+			// Persisted per-goal (revision-safe), ledger event, dashboard
+			// refresh, notification; inert with no focused goal or a complete
+			// goal (the modal-depth guard above covers goal modals).
+			if (matchesKey(data, "ctrl+shift+a")) {
+				core.toggleGoalAuditor(ctx);
+				core.goalWidgetComponentRef.current?.invalidate();
+				return { consume: true };
+			}
+
 			// Navigation keys: plain arrows scroll the expanded dashboard (it is
 			// modal while open); Ctrl+Shift+↑/↓/PgUp/PgDn/Home/End scroll the
 			// compact task list — free chords, consumed only when the compact

@@ -34,6 +34,8 @@ export interface GoalDashboardModel {
 	};
 
 	focused: boolean;
+	/** §auditor-toggle: whether the independent completion auditor is enabled for this goal (derived from the goal's persisted skipAuditor; undefined = on). */
+	auditorEnabled: boolean;
 	filePath?: string;
 
 	usage: {
@@ -498,6 +500,7 @@ export function deriveGoalDashboardModel(
 		title: displayObjectiveTitle(goal.objective),
 		status,
 		focused,
+		auditorEnabled: goal.skipAuditor !== true,
 		filePath: goal.activePath ?? goal.archivedPath,
 		usage: {
 			activeSeconds: goal.usage.activeSeconds,

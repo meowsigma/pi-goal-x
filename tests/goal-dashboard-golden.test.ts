@@ -277,6 +277,35 @@ test("compact: top-level task list is shown by default with '+N more' overflow",
 	assert.equal(empty.includes("├─ Tasks"), false);
 });
 
+test("compact: the auditor status line is muted and width-safe in every layout (§auditor-toggle)", () => {
+	const model = modelFor(withTasks(fiveTaskTree(), { currentTaskId: "t3" }));
+	assert.ok(model);
+	// Wide/medium carry the full target suffix; narrow drops it; minimal keeps
+	// only the core `Auditor  on/off` label.
+	assert.match(renderCompactDashboard(model, theme, 100).join("\n"), /Auditor  on · Ctrl\+Shift\+A: off/);
+	assert.match(renderCompactDashboard(model, theme, 80).join("\n"), /Auditor  on · Ctrl\+Shift\+A: off/);
+	assert.match(renderCompactDashboard(model, theme, 60).join("\n"), /Auditor  on · Ctrl\+Shift\+A/);
+	assert.doesNotMatch(renderCompactDashboard(model, theme, 60).join("\n"), /Ctrl\+Shift\+A: off/);
+	const minimal = renderCompactDashboard(model, theme, 40).join("\n");
+	assert.match(minimal, /Auditor  on/);
+	assert.doesNotMatch(minimal, /Ctrl\+Shift\+A/, "minimal drops the key hint");
+
+	// Auditor-off goals render the off state with the on-target suffix.
+	const offGoal = withTasks(fiveTaskTree(), { currentTaskId: "t3", skipAuditor: true });
+	const off = renderCompactDashboard(modelFor(offGoal)!, theme, 100).join("\n");
+	assert.match(off, /Auditor  off · Ctrl\+Shift\+A: on/);
+	assert.doesNotMatch(off, /Auditor  on ·/);
+
+	// The expanded dashboard is byte-identical with the auditor line: it never
+	// renders the auditor status (compact-only per spec).
+	const expanded = renderExpandedDashboard(model, theme, 100).join("\n");
+	assert.doesNotMatch(expanded, /Auditor/, "expanded dashboard does not render the compact auditor line");
+	for (const width of WIDTHS) {
+		assertWidthSafe(renderCompactDashboard(model, theme, width), width);
+		assertWidthSafe(renderCompactDashboard(modelFor(offGoal)!, theme, width), width);
+	}
+});
+
 test("compact: the default viewport anchors to the most recently completed tasks (§9.6)", () => {
 	const model = modelFor(withTasks(manyTaskTree(), { currentTaskId: "t21" }));
 	assert.ok(model);

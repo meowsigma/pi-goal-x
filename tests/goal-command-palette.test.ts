@@ -266,6 +266,49 @@ test("goal-settings: subtaskDepth rejects 0 (min 1) and never saves it", async (
 	}
 });
 
+test("goal-settings: max objective length row defaults to 0 and accepts a configured limit", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-settings-objective-max-"));
+	mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+	const h = createHarness(cwd);
+	try {
+		(h.ctx as { hasUI: boolean }).hasUI = true;
+		const ui = h.ctx.ui as unknown as {
+			select: (title: string, options: string[]) => Promise<string | undefined>;
+			input: (prompt: string, defaultValue?: string) => Promise<string | undefined>;
+		};
+		let selectCalls = 0;
+		let inputValue = "0";
+		ui.select = async (_title: string, options: string[]) => {
+			selectCalls++;
+			if (selectCalls === 1) {
+				const row = options.find((o) => o.includes("max objective length"));
+				assert.ok(row, "max objective length row must be listed");
+				assert.ok(row!.includes(": 0"), "row defaults to 0 = no limit");
+				return row;
+			}
+			return "Done";
+		};
+		ui.input = async (_prompt: string, defaultValue?: string) => {
+			assert.equal(defaultValue, "0", "input defaults to 0");
+			return inputValue;
+		};
+
+		await h.commands.get("goal-settings")!.handler("", h.ctx);
+
+		let saved = JSON.parse(readFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), "utf8"));
+		assert.equal(saved.objectiveMaxChars, 0, "0 = no limit persists explicitly");
+
+		// A configured limit persists too.
+		inputValue = "6000";
+		selectCalls = 0;
+		await h.commands.get("goal-settings")!.handler("", h.ctx);
+		saved = JSON.parse(readFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), "utf8"));
+		assert.equal(saved.objectiveMaxChars, 6000, "configured limit persists");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 function readFileSyncSafe(p: string): string | null {
 	try {
 		return readFileSync(p, "utf8");

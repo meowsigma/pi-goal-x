@@ -37,6 +37,9 @@ export function buildGoalCompactSummary(goal: GoalRecord, events: GoalLedgerEven
         case "goal_tweaked":
           lines.push(`    - tweaked: ${event.changeSummary}`);
           break;
+        case "auditor_toggled":
+          lines.push(`    - auditor toggled ${event.enabled ? "on" : "off"}`);
+          break;
         case "completion_requested":
           lines.push(`    - completion requested${event.summary ? `: ${truncateText(event.summary, 80)}` : ""}`);
           break;

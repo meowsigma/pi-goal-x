@@ -8,6 +8,7 @@ import { budgetLine } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, buildTaskSummary, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
 import { readGoalLedger } from "./goal-ledger.ts";
+import { loadGoalSettings } from "./goal-settings.ts";
 import { buildGoalHistoryBlock, buildGoalTaskDetailBlock } from "./goal-format.ts";
 import { sisyphusStepProgress } from "./goal-policy.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
@@ -105,7 +106,7 @@ pi.registerTool(defineTool({
 		"Pass mode=\"sisyphus\" only when the user explicitly invoked Sisyphus mode.",
 	],
 	parameters: Type.Object({
-		objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input. 1-4000 characters." }),
+		objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input. Length is capped by the `max objective length` goal setting (0/unset = no limit)." }),
 		mode: Type.Optional(StringEnum(["regular", "sisyphus"] as const, { description: "Goal mode. Defaults to regular. Use sisyphus only when the user explicitly invoked Sisyphus mode." })),
 		token_budget: Type.Optional(Type.Integer({ minimum: 1, description: "Optional token budget in whole tokens. Accept it only when the user explicitly supplied a budget; never invent one." })),
 	}, { additionalProperties: false }),
@@ -114,9 +115,10 @@ pi.registerTool(defineTool({
 		core.reconcileFocusedGoalFromDisk(ctx);
 		const objective = params.objective.trim();
 		if (!objective) throw new Error("create_goal requires a non-empty objective.");
-		if (objective.length > 4000) {
+		const objectiveMaxChars = loadGoalSettings(ctx.cwd).objectiveMaxChars ?? 0;
+		if (objectiveMaxChars > 0 && objective.length > objectiveMaxChars) {
 			return {
-				content: [{ type: "text", text: `create_goal objective exceeds 4000 characters (${objective.length}). Shorten the objective and retry.` }],
+				content: [{ type: "text", text: `create_goal objective exceeds ${objectiveMaxChars} characters (${objective.length}). Shorten the objective or raise the max objective length setting.` }],
 				details: goalDetails(core.state.goal),
 			};
 		}

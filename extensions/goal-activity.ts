@@ -61,6 +61,8 @@ function mapEvent(event: GoalLedgerEvent, taskTitles: ReadonlyMap<string, string
 			return { at: event.at, kind: "goal", text: "Created and focused the goal." };
 		case "goal_tweaked":
 			return { at: event.at, kind: "goal", text: "Updated the goal objective and task plan." };
+		case "auditor_toggled":
+			return { at: event.at, kind: "goal", text: event.enabled ? "Turned the independent auditor on." : "Turned the independent auditor off." };
 		case "goal_paused":
 			return {
 				at: event.at,

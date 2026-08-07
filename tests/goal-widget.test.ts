@@ -502,6 +502,7 @@ test("GoalWidgetComponent unfocused with 38 open goals at width 109", () => {
 import { syncTerminalInputPause } from "../extensions/goal-widget.ts";
 
 const CTRL_SHIFT_T = "\u001b[27;6;84~";
+const CTRL_SHIFT_A = "\u001b[27;6;65~";
 
 function keybindingHarness(initialExpanded = false) {
 	let expanded = initialExpanded;
@@ -522,6 +523,8 @@ function keybindingHarness(initialExpanded = false) {
 		abortAudit: () => { consumed.push("abort-audit"); },
 		isDashboardExpanded: () => expanded,
 		toggleDashboardExpanded: () => { expanded = !expanded; consumed.push("toggle"); },
+		toggleGoalAuditor: () => { consumed.push("toggle-auditor"); },
+		goalWidgetComponentRef: { current: { invalidate: () => { consumed.push("invalidate"); } } },
 		terminalInputUnsubscribe: null,
 	} as never;
 	syncTerminalInputPause(core as never, ctx as never);
@@ -558,6 +561,22 @@ test("escape still pauses a running goal when the dashboard is compact", () => {
 	(h.core as unknown as { state: { goal: unknown } }).state.goal = { status: "active", autoContinue: true };
 	h.fire("\u001b");
 	assert.deepEqual(h.consumed, ["pause"]);
+});
+
+test("ctrl+shift+a toggles the focused goal's auditor and refreshes the widget", () => {
+	const h = keybindingHarness();
+	(h.core as unknown as { state: { goal: unknown } }).state.goal = { status: "active", autoContinue: true };
+	h.fire(CTRL_SHIFT_A);
+	assert.deepEqual(h.consumed, ["toggle-auditor", "invalidate"], "auditor toggle + widget refresh");
+	assert.equal(h.expanded(), false, "auditor toggle must not expand the dashboard");
+});
+
+test("ctrl+shift+a is inert while a goal modal is open", () => {
+	const h = keybindingHarness();
+	(h.core as unknown as { goalModalDepth: number }).goalModalDepth = 1;
+	(h.core as unknown as { state: { goal: unknown } }).state.goal = { status: "active", autoContinue: true };
+	h.fire(CTRL_SHIFT_A);
+	assert.deepEqual(h.consumed, [], "modal depth guard swallows the chord");
 });
 
 test("expanded mode renders the full dashboard without mutating editor state", () => {

@@ -11,6 +11,7 @@ export type GoalLedgerEvent =
   | { type: "goal_paused"; goalId: string; reason: string; suggestedAction?: string; status?: "paused"; source?: "user" | "agent"; at: string }
   | { type: "goal_resumed"; goalId: string; reason: string; at: string }
   | { type: "goal_tweaked"; goalId: string; changeSummary: string; at: string }
+  | { type: "auditor_toggled"; goalId: string; enabled: boolean; at: string }
   | { type: "completion_requested"; goalId: string; summary?: string; at: string }
   | { type: "audit_started"; goalId: string; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "audit_result"; goalId: string; verdict: "approved" | "disapproved" | "error"; report: string; at: string }
@@ -224,6 +225,8 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
       return typeof obj.goalId === "string" && typeof obj.reason === "string";
     case "goal_tweaked":
       return typeof obj.goalId === "string" && typeof obj.changeSummary === "string";
+    case "auditor_toggled":
+      return typeof obj.goalId === "string" && typeof obj.enabled === "boolean";
     case "completion_requested":
       return typeof obj.goalId === "string" && (obj.summary === undefined || typeof obj.summary === "string");
     case "audit_started":
@@ -274,6 +277,8 @@ function sanitizeEvent(event: GoalLedgerEvent): GoalLedgerEvent {
     case "goal_resumed":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_tweaked":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "auditor_toggled":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "completion_requested":
       return { ...event, goalId: safeGoalId(event.goalId) };

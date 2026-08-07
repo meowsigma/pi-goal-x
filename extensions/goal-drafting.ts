@@ -153,7 +153,14 @@ export async function startGoalDrafting(core: GoalCore, ctx: ExtensionContext, m
 		clearGoalDrafting(core, ctx);
 	}
 	const startedAt = nowIso();
-	const auditorEnabled = !loadGoalSettings(ctx.cwd).disabled;
+	// §tweak-persist: a tweak confirmation defaults to the target goal's
+	// persisted per-goal auditor setting (skipAuditor); the global `auditor
+	// disabled` setting is only the fallback when the goal has no per-goal
+	// value. Confirming a tweak must never silently re-enable or disable the
+	// auditor the user chose when the goal was created.
+	const auditorEnabled = mode === "tweak"
+		? !(targetGoal?.skipAuditor ?? loadGoalSettings(ctx.cwd).disabled)
+		: !loadGoalSettings(ctx.cwd).disabled;
 	activeDrafts.set(core, { mode, originalTopic: trimmed, targetGoalId: targetGoal?.id, startedAt, auditorEnabled });
 	draftSessionEntry(core, { version: 1, mode, seed: trimmed, targetGoalId: targetGoal?.id, startedAt, auditorEnabled });
 	core.clearContinuationState();
@@ -305,7 +312,9 @@ export function registerDraftingTools(core: GoalCore): void {
 			const draft = activeDraft(core);
 			if (!draft) return { content: [{ type: "text", text: "No guided goal draft is active. Do not create a goal without the user starting /goal or /sisyphus." }], details: goalDetails(core.state.goal) };
 			const objective = params.objective.trim();
-			if (!objective || objective.length > 4000) return { content: [{ type: "text", text: "The proposed objective must be between 1 and 4000 characters." }], details: goalDetails(core.state.goal) };
+			if (!objective) return { content: [{ type: "text", text: "The proposed objective must be at least 1 character." }], details: goalDetails(core.state.goal) };
+			const objectiveMaxChars = loadGoalSettings(ctx.cwd).objectiveMaxChars ?? 0;
+			if (objectiveMaxChars > 0 && objective.length > objectiveMaxChars) return { content: [{ type: "text", text: `The proposed objective must be at most ${objectiveMaxChars} characters (${objective.length} given).` }], details: goalDetails(core.state.goal) };
 			const expectedSisyphus = draft.mode === "sisyphus";
 			if (draft.mode !== "tweak" && ((params.sisyphus === true) !== expectedSisyphus)) return { content: [{ type: "text", text: "Proposal mode does not match the command that began this draft." }], details: goalDetails(core.state.goal) };
 			const taskResult = proposedTaskList(core, ctx, params.tasks as FlatTaskInput[] | undefined, params.block_completion);
@@ -389,6 +398,11 @@ export function registerDraftingTools(core: GoalCore): void {
 			// keep status/evidence/completedAt/skippedAt/skipReason, new ids start
 			// pending, removed ids drop. currentTaskId survives only while its task
 			// is still pending in the merged tree.
+			// §tweak-resume: a confirmed tweak is a deliberate revision of a
+			// stalled goal — set when the goal actually transitions out of
+			// paused/blocked so the post-apply glue can resume accounting,
+			// continuation, and the ledger event.
+			let resumed = false;
 			const result = core.goalService.apply(ctx, {
 				reconcile: false, focusToken: token, refreshFromDisk: true,
 				mutate: (goal) => {
@@ -400,13 +414,43 @@ export function registerDraftingTools(core: GoalCore): void {
 					const currentTaskId = mergedTaskList && goal.currentTaskId && !currentTaskIdIsPending(mergedTaskList.tasks, goal.currentTaskId)
 						? undefined
 						: goal.currentTaskId;
-					return { ...goal, objective: extracted.objective, verificationContract: extracted.verificationContract ?? goal.verificationContract, taskList, currentTaskId, skipAuditor, updatedAt: now };
+					// §tweak-resume: resume a paused/blocked goal (mirror the
+					// /goal-resume transition: status active + pause metadata
+					// cleared); budget_limited stays behind its hard resource
+					// gate and an active goal stays active.
+					const stalled = goal.status === "paused" || goal.status === "blocked";
+					if (stalled) resumed = true;
+					return {
+						...goal,
+						objective: extracted.objective,
+						verificationContract: extracted.verificationContract ?? goal.verificationContract,
+						taskList, currentTaskId, skipAuditor,
+						status: stalled ? "active" : goal.status,
+						autoContinue: stalled ? true : goal.autoContinue,
+						stopReason: stalled ? undefined : goal.stopReason,
+						pauseReason: stalled ? undefined : goal.pauseReason,
+						pauseSuggestedAction: stalled ? undefined : goal.pauseSuggestedAction,
+						updatedAt: now,
+					};
 				},
 				ledger: (written) => [{ type: "goal_tweaked", goalId: written.id, changeSummary: "Goal revised through /goal-tweak drafting.", at: written.updatedAt }, ...(taskResult.value ? [{ type: "task_list_set" as const, goalId: written.id, taskCount: countTasks(written.taskList?.tasks), blockCompletion: taskResult.value.blockCompletion, at: written.updatedAt }] : [])],
 			});
 			if (!result.ok) return { content: [{ type: "text", text: "Goal tweak was not applied: " + result.message }], details: goalDetails(core.state.goal) };
+			if (resumed) {
+				try {
+					core.goalService.appendEvents(ctx, [{ type: "goal_resumed", goalId: result.goal.id, reason: "tweak", at: nowIso() }]);
+				} catch {
+					// Ledger append failure should not crash the tweak.
+				}
+			}
 			core.clearContinuationState();
 			core.updateUI(ctx);
+			if (resumed) {
+				// Resume glue mirrors replaceGoal: restart accounting and queue
+				// the auto-continuation so the revived goal keeps going.
+				core.beginAccounting();
+				core.queueContinuation(ctx, true);
+			}
 			clearGoalDrafting(core, ctx);
 			return { content: [{ type: "text", text: `${summary}\n\nGoal tweak confirmed and applied.` }], details: goalDetails(result.goal), terminate: true };
 		},

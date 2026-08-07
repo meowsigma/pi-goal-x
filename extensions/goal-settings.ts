@@ -4,11 +4,12 @@
  * Reads `.pi/pi-goal-x-settings.json` with env var overrides:
  *   PI_GOAL_DISABLE_TASKS     — "true" to disable, any other value = use file config
  *   PI_GOAL_DISABLE_CONTRACTS — "true" to disable, any other value = use file config
+ *   PI_GOAL_OBJECTIVE_MAX_CHARS — objective length cap (0 = no limit), overrides file
  *   PI_GOAL_SETTINGS_FILE     — alternative settings file path (relative to cwd or absolute)
  *
  * The file may contain:
  *   disableTasks, disableContracts, subtaskDepth,
- *   provider, model, thinkingLevel, disabled
+ *   provider, model, thinkingLevel, disabled, objectiveMaxChars
  *
  * additionalProperties: false — unknown keys are rejected.
  */
@@ -31,6 +32,12 @@ export interface GoalSettings {
 	auditorProjectResources?: boolean;
 	/** F5: stall detector timeout in minutes (0 = off). */
 	stallTimeoutMinutes?: number;
+	/**
+	 * Maximum objective length in characters (0/unset = no limit, the
+	 * default; >0 caps objectives in create_goal, propose_goal_draft, and
+	 * /goal-tweak).
+	 */
+	objectiveMaxChars?: number;
 }
 
 export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
@@ -76,6 +83,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"autoSelectSingleGoal",
 	"auditorProjectResources",
 	"stallTimeoutMinutes",
+	"objectiveMaxChars",
 ]);
 
 /**
@@ -106,6 +114,16 @@ function asPositiveInt(value: unknown): number | undefined {
 	if (typeof value === "string") {
 		const n = parseInt(value, 10);
 		if (!isNaN(n) && n >= 1) return n;
+	}
+	return undefined;
+}
+
+/** Positive-integer-or-zero parser (for settings where 0 = off / no limit). */
+function asNonNegativeInt(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+	if (typeof value === "string") {
+		const n = parseInt(value, 10);
+		if (!isNaN(n) && n >= 0) return n;
 	}
 	return undefined;
 }
@@ -144,6 +162,8 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	if (record.auditorProjectResources === true || record.auditorProjectResources === "true") settings.auditorProjectResources = true;
 	const stallTimeoutMinutes = asPositiveInt(record.stallTimeoutMinutes);
 	if (stallTimeoutMinutes !== undefined) settings.stallTimeoutMinutes = stallTimeoutMinutes;
+	const objectiveMaxChars = asNonNegativeInt(record.objectiveMaxChars);
+	if (objectiveMaxChars !== undefined) settings.objectiveMaxChars = objectiveMaxChars;
 	return settings;
 }
 
@@ -186,6 +206,7 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
 		autoSelectSingleGoal: fileConfig.autoSelectSingleGoal ?? false,
 		auditorProjectResources: fileConfig.auditorProjectResources ?? false,
 		stallTimeoutMinutes: fileConfig.stallTimeoutMinutes,
+		objectiveMaxChars: asNonNegativeInt(env.PI_GOAL_OBJECTIVE_MAX_CHARS) ?? fileConfig.objectiveMaxChars,
 	};
 }
 
@@ -204,6 +225,7 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
 export function envOverrideFor(key: keyof GoalSettings | "settingsFile", env: NodeJS.ProcessEnv = process.env): string | null {
 	if (key === "disableTasks" && env.PI_GOAL_DISABLE_TASKS !== undefined) return "PI_GOAL_DISABLE_TASKS";
 	if (key === "disableContracts" && env.PI_GOAL_DISABLE_CONTRACTS !== undefined) return "PI_GOAL_DISABLE_CONTRACTS";
+	if (key === "objectiveMaxChars" && env.PI_GOAL_OBJECTIVE_MAX_CHARS !== undefined) return "PI_GOAL_OBJECTIVE_MAX_CHARS";
 	if (key === "settingsFile" && env[PI_GOAL_SETTINGS_FILE_ENV] !== undefined) return PI_GOAL_SETTINGS_FILE_ENV;
 	return null;
 }
@@ -227,6 +249,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "thinkingLevel", label: "thinking_level", format: (v) => v.thinkingLevel ?? "(default)" },
 		{ key: "auditorProjectResources", label: "auditor project resources", format: (v) => (v.auditorProjectResources === true ? "true" : "false") },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: (v) => String(v.stallTimeoutMinutes ?? 0) },
+		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: (v) => String(v.objectiveMaxChars ?? 0) },
 	];
 	for (const row of rows) {
 		const envVar = envOverrideFor(row.key, env);
@@ -262,6 +285,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (settings.autoSelectSingleGoal === true) clean.autoSelectSingleGoal = true;
 	if (settings.auditorProjectResources === true) clean.auditorProjectResources = true;
 	if (settings.stallTimeoutMinutes !== undefined) clean.stallTimeoutMinutes = settings.stallTimeoutMinutes;
+	if (settings.objectiveMaxChars !== undefined) clean.objectiveMaxChars = settings.objectiveMaxChars;
 	const configPath = goalSettingsPath(cwd);
 	fs.mkdirSync(path.dirname(configPath), { recursive: true });
 	settingsFileCache.delete(configPath);
@@ -276,6 +300,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (settings.autoSelectSingleGoal === true) persisted.autoSelectSingleGoal = true;
 	if (settings.auditorProjectResources === true) persisted.auditorProjectResources = true;
 	if (clean.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = clean.stallTimeoutMinutes;
+	if (clean.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = clean.objectiveMaxChars;
 	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
 	return clean;
 }

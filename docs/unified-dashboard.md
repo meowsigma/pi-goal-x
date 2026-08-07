@@ -23,6 +23,7 @@ Always visible above the editor while a goal is focused:
 ```text
 ╭─ pi-goal-x ─ Add CSV export to reports ────────────────────────────────────────────────╮
 │ goal: running [12m47s 18.2K] (+2 open)                                                 │
+│ Auditor  on · Ctrl+Shift+A: off                                                         │
 ├─ Tasks · ✓3 done · 2 open ─────────────────────────────────── [████░░] · Sub 2/3 [██░] ┤
 │ ✓ t1  Review reports page and data source                                              │
 │ ✓ t2  Implement filtered CSV export                                                    │
@@ -42,7 +43,16 @@ Compact rows, in order:
 2. Status: `goal: <status> [<elapsed> <tokens>] (+N open)` — the same
    terminology as the pi footer status line.
 3. Token budget (when configured): `⛽ Budget 18.2K / 50K · 36%`.
-4. Tasks header row: `Tasks · ✓N done · M open` with the compact task
+4. Auditor status: `Auditor  on · Ctrl+Shift+A: off` (muted; `Auditor  off
+   · Ctrl+Shift+A: on` when the per-goal auditor is disabled). The hint
+   shrinks with the layout — wide/medium keep the target suffix (`: off` /
+   `: on`), narrow (50–69) keeps the chord only (`· Ctrl+Shift+A`), and
+   minimal (<50) drops the hint entirely — so the core `Auditor  on/off`
+   label always fits. `Ctrl+Shift+A` toggles the focused goal's auditor
+   (persisted per-goal, `auditor_toggled` ledger event, dashboard refresh,
+   notification; inert with no focused goal, a goal modal open, or a
+   complete goal). The expanded dashboard does not render this line.
+5. Tasks header row: `Tasks · ✓N done · M open` with the compact task
    progress bar, then the current task's subtask bar beside it
    (` · Sub done/total ` + bar — the word `Sub` is dropped in narrow mode so
    the full counts still fit at 50 columns, and the segment is omitted
@@ -52,7 +62,7 @@ Compact rows, in order:
    tasks. The subtask segment appears only when the current task has direct
    children. The whole header row is neutral gray (label, counts, bar fill,
    and empty cells) so nothing in the progress info is colourful.
-5. Task list section: the top-level tasks shown by default in **pastel
+6. Task list section: the top-level tasks shown by default in **pastel
    amber** (`mdHeading`) with colour-coded markers and ids (✓ complete muted
    green, ▸ current teal, ~ skipped gray, · pending amber), an aligned id
    column, truncated amber titles, and a `… +N more` overflow line when the
@@ -63,12 +73,12 @@ Compact rows, in order:
    whole box chrome — top/bottom frame, left/right edges, corners and
    interior rules — is drawn in one tone: the theme's neutral gray
    (`muted`). No blue tinge.
-6. Current task: `Current  t3 · Add the download button` (id and title in the
+7. Current task: `Current  t3 · Add the download button` (id and title in the
    accent color).
-7. Goal-level verification contract (first line, truncated).
-8. Blocked or paused detail (reason, suggested action).
-9. Active (or archived) goal file path.
-10. Footer with the expansion shortcut. The whole footer line — leading dash,
+8. Goal-level verification contract (first line, truncated).
+9. Blocked or paused detail (reason, suggested action).
+10. Active (or archived) goal file path.
+11. Footer with the expansion shortcut. The whole footer line — leading dash,
     shortcut hint and trailing fill — is drawn in one frame tone (the
     neutral-gray `muted`), so the color spans the full width with no two-tone
     split; the header line is likewise one tone with only the `pi-goal-x`
@@ -212,6 +222,7 @@ auditor's findings, and returns to the normal dashboard so work can continue.
 | Key | Action |
 | --- | --- |
 | `Ctrl+Shift+T` | Toggle the dashboard between compact and expanded |
+| `Ctrl+Shift+A` | Toggle the focused goal's independent auditor on/off (persisted per-goal; inert with no goal, a goal modal open, or a complete goal) |
 | `↑` / `↓`, `PgUp` / `PgDn`, `Home` / `End` | Scroll the expanded task tree (see [Scrolling the task list](#scrolling-the-task-list)) |
 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓`, `Ctrl+Shift+PgUp` / `Ctrl+Shift+PgDn`, `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Scroll the compact task list |
 | `Esc` | Collapse the expanded dashboard; otherwise pause the goal |

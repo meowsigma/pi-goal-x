@@ -311,6 +311,20 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${theme.fg(fuel as RenderColor, "⛽")} ${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
 	}
 
+	// §auditor-toggle: the focused goal's independent-auditor status on a
+	// muted, width-safe line. The core `Auditor  on/off` label always
+	// survives; the Ctrl+Shift+A hint shrinks with the layout (full
+	// `: off`/`: on` target suffix in wide/medium, chord only in narrow,
+	// no hint at minimal) and fit() truncates rather than ever overflowing.
+	{
+		const state = model.auditorEnabled ? "on" : "off";
+		const hint =
+			mode === "minimal" ? ""
+			: mode === "narrow" ? " · Ctrl+Shift+A"
+			: ` · Ctrl+Shift+A: ${model.auditorEnabled ? "off" : "on"}`;
+		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Auditor")}  ${muted(theme, state)}${muted(theme, hint)}`));
+	}
+
 	// §9.1 compact task counts + progress bars live in the Tasks header row
 	// (below); the standalone progress lines were removed in favor of it.
 

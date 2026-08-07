@@ -43,6 +43,125 @@ export function computeDialogLineLimit(args: { terminalRows?: number; baseFrameL
 	return Math.min(rows, Math.max(4, rows - 4));
 }
 
+/**
+ * Proposal-confirmation segment descriptor: absolute line indices of the
+ * tasks section (header + every task line) and the start of the options tail
+ * inside a rendered questionnaire dialog.
+ */
+export interface ProposalPresentationSegments {
+	tasksStart: number;
+	tasksEnd: number;
+	tailStart: number;
+}
+
+/**
+ * Locate the proposal tasks segment and the options tail in a rendered dialog.
+ * Returns null when the dialog is not a proposal-style confirmation (no
+ * "Tasks proposed for confirmation:" header / "┌─ TASKS ─" box).
+ */
+export function findProposalPresentationSegments(lines: string[], tailStart: number): ProposalPresentationSegments | null {
+	if (tailStart < 0) return null;
+	const tasksStart = lines.findIndex((l) => l.includes("Tasks proposed for confirmation:") || l.includes("┌─ TASKS ─"));
+	if (tasksStart < 0 || tasksStart >= tailStart) return null;
+	let tasksEnd = tasksStart;
+	for (let i = tasksStart + 1; i < tailStart; i++) {
+		if (/^\s*\[[ x~]\]/.test(lines[i])) tasksEnd = i;
+		else break;
+	}
+	return { tasksStart, tasksEnd, tailStart };
+}
+
+/**
+ * Fit a rendered dialog to the terminal-height bound without ever hiding the
+ * question. The protected head (top border + tabs + question line) is always
+ * kept; the remaining budget is spent on the tail — options/footer/bottom
+ * border — so long context blocks (proposal confirmations) are sliced from
+ * their head exactly as the pre-fix tail-slice did (383ae52 surface). When the
+ * options block starts immediately after the head (plain agent questions with
+ * no context block), the TOP options are kept instead of the tail so the
+ * recommended/first option stays visible; the footer hint and bottom border
+ * are always the last rendered lines. Never returns more than maxDialogLines.
+ *
+ * Proposal confirmations (proposal segments given) keep the head, the tasks
+ * section (header + every task line), and the options/footer/bottom border in
+ * frame; only the objective-box middle is sacrificed in-frame — the full
+ * objective is always present in the scrollable transcript presentation
+ * (propose_goal_draft renderCall), so nothing of the goal is ever omitted.
+ */
+export function fitDialogLines(
+	lines: string[],
+	maxDialogLines: number,
+	protectedHead: number,
+	optionsImmediatelyAfterHead = false,
+	proposal: ProposalPresentationSegments | null = null,
+): string[] {
+	if (maxDialogLines <= 0 || lines.length <= maxDialogLines) return lines;
+	const keepHead = Math.min(protectedHead, maxDialogLines);
+	const budget = maxDialogLines - keepHead;
+	if (budget <= 0) return lines.slice(0, keepHead);
+	const rest = lines.slice(protectedHead);
+	if (rest.length <= budget) return [...lines.slice(0, keepHead), ...rest];
+	if (proposal) {
+		return fitProposalPresentation(lines, maxDialogLines, keepHead, proposal);
+	}
+	if (optionsImmediatelyAfterHead) {
+		// Plain select-mode question: keep the footer hint + bottom border (as
+		// many as fit), then spend the remaining room on the TOP options so the
+		// recommended/first option stays visible; leading blank separators are
+		// dropped first when room is short. Never exceeds maxDialogLines.
+		const headLines = lines.slice(0, keepHead);
+		const firstContent = rest.findIndex((l) => l.trim().length > 0);
+		const lead = firstContent > 0 ? rest.slice(0, firstContent) : [];
+		const contentStart = firstContent > 0 ? firstContent : 0;
+		const tailBudget = Math.min(2, budget); // footer hint + bottom border
+		const tail = rest.slice(-tailBudget);
+		const room = budget - tailBudget;
+		const keepContent = Math.max(0, Math.min(rest.length - contentStart, room));
+		const keepLead = Math.max(0, Math.min(lead.length, room - keepContent));
+		const content = rest.slice(contentStart, contentStart + keepContent);
+		return [...headLines, ...lead.slice(0, keepLead), ...content, ...tail];
+	}
+	// Context-heavy / input / submit dialogs: keep the head and the tail
+	// (options, footer, bottom border) exactly as the pre-fix tail-slice did.
+	return [...lines.slice(0, keepHead), ...rest.slice(rest.length - budget)];
+}
+
+/**
+ * Proposal confirmation fit: keep the protected head, the tasks section, and
+ * the options/footer/bottom border; the objective-box middle is sacrificed
+ * in-frame (it stays fully readable in the scrollback presentation). Interior
+ * blank spacing lines are dropped first when room is short; task lines are
+ * only dropped after that, from the end, when the bound is exhausted (those
+ * lines remain in the scrollback presentation). Never exceeds maxDialogLines.
+ */
+function fitProposalPresentation(
+	lines: string[],
+	maxDialogLines: number,
+	keepHead: number,
+	proposal: ProposalPresentationSegments,
+): string[] {
+	const { tasksStart, tasksEnd, tailStart } = proposal;
+	const head = lines.slice(0, keepHead);
+	const tasks = lines.slice(Math.max(tasksStart, keepHead), Math.min(tasksEnd, tailStart) + 1);
+	const tail = lines.slice(Math.max(tailStart, keepHead));
+	const candidate = [...head, ...tasks, ...tail];
+	if (candidate.length <= maxDialogLines) return candidate;
+	// Tight: drop blank spacing lines below the head (e.g. the blank between
+	// the options and the footer hint) before touching any content line.
+	const stripped = candidate.filter((l, i) => i < keepHead || l.trim() !== "");
+	if (stripped.length <= maxDialogLines) return stripped;
+	// Bound still exhausted: keep the head, then spend the room on the tail
+	// first (options/footer/bottom border — the actionable decision surface —
+	// kept from its end so the border and footer never drop), then on the
+	// tasks from the start. The dropped task lines remain fully readable in
+	// the scrollback presentation. Never exceeds maxDialogLines.
+	const tailNoBlanks = tail.filter((l) => l.trim() !== "");
+	const keepTail = Math.min(tailNoBlanks.length, Math.max(0, maxDialogLines - keepHead));
+	const tailKept = tailNoBlanks.slice(tailNoBlanks.length - keepTail);
+	const keepTasks = Math.min(tasks.length, Math.max(0, maxDialogLines - keepHead - keepTail));
+	return [...head, ...tasks.slice(0, keepTasks), ...tailKept];
+}
+
 export function normalizeQuestionnaireQuestions(rawQuestions: GoalQuestionnaireQuestion[]): GoalQuestionnaireQuestion[] {
 	const seenIds = new Set<string>();
 	return rawQuestions.map((q, i) => {
@@ -122,9 +241,10 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		// the frame never exceeds the terminal height — without this, closing a dialog
 		// taller than the terminal triggers pi-tui's generic shrink full-render
 		// (\x1b[2J\x1b[H\x1b[3J), erasing terminal scrollback and yanking the viewport
-		// so the window takes ~10s to scroll back to the bottom. The tail slice keeps
-		// the actionable options/footer in view; content that fits renders exactly as
-		// the pre-regression (383ae52) UI. Only applies with real TUI dimensions.
+		// so the window takes ~10s to scroll back to the bottom. The slice keeps
+		// the question and the actionable options/footer in view (see
+		// fitDialogLines); content that fits renders exactly as the
+		// pre-regression (383ae52) UI. Only applies with real TUI dimensions.
 		const tuiInfo = tui as unknown as { terminal?: { rows?: number }; previousLines?: string[] };
 		const terminalRows = tuiInfo.terminal?.rows;
 		const baseFrame = tuiInfo.previousLines?.length;
@@ -134,6 +254,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		let inputMode = false;
 		let inputQuestionId: string | null = null;
 		let cachedLines: string[] | undefined;
+		let optionsStartIndex = -1;
 		let auditorEnabled = auditorToggleInit?.defaultEnabled ?? true;
 		const answers = new Map<string, GoalQuestionnaireAnswer>();
 		const drafts = new Map<string, string>();
@@ -453,6 +574,9 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			};
 
 			add(theme.fg("accent", "─".repeat(safeWidth)));
+			// Lines up to the question line (top border, tabs, question incl.
+			// wraps) are the protected head — the slice below must never hide them.
+			let protectedCount = lines.length;
 			if (isMulti) {
 				const tabs: string[] = ["← "];
 				for (let i = 0; i < questions.length; i++) {
@@ -467,9 +591,11 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				tabs.push(" →");
 				add(` ${tabs.join("")}`);
 				lines.push("");
+				protectedCount = lines.length;
 			}
 
 			function renderOptions() {
+				optionsStartIndex = lines.length;
 				for (let i = 0; i < opts.length; i++) {
 					const opt = opts[i];
 					const selected = i === optionIndex;
@@ -481,6 +607,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 
 			if (inputMode && q) {
 				addWrapped(theme.fg("text", ` ${q.question}`));
+				protectedCount = lines.length;
 				if (q.context) renderContextLines(q.context);
 				lines.push("");
 				if (q.options.length > 0) {
@@ -493,6 +620,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				add(theme.fg("dim", " Enter to submit • Esc to cancel"));
 			} else if (currentTab === questions.length) {
 				add(theme.fg("accent", theme.bold(" Ready to submit")));
+				protectedCount = lines.length;
 				lines.push("");
 				for (const question of questions) {
 					const answer = answers.get(question.id);
@@ -502,6 +630,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				add(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
 			} else if (q) {
 				addWrapped(theme.fg("text", ` ${q.question}`));
+				protectedCount = lines.length;
 				if (q.context) renderContextLines(q.context);
 				// Auditor toggle line between context and options
 				if (auditorToggleInit) {
@@ -530,9 +659,21 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 					lines[i] = truncateToWidth(lines[i], safeWidth);
 				}
 			}
-			// Churn guard: tail-slice to the terminal-height bound (see factory top).
+			// Churn guard: bound to the terminal height (see factory top) so the
+			// opened frame never exceeds the screen. Never slice the question:
+			// keep the protected head, then spend the rest of the budget on the
+			// tail (options/footer/bottom border) — or, for plain select-mode
+			// questions where the options start right after the head, keep the
+			// top options so the recommended one stays visible. Proposal
+			// confirmations additionally keep the tasks section in frame; the
+			// objective-box middle is sacrificed there because the full objective
+			// is always in the scrollable transcript presentation (renderCall).
 			if (maxDialogLines !== undefined && lines.length > maxDialogLines) {
-				lines = lines.slice(lines.length - maxDialogLines);
+				const optionsImmediatelyAfterHead = !inputMode && currentTab !== questions.length && !!q && !q.context && opts.length > 0;
+				const proposalSegments = !inputMode && currentTab !== questions.length && !!q && q.context
+					? findProposalPresentationSegments(lines, optionsStartIndex)
+					: null;
+				lines = fitDialogLines(lines, maxDialogLines, protectedCount, optionsImmediatelyAfterHead, proposalSegments);
 			}
 			cachedLines = lines;
 			return lines;

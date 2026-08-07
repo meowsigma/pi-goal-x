@@ -19,6 +19,7 @@ import { readGoalLedger } from "../extensions/goal-ledger.ts";
 import { goalSettingsPath } from "../extensions/goal-settings.ts";
 import { proposalText, DRAFT_ENTRY, type ActiveGoalDraft } from "../extensions/goal-drafting.ts";
 import { createGoal, type GoalRecord } from "../extensions/goal-record.ts";
+import { createMockTheme } from "./tui-test-utils.ts";
 
 interface Harness {
 	ctx: ExtensionContext;
@@ -159,6 +160,79 @@ test("dialog cancel is a durable no-op and clears the draft", async () => {
 		const tools = h.activeTools();
 		assert.ok(tools.includes("update_goal"), "execution profile restored");
 		assert.equal(tools.includes("goal_questionnaire"), false, "drafting tools removed");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("regression: the proposal emits the complete goal presentation to the transcript before the dialog decision", async () => {
+	// Reported repro: the goal draft was not presenting tasks. The complete
+	// goal — every objective contract section and every task line — must be in
+	// the terminal buffer while the confirmation dialog is open, so the user
+	// can scroll up and read it ("the user can just scroll"). propose_goal_draft
+	// renders this via renderCall, which pi displays in the transcript as soon
+	// as the tool call starts — before the dialog opens.
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-present-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal")!.handler("Present the complete goal in the confirmation dialog", h.ctx);
+		const objective = [
+			"=== Goal ===",
+			"Objective: Fix the goal draft so the complete goal is presented.",
+			"Success criteria: every section and every task line is readable.",
+			"Boundaries: in scope: extensions; out of scope: pi-tui API changes.",
+			"Constraints: the dialog frame never exceeds the terminal height.",
+			"Verification contract: npm run check (0 errors); npm test (0 failures).",
+			"If blocked: stop and ask the user.",
+		].join("\n");
+		const tasks = [
+			{ id: "task-1", title: "Add the failing regression tests" },
+			{ id: "task-2", title: "Fix the dialog slice" },
+			{ id: "task-3", title: "Guarantee scrollback completeness" },
+		];
+		const params = proposalParams(objective, { tasks });
+		const pending = runProposal(h, params);
+		assert.ok(h.hasDialog(), "confirmation dialog must be open");
+
+		// The tool-call renderer is what pi puts into the transcript while the
+		// dialog is open; render it exactly as pi would at call time.
+		const proposal = h.tools.get("propose_goal_draft");
+		assert.ok(proposal, "propose_goal_draft must be registered during a draft");
+		assert.ok(
+			typeof proposal.renderCall === "function",
+			"propose_goal_draft must render its complete presentation into the transcript (renderCall) before the dialog decision",
+		);
+		const theme = createMockTheme();
+		const component = proposal.renderCall(params, theme, {});
+		const rendered = (component as { render(w: number): string[] }).render(120).join("\n");
+		for (const section of ["Objective: Fix the goal draft", "Success criteria:", "Boundaries:", "Constraints:", "Verification contract:", "If blocked:"]) {
+			assert.ok(rendered.includes(section), `objective contract section must be in the transcript presentation: ${section}`);
+		}
+		assert.ok(rendered.includes("Tasks proposed for confirmation:"), "tasks header must be in the transcript presentation");
+		for (const task of tasks) {
+			assert.ok(rendered.includes(`[ ] ${task.id}: ${task.title}`), `task line must be in the transcript presentation: ${task.id}`);
+		}
+
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONTINUE_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+
+		// Derived-task fallback: when the proposal carries no explicit task list,
+		// the transcript presentation still shows the tasks derived from the
+		// objective's ordered-step structure (F2), so the user can review them.
+		const derivedObjective = "Present the complete goal.\n1. Add the failing regression tests.\n2. Fix the dialog slice.\n3. Guarantee scrollback completeness.";
+		const pending2 = runProposal(h, proposalParams(derivedObjective));
+		assert.ok(h.hasDialog(), "second confirmation dialog must be open");
+		const proposal2 = h.tools.get("propose_goal_draft");
+		const component2 = proposal2.renderCall(proposalParams(derivedObjective), theme, {});
+		const rendered2 = (component2 as { render(w: number): string[] }).render(120).join("\n");
+		assert.ok(rendered2.includes("Tasks derived from the objective"), "derived tasks header must be in the transcript presentation");
+		for (const step of ["[ ] step-1: Add the failing regression tests", "[ ] step-2: Fix the dialog slice", "[ ] step-3: Guarantee scrollback completeness"]) {
+			assert.ok(rendered2.includes(step), `derived task line must be in the transcript presentation: ${step}`);
+		}
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CANCEL_ANSWER, wasCustom: false }], cancelled: false });
+		await pending2;
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}

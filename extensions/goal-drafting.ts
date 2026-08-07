@@ -454,7 +454,30 @@ export function registerDraftingTools(core: GoalCore): void {
 			clearGoalDrafting(core, ctx);
 			return { content: [{ type: "text", text: `${summary}\n\nGoal tweak confirmed and applied.` }], details: goalDetails(result.goal), terminate: true };
 		},
-		renderCall(args, theme) { return new Text(theme.fg("toolTitle", "propose_goal_draft ") + theme.fg("muted", args?.objective ?? ""), 0, 0); },
+		renderCall(args, theme) {
+			// §proposal-presentation: the tool-call display lands in the terminal
+			// buffer the moment the tool call starts — BEFORE the confirmation
+			// dialog opens — so it is the scrollable "complete presentation" of
+			// the goal. It must show the full objective contract AND every task
+			// line; the dialog frame alone cannot (its churn-guard bound keeps
+			// it within the terminal height). The user can scroll up and read
+			// everything while the dialog is open ("the user can just scroll").
+			const objective = String(args?.objective ?? "");
+			let text = theme.fg("toolTitle", "propose_goal_draft ") + theme.fg("muted", objective);
+			const flatTasks = Array.isArray(args?.tasks) ? (args.tasks as FlatTaskInput[]) : [];
+			const derived = flatTasks.length === 0 ? (deriveTasksFromObjective(objective) ?? []) : [];
+			const taskBlock = flatTasks.length > 0
+				? { header: "Tasks proposed for confirmation:", lines: flatTasks.map((t) => `[ ] ${t.id}: ${t.title}`) }
+				: derived.length > 0
+					? { header: "Tasks derived from the objective (confirm or ask the agent to adjust):", lines: renderConfirmationTasks(derived, 0) }
+					: null;
+			if (taskBlock) {
+				text += "\n\n" + theme.fg("toolTitle", theme.bold(taskBlock.header)) + "\n" + theme.fg("toolOutput", taskBlock.lines.join("\n"));
+			}
+			if (args?.auto_continue === false) text += "\n\n" + theme.fg("muted", "Automatic continuation: disabled");
+			if (args?.block_completion === true) text += "\n\n" + theme.fg("muted", "Block completion on pending tasks: enabled");
+			return new Text(text, 0, 0);
+		},
 		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
 	}));
 }

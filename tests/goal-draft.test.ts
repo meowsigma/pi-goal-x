@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { extractVerificationContract, promptSafeObjective, sisyphusObjectiveSufficient } from "../extensions/goal-contract.ts";
+import { goalDraftingPrompt } from "../extensions/goal-draft.ts";
 import { renderConfirmationTasks } from "../extensions/goal-task-confirmation.ts";
 
 test("extractVerificationContract splits contract line from objective", () => {
@@ -36,4 +37,16 @@ test("sisyphusObjectiveSufficient accepts inline and block ordered steps", () =>
 	assert.equal(sisyphusObjectiveSufficient("1. extract token validation\n2. wire it into login"), true, "numbered block");
 	assert.equal(sisyphusObjectiveSufficient("Just do the thing cleanly"), false, "no step markers");
 	assert.equal(sisyphusObjectiveSufficient(""), false, "empty objective");
+});
+
+test("goalDraftingPrompt requires the complete goal presentation before proposing", () => {
+	// The agent's pre-proposal message must render the COMPLETE goal — every
+	// section and the full task list — so the user can scroll up and re-read it
+	// while the confirmation dialog is open; omission is forbidden.
+	for (const focus of ["goal" as const, "sisyphus" as const]) {
+		const prompt = goalDraftingPrompt("some topic", focus);
+		assert.ok(prompt.includes("write the COMPLETE goal"), `${focus} prompt must require the complete goal in the agent's message`);
+		assert.ok(prompt.includes("Nothing may be omitted from the presented goal"), `${focus} prompt must forbid omission from the presented goal`);
+		assert.ok(prompt.includes("full task list"), `${focus} prompt must require the full task list`);
+	}
 });

@@ -294,6 +294,7 @@ test("provider-error guard: agent_end with an error message never queues a conti
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 
 		await h.handlers["agent_end"]({ messages: [{ role: "assistant", stopReason: "error" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]({}, idleCtx(h.ctx));
 
 		assert.equal(await countCheckpoints(h), 0, "agent_end with an error message must not queue a continuation");
 	} finally {
@@ -301,15 +302,17 @@ test("provider-error guard: agent_end with an error message never queues a conti
 	}
 });
 
-test("provider-error guard: agent_end without errors still queues a continuation", async () => {
+test("successful agent_end waits for agent_settled before queuing a continuation", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 
 		await h.handlers["agent_end"]({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 0, "agent_end runs before pi is truly idle");
 
-		assert.equal(await countCheckpoints(h), 1, "agent_end without errors must queue a continuation");
+		await h.handlers["agent_settled"]({}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 1, "agent_settled queues the continuation without idle polling");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}

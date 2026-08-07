@@ -34,10 +34,12 @@ import type { GoalMutationOutcome } from "./goal-service.ts";
  * The goal extension's lifecycle event handlers (context, turn_start,
  * tool_call, tool_execution_end, turn_end, message_end, session_start,
  * session_before_compact, session_compact, session_tree, before_agent_start,
- * agent_end, session_shutdown). All state flows through the GoalCore.
+ * agent_end, agent_settled, session_shutdown). All state flows through the
+ * GoalCore.
  */
 export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
+	let continuationAfterSettleFor: string | null = null;
 
 	pi.on("context", async (event): Promise<{ messages: typeof event.messages } | undefined> => {
 		let changed = false;
@@ -418,6 +420,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	pi.on("agent_end", async (event, ctx) => {
 		const endedGoalId = core.runningGoalId;
 		core.runningGoalId = null;
+		continuationAfterSettleFor = null;
 
 		// Account for any tokens from aborted in-flight assistant messages so
 		// they are not silently lost (but charge them to the original goal).
@@ -446,10 +449,23 @@ export function registerGoalEvents(core: GoalCore): void {
 		}
 		core.persist(ctx);
 		core.updateUI(ctx);
-		core.queueContinuation(ctx);
+		// agent_end runs before pi finishes retries, compaction, terminating-tool
+		// settlement, and queued messages. Starting the continuation timer here
+		// can poll a stale busy context for minutes on pi 0.84. agent_settled is
+		// available in both supported SDK lines (0.83 and 0.84) and is the first
+		// point where pi guarantees no automatic work remains.
+		continuationAfterSettleFor = core.state.goal.id;
+	});
+
+	pi.on("agent_settled", async (_event, ctx) => {
+		const goalId = continuationAfterSettleFor;
+		continuationAfterSettleFor = null;
+		if (!goalId || !core.isActionableContinuationGoal(goalId)) return;
+		core.queueContinuation(ctx, true);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		continuationAfterSettleFor = null;
 		core.accountProgress(ctx);
 		core.clearContinuationTimer();
 		core.terminalInputUnsubscribe?.();

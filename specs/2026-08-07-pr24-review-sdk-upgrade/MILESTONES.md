@@ -112,3 +112,17 @@ Residual notes:
   dist-tag and the supported floor is 0.83 via peerDeps `*`/devDeps `^0.84.1`.
 - No version bump/release performed (out of scope); CHANGELOG entry can be
   added with the next release.
+
+## 2026-08-07 — Final landing (DONE)
+
+- Committed `60152a3` "chore: bump @earendil-works/pi-ai, pi-coding-agent,
+  pi-tui to 0.84.1" (package.json + lockfile + docs/architecture.md +
+  MILESTONES.md) on top of the merge `24fde39` and pushed to origin/main
+  (fast-forward). Remote main = 60152a3; GitHub API confirms merge commit
+  parents (620a13f, a164490).
+- Post-merge final: tsc ✓, npm test 691/691, test:serial 691/691,
+  test:integration 28/28. Working tree clean.
+- Note: local `git log` omits merge-commit lines while `--merges`,
+  `rev-list --parents`, `cat-file`, and a fresh clone all confirm the graph
+  (60152a3 → 24fde39 → {620a13f, a164490}); fsck clean. Display-only quirk,
+  no impact on pushed history. No version bump/release (out of scope).

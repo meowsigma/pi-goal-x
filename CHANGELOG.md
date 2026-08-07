@@ -8,6 +8,20 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- The compact dashboard footer right-aligns a `Ctrl+Shift+A: toggle auditor`
+  note beside the auditor dot (wide/medium layouts only) instead of
+  appending the chord to the left hint — making explicit that the shortcut
+  turns the focused goal's independent auditor on and off. Narrow/minimal
+  layouts keep just the dot. Toggle behavior, keybinding, `auditor_toggled`
+  ledger event, and inert guards are unchanged; the expanded dashboard
+  stays byte-identical.
+
+---
+
 ## [0.25.3] — 2026-08-07
 
 ### Changed

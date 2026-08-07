@@ -62,11 +62,15 @@ the fix is only the default shown.
 
 ### 3. Auditor status in the compact dashboard, toggleable
 
-- The compact dashboard shows the focused goal's auditor status on a muted
-  line (`Auditor  on · Ctrl+Shift+A: off` / `Auditor  off · Ctrl+Shift+A:
-  on`), width-safe in every layout mode (the key hint shrinks by mode and is
-  dropped entirely at minimal width; the `Auditor  on/off` core always
-  survives).
+- The compact dashboard shows the focused goal's auditor status as a single
+  dot integrated into the bottom-right of the box border: `●` green when the
+  auditor is on, muted gray when off (no standalone content line — the
+  border dot is the whole indicator). The dot survives every layout mode
+  (wide ≥100 / medium 70–99 / narrow 50–69 / minimal <50). In wide and
+  medium layouts the footer right-aligns a `Ctrl+Shift+A: toggle auditor`
+  note (same frame tone as the hint) directly left of the dot, making
+  explicit that the chord turns the auditor on and off; narrow and minimal
+  keep just the dot.
 - `Ctrl+Shift+A` (a chord pi never binds; fallback to another unbound
   ctrl+shift chord if it collides) toggles the focused goal's auditor
   on/off: the new `skipAuditor` is persisted to the goal file
@@ -101,8 +105,10 @@ The hard 4000-character objective cap is removed. In its place:
   `goal_resumed` (reason `tweak`); `budget_limited`/`active` unchanged.
 - Tweak of a `skipAuditor: true` goal → confirmation dialog defaults to
   auditor disabled; confirming keeps it disabled.
-- Compact dashboard shows `Auditor  on/off` (muted, all layout modes);
-  `Ctrl+Shift+A` flips it with persisted write + ledger event + notification.
+- Compact dashboard shows the auditor status as a bottom-right border dot
+  (green on / gray off, all layout modes) with a right-aligned
+  `Ctrl+Shift+A: toggle auditor` note in wide/medium; `Ctrl+Shift+A` flips
+  it with persisted write + ledger event + notification.
 - Expanded dashboard and completion audit gate unchanged.
 - Objectives longer than 4000 characters are accepted by default; a
   configured `objectiveMaxChars` caps them at every entry point.

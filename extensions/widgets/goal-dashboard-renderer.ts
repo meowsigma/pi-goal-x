@@ -317,7 +317,8 @@ export function renderCompactDashboard(
 
 	// §auditor-toggle: the focused goal's independent-auditor status is the
 	// bottom-right border dot (green on / muted gray off, see the footer
-	// below); the Ctrl+Shift+A chord is advertised in wide/medium footers.
+	// below); wide/medium footers right-align a note next to it explaining
+	// that Ctrl+Shift+A turns the auditor on and off.
 
 	// §9.1 compact task counts + progress bars live in the Tasks header row
 	// (below); the standalone progress lines were removed in favor of it.
@@ -396,21 +397,26 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${dim(theme, `File     ${model.filePath}`)}`));
 	}
 
-	const footerHint = (opts.footerHint
+	const footerHint = opts.footerHint
 		?? (listOverflows
 			? mode === "minimal"
 				? "↑↓: scroll"
 				: mode === "narrow"
 					? "Ctrl+Shift+↑↓: scroll"
 					: "Ctrl+Shift+T: expand · Ctrl+Shift+↑↓: scroll"
-			: spec.footerHint))
-		// §auditor-toggle: wide/medium footers also advertise the Ctrl+Shift+A
-		// toggle; narrow/minimal keep only the border dot.
-		+ (mode === "wide" || mode === "medium" ? " · Ctrl+Shift+A" : "");
-	// The auditor dot lives in the bottom-right of the border: green when the
-	// focused goal's independent auditor is on, muted gray when off.
+			: spec.footerHint);
+	// The auditor dot sits at the bottom-right of the border: green when the
+	// focused goal's independent auditor is on, muted gray when off. In
+	// wide/medium a right-aligned note (same frame tone as the hint) explains
+	// that Ctrl+Shift+A turns the auditor on and off; narrow/minimal keep
+	// just the dot. The boxFooter right slot pushes both to the right edge,
+	// so the chord and its note are right-aligned by construction.
 	const auditorDot = model.auditorEnabled ? success(theme, "●") : muted(theme, "●");
-	lines.push(boxFooter(theme, safeWidth, footerHint, auditorDot));
+	const right =
+		mode === "wide" || mode === "medium"
+			? `${frame(theme, "Ctrl+Shift+A: toggle auditor")} ${auditorDot}`
+			: auditorDot;
+	lines.push(boxFooter(theme, safeWidth, footerHint, right));
 	return lines;
 }
 

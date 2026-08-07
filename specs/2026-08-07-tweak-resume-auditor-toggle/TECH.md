@@ -11,7 +11,7 @@
 | `extensions/goal-state.ts` | New `toggleGoalAuditor(ctx)` on `GoalCore` |
 | `extensions/goal-widget.ts` | `ctrl+shift+a` keybinding → `core.toggleGoalAuditor` |
 | `extensions/widgets/goal-dashboard-model.ts` | `auditorEnabled` on `GoalDashboardModel` |
-| `extensions/widgets/goal-dashboard-renderer.ts` | Compact `Auditor  on/off` line |
+| `extensions/widgets/goal-dashboard-renderer.ts` | Compact auditor status: bottom-right border dot |
 | tests: `goal-drafting.test.ts`, `goal-dashboard-model.test.ts`, `goal-dashboard-golden.test.ts`, `goal-widget.test.ts`, `goal-ledger.test.ts`, `goal-activity.test.ts` | Coverage |
 
 ## 1. Tweak confirm auto-resume (`goal-drafting.ts`)
@@ -73,15 +73,21 @@ global default). The expanded renderer ignores it.
 
 ### Renderer (`goal-dashboard-renderer.ts`, `renderCompactDashboard`)
 
-After the budget line (or status line when no budget), push a muted line:
+No standalone content line. `boxFooter` gained a right-corner slot (`right`
+param) rendered as ` ${right} ${frame(theme, H)}` before the `╯` corner,
+mirroring `boxHeader`'s right-meta treatment; the left hint truncates when
+tight, the right slot survives. `renderCompactDashboard` passes:
 
-- wide/medium: `Auditor  on · Ctrl+Shift+A: off`
-- narrow (50–69): `Auditor  on · Ctrl+Shift+A` (drop the target-word suffix)
-- minimal (<50): `Auditor  on` (drop the hint; always fits)
+- right slot = `Ctrl+Shift+A: toggle auditor` (frame tone) + ` ●` colored
+  dot — wide (≥100) and medium (70–99) only; the fill expands before the
+  slot, so the note + dot are right-aligned by construction.
+- right slot = just the colored dot — narrow (50–69) and minimal (<50).
+- dot = `success` green when `model.auditorEnabled`, `muted` gray when off.
 
-Core `Auditor  on/off` always survives; only the key-hint part truncates.
-When disabled: `Auditor  off · Ctrl+Shift+A: on` (and equivalents). One
-frame-tone block — the same muted gray as the header counts.
+Other `boxFooter` callers (expanded, focus-required, audit footer) pass no
+`right` → expanded dashboard byte-identical. `goal-status.ts` may pass a
+custom left `footerHint`; the right slot is composed inside
+`renderCompactDashboard` regardless of mode.
 
 ### Ledger (`goal-ledger.ts`, `goal-activity.ts`, `goal-compaction.ts`)
 
@@ -132,11 +138,15 @@ covers the modal-open case. `ctrl+shift+a` is unbound in pi's keymap
 chords (`escape`, `ctrl+shift+t`, `ctrl+shift+arrows`/`home`/`end`, debug
 `ctrl+shift+x`/`n`/…).
 
-## Width math (compact auditor line)
+## Width math (compact auditor footer)
 
-- `│ Auditor  on · Ctrl+Shift+A: off │` = 2 + 30 + 2 = 34 cols → fits even at
-  minimal (inner 38).
-- Minimal drops the hint: `│ Auditor  on │` = 16 cols.
+- Wide/medium (inner ≥ 68 at the 70 boundary): `l` = `─ ` + hint (25 chars)
+  = 28, `r` = ` ` + `Ctrl+Shift+A: toggle auditor ●` (30) + ` ─` = 33 →
+  fill = inner − 61 ≥ 7 → hint fits fully even at the narrowest medium.
+- Narrow/minimal: right slot is just ` ● ─` (4 cols); hint = `Ctrl+Shift+T:
+  expand` (18) → fill = inner − 24 always ≥ 1.
+- The dot + note always survive; only the left hint could truncate (it
+  never does at current lengths).
 - The compact layout's existing per-mode truncation rules apply; the line is
   pushed with `boxLine` and `fit()`-truncated only when it would overflow.
 
@@ -184,6 +194,8 @@ settings rows).
   → dialog defaults disabled; `false` → enabled; unset → global fallback),
   toggle (`skipAuditor` flips + persisted + `auditor_toggled` event +
   notification; no-goal/complete/modal guards).
-- Golden/unit: compact shows `Auditor  on/off` at 40/50/80/100+; expanded
+- Golden/unit: compact footer shows the dot (green on / muted off) at
+  40/50/80/100+; the `Ctrl+Shift+A: toggle auditor` note right-aligned
+  before the dot in wide/medium only; expanded
   goldens unchanged.
 - `npm test` (667 + new) and `npm run test:integration` (28) green.

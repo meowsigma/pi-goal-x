@@ -285,13 +285,19 @@ test("compact: the auditor indicator is a bottom-right border dot, green on / gr
 	const wide = renderCompactDashboard(model, theme, 100).join("\n");
 	assert.doesNotMatch(wide, /Auditor  on/, "no standalone auditor content line");
 	assert.doesNotMatch(wide, /│ Auditor/, "no Auditor label row");
-	assert.match(wide, /─ ● ─╯/, "dot sits at the bottom-right of the border");
-	// Wide/medium footers advertise the toggle; narrow/minimal keep the dot alone.
-	assert.match(wide, /· Ctrl\+Shift\+A/, "wide footer advertises Ctrl+Shift+A");
-	assert.match(renderCompactDashboard(model, theme, 80).join("\n"), /· Ctrl\+Shift\+A/, "medium footer advertises Ctrl+Shift+A");
+	assert.match(wide, /toggle auditor ● ─╯/, "dot + right-aligned note sit at the bottom-right border");
+	// Wide/medium right-align a note explaining that Ctrl+Shift+A turns the
+	// auditor on and off; it sits directly left of the dot at the right edge.
+	// Narrow/minimal keep just the dot.
+	assert.match(wide, /Ctrl\+Shift\+A: toggle auditor/, "wide footer carries the toggle note");
+	assert.match(wide, /Ctrl\+Shift\+A: toggle auditor ●/, "note sits directly left of the border dot");
+	assert.match(wide, /expand tasks─+ Ctrl\+Shift\+A: toggle auditor/, "note is right-aligned: only fill between hint and note");
+	assert.doesNotMatch(wide, /· Ctrl\+Shift\+A/, "chord is no longer glued to the left hint");
+	assert.match(renderCompactDashboard(model, theme, 80).join("\n"), /Ctrl\+Shift\+A: toggle auditor ●/, "medium footer carries the right-aligned note + dot");
 	for (const width of [60, 40]) {
 		const out = renderCompactDashboard(model, theme, width).join("\n");
-		assert.doesNotMatch(out, /Ctrl\+Shift\+A/, "narrow/minimal keep the dot without the hint");
+		assert.doesNotMatch(out, /Ctrl\+Shift\+A/, "narrow/minimal keep the dot without the note");
+		assert.doesNotMatch(out, /toggle auditor/, "no toggle note in narrow/minimal");
 		assert.match(out, /─ ● ─╯/, "the border dot survives every layout");
 	}
 

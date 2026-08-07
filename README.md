@@ -260,12 +260,14 @@ Always visible above the editor while a goal is focused:
 │ Current  t3 · Add the download button                              │
 │ Verify   Run npm test with zero failures.                          │
 │ File     .pi/goals/active_goal_...                                 │
-╰─ Ctrl+Shift+T: expand tasks · Ctrl+Shift+A ──────────────────── ● ─╯
+╰─ Ctrl+Shift+T: expand tasks─────── Ctrl+Shift+A: toggle auditor ● ─╯
 ```
 
 The green/gray `●` at the bottom-right of the border is the focused goal's
-independent-auditor status (green = on, gray = off); `Ctrl+Shift+A` toggles
-it per-goal (wide/medium footers advertise the chord).
+independent-auditor status (green = on, gray = off). Wide/medium footers
+right-align the `Ctrl+Shift+A: toggle auditor` note beside the dot — it
+shows the shortcut that turns the auditor on and off; narrow/minimal keep
+just the dot.
 
 ### Expanded mode
 

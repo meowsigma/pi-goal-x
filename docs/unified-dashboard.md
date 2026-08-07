@@ -32,7 +32,7 @@ Always visible above the editor while a goal is focused:
 │ Current  t3 · Add the download button                                                  │
 │ Verify   Run npm test with zero failures.                                              │
 │ File     .pi/goals/active_goal_g1.md                                                   │
-╰─ Ctrl+Shift+T: expand tasks · Ctrl+Shift+A ──────────────────────────────────────── ● ─╯
+╰─ Ctrl+Shift+T: expand tasks─────────────────────────── Ctrl+Shift+A: toggle auditor ● ─╯
 ```
 
 Compact rows, in order:
@@ -74,13 +74,14 @@ Compact rows, in order:
     split; the header line is likewise one tone with only the `pi-goal-x`
     brand in accent. The auditor status lives in the bottom-right of this
     border: a single `●` — green when the focused goal's independent auditor
-    is on, gray when off — drawn right before the `╯` corner, and the
-    wide/medium footers also append ` · Ctrl+Shift+A` to the hint (narrow and
-    minimal keep the dot alone). `Ctrl+Shift+A` toggles the auditor per-goal
-    (persisted, `auditor_toggled` ledger event, dashboard refresh,
-    notification; inert with no focused goal, a goal modal open, or a
-    complete goal). The expanded dashboard does not render the auditor
-    indicator.
+    is on, gray when off — drawn right before the `╯` corner. In wide/medium
+    layouts the footer also right-aligns a `Ctrl+Shift+A: toggle auditor`
+    note beside the dot, making explicit that the shortcut turns the auditor
+    on and off; narrow and minimal keep just the dot. `Ctrl+Shift+A` toggles
+    the auditor per-goal (persisted, `auditor_toggled` ledger event,
+    dashboard refresh, notification; inert with no focused goal, a goal modal
+    open, or a complete goal). The expanded dashboard does not render the
+    auditor indicator.
 
 When every top-level task is done, the current line reads
 `Current  All tasks complete`. With `disableTasks` enabled the task rows are

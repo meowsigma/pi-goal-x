@@ -145,3 +145,23 @@ content line was too loud. Final shipped design:
   guards are untouched. Golden test rewritten with a color-capturing theme
   (asserts `success ●` on / `muted ●` off); README, unified-dashboard doc,
   and CHANGELOG 0.25.3 entry describe the dot design.
+
+## Round 7 — post-release steer: right-aligned toggle note (v0.25.4)
+
+User feedback after v0.25.3 shipped: the ` · Ctrl+Shift+A` chord glued to
+the left hint was easy to miss and didn't say what it does. Final design:
+
+- The chord no longer appends to the left hint. The wide/medium footer
+  right-aligns a `Ctrl+Shift+A: toggle auditor` note (same frame tone as the
+  hint) directly left of the colored border dot — the `boxFooter` right slot
+  pushes both to the right edge by construction, so it is right-aligned in
+  every wide/medium width (≥70; the 28-char note fits with 7+ fill dashes
+  even at the narrowest medium).
+- The note states explicitly that the shortcut turns the auditor on and off.
+- Narrow/minimal keep just the dot. Toggle behavior, keybinding,
+  `auditor_toggled` ledger event, and inert guards unchanged; expanded
+  dashboard byte-identical (all other `boxFooter` callers pass no right).
+- PRODUCT.md/TECH.md updated to the dot design (Round 6 had only logged in
+  MILESTONES); golden test asserts note adjacency `…toggle auditor ● ─╯`,
+  right-alignment (`expand tasks─+ Ctrl+Shift+A`), and dot-only narrow.
+  Validation: `npm run check` clean, 690/690 unit, 28/28 integration.

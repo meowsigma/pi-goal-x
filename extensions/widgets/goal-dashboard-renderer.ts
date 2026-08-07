@@ -96,16 +96,20 @@ function boxSectionRule(theme: Theme, width: number, label: string, right = ""):
 	return `${frame(theme, "├")}${l}${frame(theme, H.repeat(fill))}${r}${frame(theme, "┤")}`;
 }
 
-function boxFooter(theme: Theme, width: number, content: string): string {
+function boxFooter(theme: Theme, width: number, content: string, right = ""): string {
 	const inner = Math.max(4, width - 2);
-	if (!content) {
+	// Optional right slot mirrors boxHeader's right-meta treatment (` ● ─`
+	// before the corner), so the auditor dot sits at the bottom-right of the
+	// border. The dot survives; the hint (left content) truncates when tight.
+	const r = right ? ` ${right} ${frame(theme, H)}` : "";
+	if (!content && !r) {
 		return frame(theme, `╰${H.repeat(inner)}╯`);
 	}
 	// The footer is one frame tone: leading dash, hint text and trailing fill
 	// all carry the frame color, so the blue-gray spans the whole line.
-	const l = frame(theme, `${H} ${fit(content, inner - 4)}`);
-	const fill = Math.max(1, inner - visibleWidth(l));
-	return `${frame(theme, "╰")}${l}${frame(theme, H.repeat(fill))}${frame(theme, "╯")}`;
+	const l = content ? frame(theme, `${H} ${fit(content, Math.max(0, inner - 4 - visibleWidth(r)))}`) : "";
+	const fill = Math.max(1, inner - visibleWidth(l) - visibleWidth(r));
+	return `${frame(theme, "╰")}${l}${frame(theme, H.repeat(fill))}${r}${frame(theme, "╯")}`;
 }
 
 // ── §5.2 status colors ──────────────────────────────────────────────────────
@@ -311,19 +315,9 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${theme.fg(fuel as RenderColor, "⛽")} ${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
 	}
 
-	// §auditor-toggle: the focused goal's independent-auditor status on a
-	// muted, width-safe line. The core `Auditor  on/off` label always
-	// survives; the Ctrl+Shift+A hint shrinks with the layout (full
-	// `: off`/`: on` target suffix in wide/medium, chord only in narrow,
-	// no hint at minimal) and fit() truncates rather than ever overflowing.
-	{
-		const state = model.auditorEnabled ? "on" : "off";
-		const hint =
-			mode === "minimal" ? ""
-			: mode === "narrow" ? " · Ctrl+Shift+A"
-			: ` · Ctrl+Shift+A: ${model.auditorEnabled ? "off" : "on"}`;
-		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Auditor")}  ${muted(theme, state)}${muted(theme, hint)}`));
-	}
+	// §auditor-toggle: the focused goal's independent-auditor status is the
+	// bottom-right border dot (green on / muted gray off, see the footer
+	// below); the Ctrl+Shift+A chord is advertised in wide/medium footers.
 
 	// §9.1 compact task counts + progress bars live in the Tasks header row
 	// (below); the standalone progress lines were removed in favor of it.
@@ -402,15 +396,21 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${dim(theme, `File     ${model.filePath}`)}`));
 	}
 
-	const footerHint = opts.footerHint
+	const footerHint = (opts.footerHint
 		?? (listOverflows
 			? mode === "minimal"
 				? "↑↓: scroll"
 				: mode === "narrow"
 					? "Ctrl+Shift+↑↓: scroll"
 					: "Ctrl+Shift+T: expand · Ctrl+Shift+↑↓: scroll"
-			: spec.footerHint);
-	lines.push(boxFooter(theme, safeWidth, footerHint));
+			: spec.footerHint))
+		// §auditor-toggle: wide/medium footers also advertise the Ctrl+Shift+A
+		// toggle; narrow/minimal keep only the border dot.
+		+ (mode === "wide" || mode === "medium" ? " · Ctrl+Shift+A" : "");
+	// The auditor dot lives in the bottom-right of the border: green when the
+	// focused goal's independent auditor is on, muted gray when off.
+	const auditorDot = model.auditorEnabled ? success(theme, "●") : muted(theme, "●");
+	lines.push(boxFooter(theme, safeWidth, footerHint, auditorDot));
 	return lines;
 }
 

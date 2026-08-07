@@ -251,7 +251,6 @@ Always visible above the editor while a goal is focused:
 ```text
 ╭─ pi-goal-x ─ Add CSV export to reports ────────────────────────────╮
 │ goal: running [12m47s 18.2K] (+2 open)                             │
-│ Auditor  on · Ctrl+Shift+A: off                                     │
 ├─ Tasks · ✓3 done · 2 open ──────────── [█████░░░] · Sub 2/3 [██░░] ┤
 │ ✓ t1  Review reports page and data source                          │
 │ ✓ t2  Implement filtered CSV export                                │
@@ -261,8 +260,12 @@ Always visible above the editor while a goal is focused:
 │ Current  t3 · Add the download button                              │
 │ Verify   Run npm test with zero failures.                          │
 │ File     .pi/goals/active_goal_...                                 │
-╰─ Ctrl+Shift+T: expand tasks ───────────────────────────────────────╯
+╰─ Ctrl+Shift+T: expand tasks · Ctrl+Shift+A ──────────────────── ● ─╯
 ```
+
+The green/gray `●` at the bottom-right of the border is the focused goal's
+independent-auditor status (green = on, gray = off); `Ctrl+Shift+A` toggles
+it per-goal (wide/medium footers advertise the chord).
 
 ### Expanded mode
 

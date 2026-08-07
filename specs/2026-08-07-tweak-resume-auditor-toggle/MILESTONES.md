@@ -125,3 +125,23 @@ Implementation log. Round numbers match the goal task list.
 _Planned._ README.md + docs/unified-dashboard.md compact examples refreshed,
 CHANGELOG entry under [Unreleased], `npm run check` clean, `npm test` +
 `npm run test:integration` green, grep confirms no stale references.
+
+## Round 6 — user rework: auditor indicator → bottom-right border dot (v0.25.3)
+
+User steered mid-release: the standalone `Auditor  on · Ctrl+Shift+A: off`
+content line was too loud. Final shipped design:
+
+- The content line is removed entirely. The auditor status is now a single
+  dot integrated into the bottom-right of the compact box border — `●`
+  green (`success`) when the focused goal's independent auditor is on,
+  muted gray when off — drawn right before the `╯` corner.
+- `boxFooter` gains a right-corner slot (mirrors `boxHeader`'s right-meta
+  treatment: ` ● ─` before the corner); the dot always survives, the hint
+  truncates. All other `boxFooter` callers (expanded, audit, focus-required)
+  are unchanged → expanded dashboard stays byte-identical.
+- The ` · Ctrl+Shift+A` chord hint is appended to the footer hint in
+  wide/medium layouts only; narrow/minimal keep the dot alone.
+- Toggle semantics, `auditor_toggled` ledger event, persistence, and inert
+  guards are untouched. Golden test rewritten with a color-capturing theme
+  (asserts `success ●` on / `muted ●` off); README, unified-dashboard doc,
+  and CHANGELOG 0.25.3 entry describe the dot design.

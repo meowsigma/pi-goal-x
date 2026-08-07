@@ -23,7 +23,6 @@ Always visible above the editor while a goal is focused:
 ```text
 ╭─ pi-goal-x ─ Add CSV export to reports ────────────────────────────────────────────────╮
 │ goal: running [12m47s 18.2K] (+2 open)                                                 │
-│ Auditor  on · Ctrl+Shift+A: off                                                         │
 ├─ Tasks · ✓3 done · 2 open ─────────────────────────────────── [████░░] · Sub 2/3 [██░] ┤
 │ ✓ t1  Review reports page and data source                                              │
 │ ✓ t2  Implement filtered CSV export                                                    │
@@ -33,7 +32,7 @@ Always visible above the editor while a goal is focused:
 │ Current  t3 · Add the download button                                                  │
 │ Verify   Run npm test with zero failures.                                              │
 │ File     .pi/goals/active_goal_g1.md                                                   │
-╰─ Ctrl+Shift+T: expand tasks ───────────────────────────────────────────────────────────╯
+╰─ Ctrl+Shift+T: expand tasks · Ctrl+Shift+A ──────────────────────────────────────── ● ─╯
 ```
 
 Compact rows, in order:
@@ -43,16 +42,7 @@ Compact rows, in order:
 2. Status: `goal: <status> [<elapsed> <tokens>] (+N open)` — the same
    terminology as the pi footer status line.
 3. Token budget (when configured): `⛽ Budget 18.2K / 50K · 36%`.
-4. Auditor status: `Auditor  on · Ctrl+Shift+A: off` (muted; `Auditor  off
-   · Ctrl+Shift+A: on` when the per-goal auditor is disabled). The hint
-   shrinks with the layout — wide/medium keep the target suffix (`: off` /
-   `: on`), narrow (50–69) keeps the chord only (`· Ctrl+Shift+A`), and
-   minimal (<50) drops the hint entirely — so the core `Auditor  on/off`
-   label always fits. `Ctrl+Shift+A` toggles the focused goal's auditor
-   (persisted per-goal, `auditor_toggled` ledger event, dashboard refresh,
-   notification; inert with no focused goal, a goal modal open, or a
-   complete goal). The expanded dashboard does not render this line.
-5. Tasks header row: `Tasks · ✓N done · M open` with the compact task
+4. Tasks header row: `Tasks · ✓N done · M open` with the compact task
    progress bar, then the current task's subtask bar beside it
    (` · Sub done/total ` + bar — the word `Sub` is dropped in narrow mode so
    the full counts still fit at 50 columns, and the segment is omitted
@@ -73,16 +63,24 @@ Compact rows, in order:
    whole box chrome — top/bottom frame, left/right edges, corners and
    interior rules — is drawn in one tone: the theme's neutral gray
    (`muted`). No blue tinge.
-7. Current task: `Current  t3 · Add the download button` (id and title in the
+6. Current task: `Current  t3 · Add the download button` (id and title in the
    accent color).
-8. Goal-level verification contract (first line, truncated).
-9. Blocked or paused detail (reason, suggested action).
-10. Active (or archived) goal file path.
-11. Footer with the expansion shortcut. The whole footer line — leading dash,
+7. Goal-level verification contract (first line, truncated).
+8. Blocked or paused detail (reason, suggested action).
+9. Active (or archived) goal file path.
+10. Footer with the expansion shortcut. The whole footer line — leading dash,
     shortcut hint and trailing fill — is drawn in one frame tone (the
     neutral-gray `muted`), so the color spans the full width with no two-tone
     split; the header line is likewise one tone with only the `pi-goal-x`
-    brand in accent.
+    brand in accent. The auditor status lives in the bottom-right of this
+    border: a single `●` — green when the focused goal's independent auditor
+    is on, gray when off — drawn right before the `╯` corner, and the
+    wide/medium footers also append ` · Ctrl+Shift+A` to the hint (narrow and
+    minimal keep the dot alone). `Ctrl+Shift+A` toggles the auditor per-goal
+    (persisted, `auditor_toggled` ledger event, dashboard refresh,
+    notification; inert with no focused goal, a goal modal open, or a
+    complete goal). The expanded dashboard does not render the auditor
+    indicator.
 
 When every top-level task is done, the current line reads
 `Current  All tasks complete`. With `disableTasks` enabled the task rows are

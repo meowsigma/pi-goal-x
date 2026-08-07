@@ -26,8 +26,14 @@
   "files": [
     "extensions",
     "README.md",
-    "docs",
-    "LICENSE"
+    "LICENSE",
+    "docs/agent-flow-design.md",
+    "docs/agentic-runtime-prd.md",
+    "docs/architecture.md",
+    "docs/goal-ts-refactor-test-strategy.md",
+    "docs/pi-autoresearch-survey.md",
+    "docs/pi-goal-x-unified-dashboard-plan.md",
+    "docs/unified-dashboard.md"
   ],
   "pi": {
     "extensions": [

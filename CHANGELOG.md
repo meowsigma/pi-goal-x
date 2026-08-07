@@ -10,6 +10,8 @@ with the `0.x` prefix indicating pre-1.0 development.
 
 ## [Unreleased]
 
+## [0.25.2] — 2026-08-07
+
 ### Changed
 
 - Goal widget: the compact and expanded dashboard status lines now show

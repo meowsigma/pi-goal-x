@@ -238,6 +238,83 @@ test("regression: the proposal emits the complete goal presentation to the trans
 	}
 });
 
+test("renderCall for a tweak without explicit tasks shows the retained current list, never a derived phantom", async () => {
+	// §single-task-set regression: the scrollback presentation derived tasks
+	// from the objective without knowing the draft mode, so a tweak without an
+	// explicit task list showed a phantom "derived from the objective" set
+	// that is never persisted (the apply retains the current list). The
+	// presentation must mirror the dialog preview: the retained current list.
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-tweak-render-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal")!.handler("Initial objective", h.ctx);
+		const pending = runProposal(h, proposalParams("Initial objective.", {
+			tasks: [{ id: "keep-1", title: "Retained task" }, { id: "keep-2", title: "Another task" }],
+		}));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+
+		await h.commands.get("goal-tweak")!.handler("Tighten wording", h.ctx);
+		const proposal = h.tools.get("propose_goal_draft");
+		assert.ok(proposal, "propose_goal_draft registered during a tweak draft");
+		const theme = createMockTheme();
+		// A tweak proposal WITHOUT explicit tasks: the retained list is the one
+		// task set that will be persisted.
+		const component = proposal.renderCall(proposalParams("Tightened objective", { tasks: undefined }), theme, {});
+		const rendered = (component as { render(w: number): string[] }).render(120).join("\n");
+		assert.ok(rendered.includes("Current task list (retained unchanged):"), "retained list header shown in the scrollback presentation");
+		assert.ok(rendered.includes("[ ] keep-1: Retained task"), "retained task line shown");
+		assert.ok(rendered.includes("[ ] keep-2: Another task"), "second retained task line shown");
+		assert.ok(!rendered.includes("Tasks derived from the objective"), "no derived phantom for a tweak");
+		assert.ok(!rendered.includes("Tasks proposed for confirmation:"), "no explicit-tasks label without an explicit list");
+
+		// The dialog preview agrees with the presentation (one task set).
+		const pending2 = runProposal(h, proposalParams("Tightened objective"));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending2;
+		const goal = firstGoal(cwd);
+		assert.deepEqual(goal.taskList?.tasks.map((t) => t.id), ["keep-1", "keep-2"], "retained list persisted unchanged");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+test("renderCall for a new draft derives from the same objective text the apply path persists (shown == persisted)", async () => {
+	// §single-task-set regression: the derived preview must equal the persisted
+	// task list. The apply path derives from the extracted objective (the
+	// Verification contract line removed); the presentation must derive from
+	// the same input so the shown set is the persisted set.
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-derived-equal- "));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal")!.handler("Ship the release", h.ctx);
+		const objective = "Ship the release.\n1) Implement core\n2) Add tests\n3) Write docs\nVerification contract: npm test (0 failures).";
+		const pending = runProposal(h, proposalParams(objective));
+		const proposal = h.tools.get("propose_goal_draft");
+		const theme = createMockTheme();
+		const component = proposal.renderCall(proposalParams(objective), theme, {});
+		const presented = (component as { render(w: number): string[] }).render(120).join("\n");
+		assert.ok(presented.includes("Tasks derived from the objective"), "derived preview shown for a structured new draft");
+
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
+		await pending;
+		const goal = firstGoal(cwd);
+		assert.ok(goal.verificationContract?.includes("npm test"), "verification contract persisted");
+		const persistedIds = goal.taskList?.tasks.map((t) => t.id) ?? [];
+		for (const id of ["step-1", "step-2", "step-3"]) {
+			assert.ok(persistedIds.includes(id), `persisted derived task ${id}`);
+			assert.ok(presented.includes(`[ ] ${id}: `), `presented derived task ${id} matches persisted`);
+		}
+		assert.equal(persistedIds.length, 3, "no phantom task from the contract line");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
 test("continue refining keeps the draft alive and a second proposal confirms", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-refine-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });

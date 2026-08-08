@@ -186,23 +186,29 @@ function renderProposalDialog(args: { rows: number; baseFrameLines: number }, wi
 	return (component as { render(w: number): string[] }).render(width);
 }
 
-test("regression: the goal confirmation dialog presents the tasks (rows=24, baseFrame=19)", () => {
+test("regression: the goal confirmation dialog presents the tasks and the auditor toggle (rows=24, baseFrame=19)", () => {
 	// Reported repro: the goal draft was not presenting tasks. The proposal
 	// confirmation dialog renders the full draft (objective box + "Tasks
 	// proposed for confirmation:" + task lines) as context; the churn guard
 	// bounds the dialog to 10 lines and the tail-keep slice dropped the entire
 	// tasks section — the user was asked to confirm without ever seeing the plan.
+	// The auditor toggle line must stay in frame too: it is the only in-dialog
+	// status feedback for the auditor on/off state (the proposal text line is
+	// not interactive). Task lines beyond the bound remain in the scrollback
+	// presentation.
 	const lines = renderProposalDialog({ rows: 24, baseFrameLines: 19 });
 	assert.ok(lines.length <= 10, "dialog stays within the terminal-height bound");
 	assert.match(lines[0], /^─+$/, "top border must be visible");
 	assert.ok(lines.some((l) => l.includes("Confirm Goal Draft")), "question must be visible");
 	assert.ok(lines.some((l) => l.includes("Tasks proposed for confirmation:")), "tasks header must be visible");
-	for (const task of PROPOSAL_TASKS) {
-		assert.ok(
-			lines.some((l) => l.includes(`[ ] ${task.id}: ${task.title}`)),
-			`task line must be visible: ${task.id}`,
-		);
-	}
+	assert.ok(
+		lines.some((l) => l.includes("[ ] task-1: Add the failing render-level regression test")),
+		"at least one task line must be visible",
+	);
+	assert.ok(
+		lines.some((l) => l.includes("press 'a' to toggle")),
+		"the auditor toggle line must be visible in the bounded dialog",
+	);
 	assert.ok(lines.some((l) => l.includes("Confirm — create this goal now")), "confirm option must be visible");
 	assert.ok(lines.some((l) => l.includes("Enter select")), "footer hint must be visible");
 	assert.match(lines[lines.length - 1], /^─+$/, "bottom border must be visible");
@@ -352,4 +358,152 @@ test("proposal confirmation helpers keep headless and cancel semantics stable", 
 	assert.equal(proposalDecisionFromQuestionnaireResult({ cancelled: false, answer: "Cancel — discard this draft" }), "cancel");
 	assert.match(proposalDialogFailureMessage(new Error("boom")), /NOT created/);
 	assert.match(proposalDialogFailureMessage(new Error("boom")), /drafting remains active/);
+});
+
+// ── Auditor-restore regressions (specs/2026-08-08-tweak-status-persistence) ─
+// The real TUI renders every dialog line with ANSI SGR sequences (theme.fg);
+// the mock theme emits none, so regressions in ANSI-aware scanning only show
+// up with styled lines.
+
+const ANSI_STYLE = (s: string) => `\x1b[32m${s}\x1b[0m`;
+
+/** Open the proposal confirmation dialog against an ANSI-emitting theme. */
+function openProposalDialogComponent(args: { rows: number; baseFrameLines: number }, width = 100) {
+	const ctx = createMockExtensionContext();
+	void runGoalQuestionnaire(ctx, [{
+		id: "confirm",
+		question: "Confirm Goal Draft",
+		context: buildProposalConfirmationContext(PROPOSAL_TASKS, true),
+		options: PROPOSAL_CONFIRM_OPTIONS,
+		recommended: 0,
+		allowCustom: false,
+	}], { defaultEnabled: true });
+	const record = ctx._customCalls[0];
+	assert.ok(record, "goal confirmation opens a custom dialog");
+	const { tui } = createMockTUI();
+	const augmented = Object.assign(tui, {
+		terminal: { rows: args.rows },
+		previousLines: Array.from({ length: args.baseFrameLines }, () => "x"),
+	});
+	const ansiTheme = {
+		fg: (_c: string, v: string) => ANSI_STYLE(v),
+		bold: (v: string) => v,
+		bg: () => "",
+		dim: (v: string) => v,
+	} as unknown as ReturnType<typeof createMockTheme>;
+	return record.factory(augmented, ansiTheme, {}, () => {}) as unknown as {
+		render(w: number): string[];
+		handleInput(data: string): void;
+	};
+}
+
+test("findProposalPresentationSegments is ANSI-aware: styled task lines extend the tasks section", () => {
+	// Reported repro: the tasksEnd scan ran the plain-text regex against
+	// ANSI-styled lines, broke on the first task line, and collapsed the tasks
+	// section to its header — every task line was sliced out of the bounded
+	// dialog. Styled lines must extend the section, and tailStart must pull
+	// back to the auditor toggle line so the fit keeps it.
+	const lines = [
+		ANSI_STYLE("─"),
+		ANSI_STYLE(" Confirm Goal Draft"),
+		ANSI_STYLE("● Goal draft ready for confirmation."),
+		ANSI_STYLE(" Objective: Fix the dialog."),
+		"",
+		ANSI_STYLE("Tasks proposed for confirmation:"),
+		ANSI_STYLE("[ ]") + " task-1: First",
+		ANSI_STYLE("[ ]") + " task-2: Second",
+		"",
+		ANSI_STYLE(" ● Auditor enabled") + ANSI_STYLE("  (press 'a' to toggle)"),
+		"",
+		ANSI_STYLE(" 1. Confirm — create this goal now"),
+		ANSI_STYLE(" 2. Continue chatting — keep refining"),
+		ANSI_STYLE(" 3. Cancel — discard this draft"),
+		"",
+		ANSI_STYLE(" ↑↓ navigate • Enter select • Esc cancel"),
+		ANSI_STYLE("─"),
+	];
+	const segs = findProposalPresentationSegments(lines, 12);
+	assert.ok(segs, "proposal segments found");
+	assert.equal(segs.tasksStart, 5, "tasks header located");
+	assert.equal(segs.tasksEnd, 7, "styled task lines extend the tasks section");
+	assert.equal(segs.tailStart, 9, "tail pulled back to the auditor toggle line");
+});
+
+test("findProposalPresentationSegments keeps the box-drawn TASKS section of a tweak confirmation complete", () => {
+	// buildTweakConfirmationText renders explicit tasks inside a ┌─ TASKS ─┐
+	// box; the section must include the header, every styled task line, and the
+	// box bottom border so the bounded dialog never shows an empty box.
+	const lines = [
+		ANSI_STYLE("─"),
+		ANSI_STYLE(" Confirm Goal Draft"),
+		ANSI_STYLE("● Goal tweak ready for confirmation."),
+		"",
+		ANSI_STYLE("┌─ TASKS ─────────────────────────────────────┐"),
+		ANSI_STYLE("[ ]") + " audit: Audit the tweak path",
+		ANSI_STYLE("[ ]") + " fix: Fix it",
+		ANSI_STYLE("└──────────────────────────────────────────────┘"),
+		"",
+		ANSI_STYLE(" ● Auditor enabled") + ANSI_STYLE("  (press 'a' to toggle)"),
+		"",
+		ANSI_STYLE(" 1. Confirm — create this goal now"),
+		ANSI_STYLE("─"),
+	];
+	const segs = findProposalPresentationSegments(lines, 10);
+	assert.ok(segs, "proposal segments found");
+	assert.equal(segs.tasksStart, 4, "box header located");
+	assert.equal(segs.tasksEnd, 7, "task lines AND the box bottom border are kept");
+	assert.equal(segs.tailStart, 9, "tail pulled back to the auditor toggle line");
+});
+
+test("fitDialogLines proposal mode: the auditor toggle line is never sacrificed at tight budgets", () => {
+	// Budget 10 with 2 task lines: head + tasks header + one task line + the
+	// auditor toggle line + options/footer/border — the auditor line must
+	// survive and a task line gives way (it stays in the scrollback
+	// presentation).
+	const lines = [
+		"─",
+		" Confirm Goal Draft",
+		"Tasks proposed for confirmation:",
+		"[ ] task-1: First",
+		"[ ] task-2: Second",
+		"",
+		" ● Auditor enabled  (press 'a' to toggle)",
+		"",
+		" 1. Confirm — create this goal now",
+		" 2. Continue chatting — keep refining",
+		" 3. Cancel — discard this draft",
+		"",
+		" ↑↓ navigate • Enter select • Esc cancel",
+		"─",
+	];
+	const segs = findProposalPresentationSegments(lines, 8);
+	assert.ok(segs, "proposal segments found");
+	const fitted = fitDialogLines(lines, 10, 2, false, segs);
+	assert.ok(fitted.length <= 10, "never exceeds the bound");
+	assert.ok(fitted.some((l) => l.includes("press 'a' to toggle")), "auditor toggle line stays in frame");
+	assert.ok(fitted.some((l) => l.includes("[ ] task-1: First")), "at least one task line stays in frame");
+	assert.ok(fitted.some((l) => l.includes("Confirm — create this goal now")), "options stay in frame");
+	assert.match(fitted[fitted.length - 1], /^─+$/, "bottom border stays");
+});
+
+test("regression: the bounded proposal dialog keeps task lines and the auditor toggle with real-TUI ANSI styling", () => {
+	// Reported repro (rows=24, baseFrame=19): with real ANSI-styled lines the
+	// segment scan broke and the 10-line dialog showed the tasks header with
+	// zero task lines and no auditor status. Both must be visible under ANSI
+	// styling within the bound.
+	const component = openProposalDialogComponent({ rows: 24, baseFrameLines: 19 });
+	const plain = component.render(100).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+	assert.ok(plain.length <= 10, "dialog stays within the bound");
+	assert.ok(plain.some((l) => l.includes("[ ] task-1:")), "a task line is visible under ANSI styling");
+	assert.ok(plain.some((l) => l.includes("press 'a' to toggle")), "auditor toggle line is visible under ANSI styling");
+});
+
+test("pressing 'a' toggles the auditor status with visible feedback in the bounded proposal dialog", () => {
+	const component = openProposalDialogComponent({ rows: 24, baseFrameLines: 19 });
+	const before = component.render(100).join("\n");
+	assert.ok(before.includes("● Auditor enabled"), "defaults to enabled");
+	component.handleInput!("a");
+	const after = component.render(100).join("\n");
+	assert.ok(after.includes("○ Auditor disabled"), "toggle feedback is visible after 'a'");
+	assert.ok(!after.includes("● Auditor enabled"), "status flipped off");
 });

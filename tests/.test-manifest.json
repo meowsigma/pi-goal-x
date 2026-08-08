@@ -44,6 +44,7 @@
     ".tests/goal-tool-names.test.ts",
     ".tests/goal-tool-visibility.test.ts",
     ".tests/goal-turn-transaction.test.ts",
+    ".tests/goal-tweak-status-persistence.test.ts",
     ".tests/goal-unfocus.test.ts",
     ".tests/goal-update-objective.test.ts",
     ".tests/goal-widget.test.ts",

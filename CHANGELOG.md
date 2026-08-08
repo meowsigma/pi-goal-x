@@ -2,6 +2,26 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **Proposal confirmation dialog restores the auditor toggle on bounded
+  terminals**: the terminal-height churn guard sliced the interactive auditor
+  status line ("●/○ Auditor enabled/disabled (press 'a' to toggle)") out of
+  the confirmation frame, so the auditor on/off state could no longer be seen
+  or changed at goal-propose time. `findProposalPresentationSegments` is now
+  ANSI-aware (the plain-text task scan broke on styled lines and collapsed the
+  tasks section to its header — rendering an empty `┌─ TASKS ─┐` box), keeps
+  box-drawn task sections complete, and pulls the protected tail back to the
+  auditor line so the toggle stays in frame within the height bound.
+- **One task set per proposal**: the `propose_goal_draft` scrollback
+  presentation now shows exactly the task set that will be persisted — a tweak
+  without an explicit list shows the retained current list (previously a
+  derived-from-objective phantom that was never applied), and the derived
+  fallback for new drafts derives from the same objective text the apply path
+  persists (Verification contract line stripped), so shown == persisted.
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the `0.x` prefix indicating pre-1.0 development.

@@ -54,10 +54,27 @@ export interface ProposalPresentationSegments {
 	tailStart: number;
 }
 
+/** Strip ANSI SGR sequences so structural scans see the plain text. */
+function stripAnsiCodes(value: string): string {
+	return value.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 /**
  * Locate the proposal tasks segment and the options tail in a rendered dialog.
  * Returns null when the dialog is not a proposal-style confirmation (no
  * "Tasks proposed for confirmation:" header / "┌─ TASKS ─" box).
+ *
+ * The scan is ANSI-aware: every rendered line carries `theme.fg(...)` escape
+ * sequences in the real TUI (the mock theme does not), so plain-text regexes
+ * must be run against the stripped line or the tasks section collapses to its
+ * header and every styled task line is sliced out of the bounded frame. The
+ * box-drawn bottom border (`└───┘`) after the last task line is kept so the
+ * `┌─ TASKS ─┐` box renders complete.
+ *
+ * The interactive auditor toggle line ("press 'a' to toggle") renders between
+ * the context and the options; `tailStart` is pulled back to it so the bounded
+ * fit always keeps the auditor status visible (its status text is the only
+ * visible toggle feedback in the dialog).
  */
 export function findProposalPresentationSegments(lines: string[], tailStart: number): ProposalPresentationSegments | null {
 	if (tailStart < 0) return null;
@@ -65,10 +82,25 @@ export function findProposalPresentationSegments(lines: string[], tailStart: num
 	if (tasksStart < 0 || tasksStart >= tailStart) return null;
 	let tasksEnd = tasksStart;
 	for (let i = tasksStart + 1; i < tailStart; i++) {
-		if (/^\s*\[[ x~]\]/.test(lines[i])) tasksEnd = i;
-		else break;
+		const plain = stripAnsiCodes(lines[i]);
+		if (/^\s*\[[ x~]\]/.test(plain)) {
+			tasksEnd = i;
+			continue;
+		}
+		// Box-drawn TASKS section bottom border after the last task line.
+		if (tasksEnd > tasksStart && /^[└┐┤┘─]/.test(plain.trim())) tasksEnd = i;
+		break;
 	}
-	return { tasksStart, tasksEnd, tailStart };
+	// Protect the auditor toggle line: it renders between context and options,
+	// so pull the tail start back to it when present.
+	let effectiveTail = tailStart;
+	for (let i = tailStart - 1; i > tasksEnd; i--) {
+		if (lines[i].includes("press 'a' to toggle")) {
+			effectiveTail = i;
+			break;
+		}
+	}
+	return { tasksStart, tasksEnd, tailStart: effectiveTail };
 }
 
 /**
@@ -127,12 +159,13 @@ export function fitDialogLines(
 }
 
 /**
- * Proposal confirmation fit: keep the protected head, the tasks section, and
- * the options/footer/bottom border; the objective-box middle is sacrificed
- * in-frame (it stays fully readable in the scrollback presentation). Interior
- * blank spacing lines are dropped first when room is short; task lines are
- * only dropped after that, from the end, when the bound is exhausted (those
- * lines remain in the scrollback presentation). Never exceeds maxDialogLines.
+ * Proposal confirmation fit: keep the protected head, the tasks section, the
+ * interactive auditor toggle line (when present), and the options/footer/
+ * bottom border; the objective-box middle is sacrificed in-frame (it stays
+ * fully readable in the scrollback presentation). Interior blank spacing lines
+ * are dropped first when room is short; task lines are only dropped after
+ * that, from the end, when the bound is exhausted (those lines remain in the
+ * scrollback presentation). Never exceeds maxDialogLines.
  */
 function fitProposalPresentation(
 	lines: string[],
@@ -150,15 +183,18 @@ function fitProposalPresentation(
 	// the options and the footer hint) before touching any content line.
 	const stripped = candidate.filter((l, i) => i < keepHead || l.trim() !== "");
 	if (stripped.length <= maxDialogLines) return stripped;
-	// Bound still exhausted: keep the head, then spend the room on the tail
-	// first (options/footer/bottom border — the actionable decision surface —
-	// kept from its end so the border and footer never drop), then on the
-	// tasks from the start. The dropped task lines remain fully readable in
+	// Bound still exhausted: keep the head, then the auditor toggle line (the
+	// actionable status control — its feedback must stay visible), then spend
+	// the room on the tail (options/footer/bottom border — the decision
+	// surface — kept from its end so the border and footer never drop), then on
+	// the tasks from the start. The dropped task lines remain fully readable in
 	// the scrollback presentation. Never exceeds maxDialogLines.
 	const tailNoBlanks = tail.filter((l) => l.trim() !== "");
-	const keepTail = Math.min(tailNoBlanks.length, Math.max(0, maxDialogLines - keepHead));
-	const tailKept = tailNoBlanks.slice(tailNoBlanks.length - keepTail);
-	const keepTasks = Math.min(tasks.length, Math.max(0, maxDialogLines - keepHead - keepTail));
+	const hasAuditor = tail.length > 0 && tail[0].includes("press 'a' to toggle");
+	const restTail = hasAuditor ? tailNoBlanks.slice(1) : tailNoBlanks;
+	const keepRest = Math.min(restTail.length, Math.max(0, maxDialogLines - keepHead - (hasAuditor ? 1 : 0)));
+	const tailKept = [...(hasAuditor ? [tail[0]] : []), ...restTail.slice(restTail.length - keepRest)];
+	const keepTasks = Math.min(tasks.length, Math.max(0, maxDialogLines - keepHead - tailKept.length));
 	return [...head, ...tasks.slice(0, keepTasks), ...tailKept];
 }
 

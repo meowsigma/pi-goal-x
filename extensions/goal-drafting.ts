@@ -211,7 +211,10 @@ export function proposalText(draft: ActiveGoalDraft, objective: string, autoCont
 	} else if (taskList && taskList.tasks.length > 0) {
 		tasksText = "\n\nTasks proposed for confirmation:\n" + renderConfirmationTasks(taskList.tasks, 0).join("\n");
 	} else {
-		const derived = deriveTasksFromObjective(objective);
+		// §single-task-set: the derived preview must derive from the SAME
+		// objective text the apply path persists (extracted — the Verification
+		// contract line removed), so shown == persisted.
+		const derived = deriveTasksFromObjective(extractVerificationContract(objective).objective);
 		if (derived && derived.length > 0) {
 			tasksText = "\n\nTasks derived from the objective (confirm or ask the agent to adjust):\n" + renderConfirmationTasks(derived, 0).join("\n");
 		}
@@ -465,12 +468,26 @@ export function registerDraftingTools(core: GoalCore): void {
 			const objective = String(args?.objective ?? "");
 			let text = theme.fg("toolTitle", "propose_goal_draft ") + theme.fg("muted", objective);
 			const flatTasks = Array.isArray(args?.tasks) ? (args.tasks as FlatTaskInput[]) : [];
-			const derived = flatTasks.length === 0 ? (deriveTasksFromObjective(objective) ?? []) : [];
-			const taskBlock = flatTasks.length > 0
-				? { header: "Tasks proposed for confirmation:", lines: flatTasks.map((t) => `[ ] ${t.id}: ${t.title}`) }
-				: derived.length > 0
-					? { header: "Tasks derived from the objective (confirm or ask the agent to adjust):", lines: renderConfirmationTasks(derived, 0) }
-					: null;
+			// §single-task-set: a proposal shows exactly ONE task set — the set
+			// that will actually be persisted. Explicit tasks are that set; a
+			// tweak without explicit tasks retains the current list (mirror
+			// proposalText — never a derived-from-objective phantom); a new
+			// draft without explicit tasks shows the F2-derived preview derived
+			// from the SAME objective text the apply path persists (extracted).
+			let taskBlock: { header: string; lines: string[] } | null = null;
+			if (flatTasks.length > 0) {
+				taskBlock = { header: "Tasks proposed for confirmation:", lines: flatTasks.map((t) => `[ ] ${t.id}: ${t.title}`) };
+			} else if (activeDraft(core)?.mode === "tweak") {
+				const retained = core.state.goal?.taskList?.tasks;
+				if (retained && retained.length > 0) {
+					taskBlock = { header: "Current task list (retained unchanged):", lines: renderConfirmationTasks(retained, 0) };
+				}
+			} else {
+				const derived = deriveTasksFromObjective(extractVerificationContract(objective).objective) ?? [];
+				if (derived.length > 0) {
+					taskBlock = { header: "Tasks derived from the objective (confirm or ask the agent to adjust):", lines: renderConfirmationTasks(derived, 0) };
+				}
+			}
 			if (taskBlock) {
 				text += "\n\n" + theme.fg("toolTitle", theme.bold(taskBlock.header)) + "\n" + theme.fg("toolOutput", taskBlock.lines.join("\n"));
 			}

@@ -93,15 +93,33 @@ interface PoolSnapshot {
 }
 
 const POOL_SNAPSHOT_NAME = ".goals-pool-snapshot.json";
+/** Legacy location: inside the goals dir (its own write perturbed the dir mtime it used as its validity key — reliability campaign 2026-08-09). */
+const POOL_SNAPSHOT_LEGACY_NAME = ".goals-pool-snapshot.json";
 
 function poolSnapshotPath(root: string): string {
-	return path.join(root, POOL_SNAPSHOT_NAME);
+	// OUTSIDE the watched goals dir: the snapshot records the goals-dir mtime
+	// as its freshness key, so writing it must not touch that directory (a
+	// temp-write + rename inside it changed the mtime and silently broke the
+	// claimed 2-op cold path — measured 3 ops; see reliability spec phase 3c).
+	return path.join(path.dirname(root), POOL_SNAPSHOT_NAME);
+}
+
+function poolSnapshotLegacyPath(root: string): string {
+	return path.join(root, POOL_SNAPSHOT_LEGACY_NAME);
 }
 
 /** Read + validate the snapshot; null when missing/corrupt/unsupported. */
 function readPoolSnapshotSync(root: string): PoolSnapshot | null {
+	const parsed = tryParsePoolSnapshotSync(poolSnapshotPath(root));
+	if (parsed) return parsed;
+	// One-time migration fallback: a snapshot written before 2026-08-09 lives
+	// inside the goals dir; keep serving it until the next write replaces it.
+	return tryParsePoolSnapshotSync(poolSnapshotLegacyPath(root));
+}
+
+function tryParsePoolSnapshotSync(filePath: string): PoolSnapshot | null {
 	try {
-		const data = JSON.parse(fs.readFileSync(poolSnapshotPath(root), "utf8")) as Partial<PoolSnapshot>;
+		const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<PoolSnapshot>;
 		if (data.version === 1 && Array.isArray(data.goals) && typeof data.dirMtimeMs === "number") {
 			return data as PoolSnapshot;
 		}
@@ -112,8 +130,14 @@ function readPoolSnapshotSync(root: string): PoolSnapshot | null {
 }
 
 async function readPoolSnapshotAsync(root: string): Promise<PoolSnapshot | null> {
+	const parsed = await tryParsePoolSnapshotAsync(poolSnapshotPath(root));
+	if (parsed) return parsed;
+	return tryParsePoolSnapshotAsync(poolSnapshotLegacyPath(root));
+}
+
+async function tryParsePoolSnapshotAsync(filePath: string): Promise<PoolSnapshot | null> {
 	try {
-		const data = JSON.parse(await fs.promises.readFile(poolSnapshotPath(root), "utf8")) as Partial<PoolSnapshot>;
+		const data = JSON.parse(await fs.promises.readFile(filePath, "utf8")) as Partial<PoolSnapshot>;
 		if (data.version === 1 && Array.isArray(data.goals) && typeof data.dirMtimeMs === "number") {
 			return data as PoolSnapshot;
 		}
@@ -141,6 +165,7 @@ function writePoolSnapshotSync(ctx: GoalFileContext, root: string, goals: GoalRe
 		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 		fs.writeFileSync(tempPath, JSON.stringify(snapshot), "utf8");
 		fs.renameSync(tempPath, target);
+		removeLegacyPoolSnapshot(root);
 	} catch {
 		// best-effort: a missing/stale snapshot just costs a full scan next cold read
 	}
@@ -154,6 +179,7 @@ async function writePoolSnapshotAsync(ctx: GoalFileContext, root: string, goals:
 		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 		await fs.promises.writeFile(tempPath, JSON.stringify(snapshot), "utf8");
 		await fs.promises.rename(tempPath, target);
+		removeLegacyPoolSnapshot(root);
 	} catch {
 		// best-effort
 	}
@@ -171,8 +197,18 @@ function updatePoolSnapshotSync(ctx: GoalFileContext, root: string, mutate: (goa
 		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 		fs.writeFileSync(tempPath, JSON.stringify(snapshot), "utf8");
 		fs.renameSync(tempPath, target);
+		removeLegacyPoolSnapshot(root);
 	} catch {
 		// best-effort
+	}
+}
+
+/** Best-effort removal of the legacy in-dir snapshot after the first new-location write. */
+function removeLegacyPoolSnapshot(root: string): void {
+	try {
+		fs.unlinkSync(poolSnapshotLegacyPath(root));
+	} catch {
+		// already absent
 	}
 }
 

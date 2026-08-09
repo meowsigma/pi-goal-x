@@ -30,6 +30,7 @@
     ".tests/goal-mutation-boundary.test.ts",
     ".tests/goal-notifications.test.ts",
     ".tests/goal-policy.test.ts",
+    ".tests/goal-pool-snapshot.test.ts",
     ".tests/goal-pool.test.ts",
     ".tests/goal-prompts.test.ts",
     ".tests/goal-questionnaire.test.ts",

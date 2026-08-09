@@ -194,3 +194,23 @@ throttle boundary, full-events API untouched. All pass; suite 765/765;
   settings fingerprint / combined) + 1 integration flow (unchanged → external
   goal file + ledger line + settings rewrite via raw fs → 3 changes reported
   → again no changes). Suite 771/771; tsc + lint clean; gate PASS.
+
+## 2026-08-09 — Phase 3c: pool-snapshot fast-path fix
+
+- **Root cause (verified)**: the pool snapshot lived at
+  `.pi/goals/.goals-pool-snapshot.json` — INSIDE the goals directory whose
+  mtime it records as its freshness key. Every snapshot write (temp + rename
+  in that dir) bumped the dir mtime, so the recorded key never matched again:
+  every cold read paid lstat + snapshot read + a readdir name-check fallback
+  (`activeGoalNamesMatchSync`) = 3 ops instead of the claimed 2. Measured in
+  the bench: `B1.pool.cold` ops=3.
+- **Fix**: the snapshot now lives at `.pi/.goals-pool-snapshot.json` (outside
+  the watched goals dir); writes never perturb the validity key. Legacy
+  in-dir snapshots are still read as a one-time fallback and removed on the
+  first new-location write (best-effort).
+- **Verified**: `B1.pool.cold` now ops=2 (lstat + snapshot read, mtime key
+  holds); the after-baseline records it; gate PASS. 4 new unit tests in
+  tests/goal-pool-snapshot.test.ts: snapshot outside the dir + mtime key
+  matches after write; delta updates keep the key fresh; legacy fallback is
+  served (hydration marker proves snapshot origin); legacy file removed on
+  write. Suite 775/775; tsc + lint clean.

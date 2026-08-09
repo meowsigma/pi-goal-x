@@ -9,10 +9,15 @@ import {
   latestEventsForGoal,
   reconstructGoalLedger,
   type GoalLedgerEvent,
+  type LedgerStateReadResult,
 } from "./goal-ledger.ts";
 import { type GoalRecord } from "./goal-record.ts";
 
-export function buildGoalCompactSummary(goal: GoalRecord, events: GoalLedgerEvent[]): string {
+export function buildGoalCompactSummary(
+  goal: GoalRecord,
+  events: GoalLedgerEvent[],
+  auditorOverride?: { verdict: "approved" | "disapproved" | "error"; report: string; at: string },
+): string {
   const lines: string[] = [];
   lines.push(`Goal ${goal.id} — ${statusLabel(goal)}`);
   lines.push(`  Objective: ${truncateText(goal.objective, 200)}`);
@@ -70,7 +75,7 @@ export function buildGoalCompactSummary(goal: GoalRecord, events: GoalLedgerEven
     }
   }
 
-  const auditor = latestAuditorResultForGoal(events, goal.id);
+  const auditor = auditorOverride ?? latestAuditorResultForGoal(events, goal.id);
   if (auditor && auditor.verdict === "disapproved") {
     lines.push(`  Auditor rejection (latest): ${truncateText(auditor.report, 120)}`);
   }
@@ -88,20 +93,29 @@ export function buildGoalCompactSummary(goal: GoalRecord, events: GoalLedgerEven
 export function buildCompactionSummary(args: {
   goalsById: Map<string, GoalRecord>;
   focusedGoalId: string | null;
-  ledgerEvents: GoalLedgerEvent[];
+  ledgerEvents?: GoalLedgerEvent[];
+  /** Checkpoint-fed view: uses reconstructed state + per-goal recent tails instead of a full event list. */
+  ledgerState?: LedgerStateReadResult;
   capOpenGoals?: number;
   capEventsPerGoal?: number;
 }): string {
-  const { goalsById, focusedGoalId, ledgerEvents, capOpenGoals = 20, capEventsPerGoal = 5 } = args;
+  const { goalsById, focusedGoalId, ledgerEvents = [], ledgerState, capOpenGoals = 20, capEventsPerGoal = 5 } = args;
 
   const lines: string[] = [];
   const openGoals = Array.from(goalsById.values()).filter((g) => g.status !== "complete");
-  const reconstructed = reconstructGoalLedger(ledgerEvents);
+  const reconstructed = ledgerState?.state ?? reconstructGoalLedger(ledgerEvents);
+  const recentEventsFor = (goalId: string, cap: number): GoalLedgerEvent[] => {
+    if (ledgerState) return (ledgerState.recentEventsByGoal.get(goalId) ?? []).slice(0, cap);
+    return latestEventsForGoal(ledgerEvents, goalId, cap);
+  };
 
   if (focusedGoalId && goalsById.has(focusedGoalId)) {
     const focused = goalsById.get(focusedGoalId)!;
+    const auditor = ledgerState
+      ? reconstructed.goals.get(focusedGoalId)?.latestAuditorResult ?? reconstructed.terminalGoals.get(focusedGoalId)?.latestAuditorResult
+      : undefined;
     lines.push(`[FOCUSED GOAL]`);
-    lines.push(buildGoalCompactSummary(focused, latestEventsForGoal(ledgerEvents, focusedGoalId, capEventsPerGoal)));
+    lines.push(buildGoalCompactSummary(focused, recentEventsFor(focusedGoalId, capEventsPerGoal), auditor));
     lines.push("");
   }
 

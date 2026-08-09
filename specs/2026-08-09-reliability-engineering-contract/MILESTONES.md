@@ -129,3 +129,50 @@ fail-fast in ~13ms inside the ≈200ms bound.
 - Verdict: adoption is viable; do it as an isolated PR (typescript 5.x →
   7.0.2 devDep bump) with CI + lint + full suite confirmation, kept separate
   from feature work. Not merged in this goal — evaluation only.
+
+## 2026-08-09 — Phase 3a: versioned atomic ledger checkpoint + tail replay
+
+### Design
+
+- `reconstructGoalLedger` split into an accumulator (`ReconstructAccumulator`
+  with goals/terminalGoals/focusedGoalId/focusGeneration/focusGenByGoal) +
+  `applyLedgerEvents` (inline batch switch) + `finalizeLedgerState` —
+  behavior-identical (existing reconstruction tests unchanged, plus the
+  equivalence holds by construction).
+- Checkpoint file `.pi/goals/.goal-ledger-checkpoint.json` (versioned,
+  format-tagged, atomic temp-write + rename): reconstructed accumulator,
+  per-goal recent-event tails (cap 12), `coveredBytes`/`coveredEvents`.
+  The JSONL ledger is untouched and authoritative; the checkpoint is a
+  best-effort optimization.
+- `loadLedgerState(ctx)` cold path, in priority order: warm cache (0 fs ops)
+  → fresh checkpoint (2 ops: checkpoint read + stat) → checkpoint + grown
+  ledger (positioned tail read + incremental replay, checkpoint refreshed)
+  → full parse + reconstruct + fresh checkpoint write (missing/corrupt/
+  version-mismatch/truncated-below-coverage fallback).
+- Mutation path maintains the in-memory mirror on every append (0 ops) and
+  writes the disk checkpoint atomically, throttled to once per 32 appends or
+  2s — preserving the NAF append headroom (`B1.append.x4` ≤ 2 ops: measured
+  1) while bounding cold-start tails for long sessions. Staleness is always
+  safe: coveredBytes mismatch only costs a tail replay.
+- Adoption: `buildCompactionSummary` accepts an optional `LedgerStateReadResult`
+  (reconstructed state + per-goal tails + state-carried latest auditor
+  result); the post-compaction resync prompt in goal-events uses
+  `loadLedgerState` instead of the full-events read.
+
+### Bench evidence (fresh after-baseline, gate PASS)
+
+| Row | ops | Notes |
+| --- | --- | --- |
+| `B1.ledgerstate.cold` | 2 | no checkpoint: stat + full parse + write |
+| `B1.ledgerstate.cp.hit` | 2 | checkpoint read + stat, no parse |
+| `B1.ledgerstate.cp.tail` | 2 | checkpoint + 50-event external tail |
+| `B1.append.x4` (unchanged) | 1 | throttle keeps append headroom |
+| `B3.reconstruct.5000` | 0.3ms | inlined accumulator + n=30 (was flaky at n=10) |
+
+### Tests (9 new, in tests/goal-ledger-checkpoint.test.ts)
+
+Full fallback + checkpoint write, warm-cache zero-op, tail replay (external
+growth), version mismatch → full, malformed body → full, truncation below
+coverage → full, external growth replay, mutation-path maintenance across the
+throttle boundary, full-events API untouched. All pass; suite 765/765;
+`tsc --noEmit` clean; lint clean; gate PASS 3/3 consecutive runs.

@@ -21,7 +21,7 @@ export function run(baseline) {
 			// original harness built the fixture (incl. new Date().toISOString()
 			// per event) inside the timer, inflating the before numbers.
 			const events = Array(count).fill(null).map((_, i) => ({ type: "goal_created", goalId: `g${i}`, objective: "x", sisyphus: false, autoContinue: true, at: "2026-08-06T00:00:00.000Z" }));
-			const rc = measure(() => reconstructGoalLedger(events), { n: 10 });
+			const rc = measure(() => reconstructGoalLedger(events), { n: 30 }); // n=30: sub-millisecond p50 is noisy at n=10
 			baseline.add({ id: `B3.reconstruct.${count}`, label: `ledger reconstruction (${count} events)`, modules: "goal-ledger", fixture: `${count} in-memory events`, n: rc.n, p50: rc.p50, p95: rc.p95, max: rc.max, notes: `mean ${rc.mean}ms` });
 		} finally {
 			cleanupFixture(cwd);

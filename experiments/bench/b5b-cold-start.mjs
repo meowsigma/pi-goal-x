@@ -27,7 +27,7 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 
 import {
 	makeFixtureCwd,
@@ -35,6 +35,7 @@ import {
 	makeLedger,
 	cleanupFixture,
 } from "./bench-common.mjs";
+import { loadLedgerState } from "../../extensions/goal-ledger.ts";
 import { spawnContention } from "./node-child-process.mjs";
 import { allowChildProcess } from "./guard-state.mjs";
 
@@ -86,11 +87,29 @@ async function measureCold(cwd, flow, lat25, n = 5) {
 
 export async function run(baseline) {
 	const cwd = makeFixtureCwd("b5b-cold-");
+	// Separate fixture for checkpoint rows: a checkpoint must EXIST before the
+	// cold child runs (written by this parent process), so the base rows keep a
+	// checkpoint-free fixture.
+	const cwdCp = makeFixtureCwd("b5b-cold-cp-");
 	try {
 		makeGoalFiles(cwd, GOAL_COUNT);
 		mkdirSync(path.join(cwd, ".pi"), { recursive: true });
 		writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ subtaskDepth: 2, provider: "anthropic", model: "m", thinking_level: "medium" }));
 		makeLedger(cwd, 1000);
+
+		// Checkpoint fixture: same 50 goals + 1k-event ledger, plus a full
+		// checkpoint written by this process (children are fresh, so they see a
+		// genuinely cold checkpoint hit / tail replay).
+		makeGoalFiles(cwdCp, GOAL_COUNT);
+		mkdirSync(path.join(cwdCp, ".pi"), { recursive: true });
+		writeFileSync(path.join(cwdCp, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ subtaskDepth: 2, provider: "anthropic", model: "m", thinking_level: "medium" }));
+		makeLedger(cwdCp, 1000);
+		loadLedgerState({ cwd: cwdCp }); // full fallback in the parent writes the checkpoint
+		// Tail fixture: checkpoint covers the ledger, then 50 external events grow it.
+		const tailLedger = path.join(cwdCp, ".pi", "goals", "goal_events.jsonl");
+		for (let i = 0; i < 50; i++) {
+			appendFileSync(tailLedger, JSON.stringify({ type: "task_complete", goalId: `g${i % 10}`, taskId: `t-tail-${i}`, evidence: "checkpoint tail", at: new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString() }) + "\n", "utf8");
+		}
 
 		const rows = [
 			["B1.pool.cold", "pool", false, `cold sync pool read (${GOAL_COUNT} goals, fresh process)`, "storage/goal-files"],
@@ -101,12 +120,20 @@ export async function run(baseline) {
 			["B1.ledger.cold.lat25", "ledger", true, "cold ledger read (+25ms/op)", "goal-ledger"],
 			["B5.startup.cold", "startup", false, `cold session startup loadState (${GOAL_COUNT} goals, fresh process)`, "goal-state + storage/goal-files + goal-settings"],
 			["B5.startup.cold.lat25", "startup", true, `cold session startup loadState (${GOAL_COUNT} goals, +25ms/op)`, "goal-state + storage/goal-files + goal-settings"],
+			["B1.ledgerstate.cold", "ledgerstate", false, "cold checkpoint-aware read, no checkpoint (full parse + write)", "goal-ledger"],
+			["B1.ledgerstate.cp.hit", "ledgerstate", false, "cold checkpoint-aware read, checkpoint covers the ledger", "goal-ledger"],
+			["B1.ledgerstate.cp.tail", "ledgerstate", false, "cold checkpoint-aware read, 50-event external tail", "goal-ledger"],
 		];
 		for (const [id, flow, lat25, label, modules] of rows) {
-			const r = await measureCold(cwd, flow, lat25);
+			const fixtureCwd = flow === "ledgerstate" && (id === "B1.ledgerstate.cp.hit" || id === "B1.ledgerstate.cp.tail")
+				? cwdCp
+				: cwd;
+			const r = await measureCold(fixtureCwd, flow, lat25);
 			baseline.add({
 				id, label, modules,
-				fixture: `${GOAL_COUNT} goals + settings + 1k-event ledger`,
+				fixture: id.startsWith("B1.ledgerstate")
+					? `${GOAL_COUNT} goals + settings + 1k-event ledger${id.endsWith(".hit") || id.endsWith(".tail") ? " + checkpoint" : ""}`
+					: `${GOAL_COUNT} goals + settings + 1k-event ledger`,
 				n: r.samples.length, p50: r.p50, p95: r.p95, max: r.max,
 				ops: r.ops,
 				...(lat25 ? { latency: "25ms/op" } : {}),

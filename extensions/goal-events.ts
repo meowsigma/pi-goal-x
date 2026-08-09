@@ -12,7 +12,7 @@ import {
 	isToolUseAssistantMessage,
 } from "./goal-format.ts";
 import { buildCompactionSummary } from "./goal-compaction.ts";
-import { latestAuditorResultForGoal, readGoalLedger, invalidateGoalLedgerCache } from "./goal-ledger.ts";
+import { latestAuditorResultForGoal, loadLedgerState, readGoalLedger, invalidateGoalLedgerCache } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
 import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings, invalidateGoalSettingsCache } from "./goal-settings.ts";
@@ -413,7 +413,7 @@ export function registerGoalEvents(core: GoalCore): void {
 				// Use deterministic compaction summary instead of generic reminder
 				try {
 					const ledger = getPromptLedger();
-				const compaction = buildCompactionSummary({ goalsById: core.goalsById, focusedGoalId: core.focusedGoalId, ledgerEvents: ledger.events });
+				const compaction = buildCompactionSummary({ goalsById: core.goalsById, focusedGoalId: core.focusedGoalId, ledgerState: loadLedgerState(ctx) });
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${activeGoal.id}]\n${compaction}`;
 			} catch {
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${core.state.goal.id}]\nThe conversation was just compacted. Re-read the objective and continue from the actual artifacts/state; do not rely on memory of the prior chat.`;

@@ -19,7 +19,7 @@ import { performance } from "node:perf_hooks";
 import { beginFsCount, endFsCount, state } from "./guard-state.mjs";
 import { readActiveGoalPool } from "../../extensions/storage/goal-files.ts";
 import { loadGoalSettings } from "../../extensions/goal-settings.ts";
-import { readGoalLedger } from "../../extensions/goal-ledger.ts";
+import { readGoalLedger, loadLedgerState } from "../../extensions/goal-ledger.ts";
 import { createGoalCore } from "../../extensions/goal-state.ts";
 
 function makePi() {
@@ -62,6 +62,12 @@ async function runFlow() {
 			break;
 		case "ledger":
 			readGoalLedger({ cwd });
+			break;
+		case "ledgerstate":
+			// Checkpoint-aware bounded cold read (reliability campaign): hits the
+			// checkpoint (2 ops) when covered, replays a positioned tail when the
+			// ledger grew, or falls back to a full parse + checkpoint write.
+			loadLedgerState({ cwd });
 			break;
 		case "startup": {
 			const core = createGoalCore(makePi(), {});

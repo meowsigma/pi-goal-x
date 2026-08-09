@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-09T10:36:52.993Z",
+  "generatedAt": "2026-08-09T11:13:57.575Z",
   "bench": "pi-goal-x extension",
   "agentFree": true,
   "rows": [
@@ -147,8 +147,8 @@
       "fixture": "fresh lock dir",
       "n": 50,
       "p50": 0.1,
-      "p95": 0.2,
-      "max": 0.2,
+      "p95": 0.1,
+      "max": 0.1,
       "ops": 3,
       "notes": "mean 0.1ms"
     },
@@ -158,11 +158,11 @@
       "modules": "goal-ledger",
       "fixture": "1k-event ledger file",
       "n": 50,
-      "p50": 0,
-      "p95": 0,
-      "max": 0.1,
+      "p50": 0.1,
+      "p95": 0.1,
+      "max": 0.4,
       "ops": 1,
-      "notes": "mean 0ms"
+      "notes": "mean 0.1ms"
     },
     {
       "id": "B1.append.x4",
@@ -170,11 +170,11 @@
       "modules": "goal-ledger",
       "fixture": "1k-event ledger file",
       "n": 20,
-      "p50": 0,
-      "p95": 0.1,
-      "max": 0.1,
+      "p50": 0.1,
+      "p95": 0.4,
+      "max": 0.4,
       "ops": 1,
-      "notes": "mean 0ms; one appendFileSync for 4 events (was 4×5 ops)"
+      "notes": "mean 0.1ms; one appendFileSync for 4 events (was 4×5 ops)"
     },
     {
       "id": "B3.parse.1000",
@@ -192,10 +192,10 @@
       "label": "ledger reconstruction (1000 events)",
       "modules": "goal-ledger",
       "fixture": "1000 in-memory events",
-      "n": 10,
+      "n": 30,
       "p50": 0.1,
       "p95": 0.1,
-      "max": 0.1,
+      "max": 0.3,
       "notes": "mean 0.1ms"
     },
     {
@@ -214,11 +214,11 @@
       "label": "ledger reconstruction (5000 events)",
       "modules": "goal-ledger",
       "fixture": "5000 in-memory events",
-      "n": 10,
+      "n": 30,
       "p50": 0.3,
-      "p95": 0.6,
-      "max": 0.6,
-      "notes": "mean 0.3ms"
+      "p95": 0.8,
+      "max": 1.5,
+      "notes": "mean 0.4ms"
     },
     {
       "id": "B3.parse.10000",
@@ -236,10 +236,10 @@
       "label": "ledger reconstruction (10000 events)",
       "modules": "goal-ledger",
       "fixture": "10000 in-memory events",
-      "n": 10,
-      "p50": 0.4,
-      "p95": 2.1,
-      "max": 2.1,
+      "n": 30,
+      "p50": 0.5,
+      "p95": 0.9,
+      "max": 1.5,
       "notes": "mean 0.6ms"
     },
     {
@@ -261,8 +261,8 @@
       "fixture": "10 goals, 1000 events",
       "n": 20,
       "p50": 0,
-      "p95": 1.5,
-      "max": 1.5,
+      "p95": 1.4,
+      "max": 1.4,
       "ops": 0,
       "notes": "fs ops/turn 0 (p50), mean 0.1ms"
     },
@@ -272,9 +272,9 @@
       "modules": "goal-task-tools + goal-service + storage/goal-files + goal-ledger + storage/goal-lock",
       "fixture": "1 goal, 1 task",
       "n": 1,
-      "p50": 1.2,
-      "p95": 1.2,
-      "max": 1.2,
+      "p50": 1.3,
+      "p95": 1.3,
+      "max": 1.3,
       "ops": 19,
       "notes": "fs ops for one task mutation: 19 (P1-3 batches to one lock+write+append)"
     },
@@ -358,8 +358,8 @@
       "fixture": "1 open goals",
       "n": 6,
       "p50": 0,
-      "p95": 0.7,
-      "max": 0.7,
+      "p95": 0.6,
+      "max": 0.6,
       "notes": "mean 0.1ms; P1-7 parallel + cached"
     },
     {
@@ -383,8 +383,8 @@
       "fixture": "10 open goals",
       "n": 6,
       "p50": 0,
-      "p95": 1.1,
-      "max": 1.1,
+      "p95": 1,
+      "max": 1,
       "notes": "mean 0.2ms; P1-7 parallel + cached"
     },
     {
@@ -408,8 +408,8 @@
       "fixture": "50 open goals",
       "n": 6,
       "p50": 0,
-      "p95": 2.7,
-      "max": 2.7,
+      "p95": 3,
+      "max": 3,
       "notes": "mean 0.5ms; P1-7 parallel + cached"
     },
     {
@@ -431,10 +431,10 @@
       "modules": "storage/goal-lock",
       "fixture": "2 processes, 1 goal lock",
       "n": 1,
-      "p50": 13.1,
-      "p95": 13.1,
-      "max": 13.1,
-      "notes": "fail-fast in 13.1ms; P1-5 bounded window ≈200ms (was ~2.8s frozen)"
+      "p50": 13.2,
+      "p95": 13.2,
+      "max": 13.2,
+      "notes": "fail-fast in 13.2ms; P1-5 bounded window ≈200ms (was ~2.8s frozen)"
     },
     {
       "id": "B5.auditor.dispatch",
@@ -442,10 +442,10 @@
       "modules": "goal-core-tools + goal-completion + goal-state + goal-service + goal-ledger",
       "fixture": "1 active goal each, 5 fixtures",
       "n": 5,
-      "p50": 1.4,
-      "p95": 2.9,
-      "max": 2.9,
-      "notes": "cold=1.2ms warm=2.9ms; P1-6 seeds the auditor session warm"
+      "p50": 1.3,
+      "p95": 2.8,
+      "max": 2.8,
+      "notes": "cold=1.2ms warm=2.8ms; P1-6 seeds the auditor session warm"
     },
     {
       "id": "B1.pool.cold",
@@ -454,10 +454,10 @@
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
       "p50": 0.8,
-      "p95": 10.1,
-      "max": 10.1,
+      "p95": 6,
+      "max": 6,
       "ops": 3,
-      "notes": "fresh-process cold read; wall samples 0.8/0.8/0.8/0.9/10.1ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 0.8/0.8/0.8/0.9/6ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.pool.cold.lat25",
@@ -465,12 +465,12 @@
       "modules": "storage/goal-files",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 90.4,
-      "p95": 106.4,
-      "max": 106.4,
+      "p50": 94.7,
+      "p95": 105.6,
+      "max": 105.6,
       "ops": 3,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 88.3/88.9/90.4/97.2/106.4ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 87.7/91/94.7/105/105.6ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.settings.cold",
@@ -490,12 +490,12 @@
       "modules": "goal-settings",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 32.7,
-      "p95": 35.5,
-      "max": 35.5,
+      "p50": 35.3,
+      "p95": 35.4,
+      "max": 35.4,
       "ops": 1,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 26.3/26.3/32.7/35.4/35.5ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 29.3/32.2/35.3/35.4/35.4ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.ledger.cold",
@@ -503,11 +503,11 @@
       "modules": "goal-ledger",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 1.2,
-      "p95": 1.4,
-      "max": 1.4,
+      "p50": 1.3,
+      "p95": 1.3,
+      "max": 1.3,
       "ops": 1,
-      "notes": "fresh-process cold read; wall samples 1.2/1.2/1.2/1.3/1.4ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 1.2/1.2/1.3/1.3/1.3ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.ledger.cold.lat25",
@@ -520,7 +520,7 @@
       "max": 36.5,
       "ops": 1,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 35.2/36.4/36.4/36.4/36.5ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 33.6/36.4/36.4/36.4/36.5ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B5.startup.cold",
@@ -529,10 +529,10 @@
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
       "p50": 1.9,
-      "p95": 1.9,
-      "max": 1.9,
+      "p95": 2.2,
+      "max": 2.2,
       "ops": 4,
-      "notes": "fresh-process cold read; wall samples 1.8/1.8/1.9/1.9/1.9ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 1.8/1.8/1.9/2/2.2ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B5.startup.cold.lat25",
@@ -540,12 +540,48 @@
       "modules": "goal-state + storage/goal-files + goal-settings",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 118.6,
-      "p95": 119.2,
-      "max": 119.2,
+      "p50": 115.6,
+      "p95": 119.1,
+      "max": 119.1,
       "ops": 4,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 110.4/117.2/118.6/119/119.2ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 111.5/112.7/115.6/116.9/119.1ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.ledgerstate.cold",
+      "label": "cold checkpoint-aware read, no checkpoint (full parse + write)",
+      "modules": "goal-ledger",
+      "fixture": "50 goals + settings + 1k-event ledger",
+      "n": 5,
+      "p50": 1.6,
+      "p95": 4.1,
+      "max": 4.1,
+      "ops": 2,
+      "notes": "fresh-process cold read; wall samples 1.5/1.5/1.6/1.6/4.1ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.ledgerstate.cp.hit",
+      "label": "cold checkpoint-aware read, checkpoint covers the ledger",
+      "modules": "goal-ledger",
+      "fixture": "50 goals + settings + 1k-event ledger + checkpoint",
+      "n": 5,
+      "p50": 1.6,
+      "p95": 3.9,
+      "max": 3.9,
+      "ops": 2,
+      "notes": "fresh-process cold read; wall samples 1.5/1.5/1.6/1.6/3.9ms; ops = min over samples (deterministic per code state)"
+    },
+    {
+      "id": "B1.ledgerstate.cp.tail",
+      "label": "cold checkpoint-aware read, 50-event external tail",
+      "modules": "goal-ledger",
+      "fixture": "50 goals + settings + 1k-event ledger + checkpoint",
+      "n": 5,
+      "p50": 1.5,
+      "p95": 1.6,
+      "max": 1.6,
+      "ops": 2,
+      "notes": "fresh-process cold read; wall samples 1.5/1.5/1.5/1.6/1.6ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B7.tool.create_goal",
@@ -553,11 +589,11 @@
       "modules": "goal-core-tools + goal-state + goal-service + goal-notifications",
       "fixture": "1 focused fixture",
       "n": 5,
-      "p50": 0.9,
-      "p95": 1.9,
-      "max": 1.9,
-      "ops": 11,
-      "notes": "fs ops/case ~11; mean 1ms"
+      "p50": 0.7,
+      "p95": 1.4,
+      "max": 1.4,
+      "ops": 14,
+      "notes": "fs ops/case ~14; mean 0.9ms"
     },
     {
       "id": "B7.tool.get_goal",
@@ -577,11 +613,11 @@
       "modules": "goal-core-tools + goal-state + goal-service",
       "fixture": "1 focused fixture",
       "n": 5,
-      "p50": 0.8,
+      "p50": 0.9,
       "p95": 1,
       "max": 1,
-      "ops": 16,
-      "notes": "fs ops/case ~16; mean 0.9ms"
+      "ops": 19,
+      "notes": "fs ops/case ~19; mean 0.9ms"
     },
     {
       "id": "B7.tool.update_goal.blocked",
@@ -589,11 +625,11 @@
       "modules": "goal-core-tools + goal-service + goal-ledger",
       "fixture": "1 focused fixture",
       "n": 5,
-      "p50": 0.8,
-      "p95": 1,
-      "max": 1,
-      "ops": 16,
-      "notes": "fs ops/case ~16; mean 0.8ms"
+      "p50": 0.9,
+      "p95": 1.2,
+      "max": 1.2,
+      "ops": 19,
+      "notes": "fs ops/case ~19; mean 0.9ms"
     },
     {
       "id": "B7.tool.set_goal_tasks.50",
@@ -602,10 +638,10 @@
       "fixture": "1 focused fixture",
       "n": 5,
       "p50": 1,
-      "p95": 1.1,
-      "max": 1.1,
-      "ops": 16,
-      "notes": "fs ops/case ~16; mean 1ms"
+      "p95": 1.2,
+      "max": 1.2,
+      "ops": 19,
+      "notes": "fs ops/case ~19; mean 1ms"
     },
     {
       "id": "B7.tool.update_goal_task",
@@ -869,7 +905,7 @@
       "n": 2000,
       "p50": 0,
       "p95": 0,
-      "max": 0.2,
+      "max": 0.3,
       "notes": "mean 0ms"
     },
     {
@@ -968,7 +1004,7 @@
       "n": 100,
       "p50": 0,
       "p95": 0,
-      "max": 0,
+      "max": 0.1,
       "notes": "mean 0ms"
     },
     {
@@ -990,7 +1026,7 @@
       "n": 100,
       "p50": 0,
       "p95": 0.1,
-      "max": 0.3,
+      "max": 0.2,
       "notes": "mean 0ms"
     },
     {
@@ -1078,7 +1114,7 @@
       "n": 100,
       "p50": 0,
       "p95": 0.1,
-      "max": 0.3,
+      "max": 0.4,
       "notes": "mean 0.1ms"
     },
     {

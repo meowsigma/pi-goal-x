@@ -50,3 +50,20 @@ fail-fast in ~13ms inside the ≈200ms bound.
   dedup`, `project-improvement-audit`) + refreshed NAF baselines.
 - `chore(release): 0.26.3`; tag `v0.26.3`; `npm publish`; GitHub release;
   pushed `main` + tag.
+
+## 2026-08-09 — Phase 1a: GitHub Actions CI
+
+- Added `.github/workflows/ci.yml`: on push to `main` and every PR, matrix
+  `node: [22, 24]` runs `npm ci` → `npm run check` → `test:all` →
+  `test:selfcheck` → `npm pack --dry-run` → `npm audit --omit=dev` →
+  `bench:gate:naf`.
+- **Found + fixed a Node-22 incompatibility**: `scripts/run-unit-tests.mjs`
+  passed `--test-isolation=none` unconditionally, which Node 22 rejects (the
+  flag only exists since 23.4). The runner now probes the running binary
+  (`--test-isolation=none --test --help` exit code) and omits the flag on
+  older releases. Verified both paths:
+  - Node 26: 756/756 pass with `--test-isolation=none`.
+  - Node 22.23 (official binary): 756/756 pass via the process-isolation
+    fallback; `tsc --noEmit` clean; selfcheck OK; `bench:gate:naf` PASS.
+  - Full CI-equivalent sequence also green on Node 26 from a clean `npm ci`.
+- The real Node 22.15+ floor is exercised on the GitHub runner on push.

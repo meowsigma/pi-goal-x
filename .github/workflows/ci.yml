@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npm run check
+      - name: Full test suite
+        run: npm run test:all
+      - name: Test-manifest self-check
+        run: npm run test:selfcheck
+      - name: Package dry run
+        run: npm pack --dry-run
+      - name: Production dependency audit
+        run: npm audit --omit=dev
+      - name: NAF benchmark regression gate
+        run: npm run bench:gate:naf

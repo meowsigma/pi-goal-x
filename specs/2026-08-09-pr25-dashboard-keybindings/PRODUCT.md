@@ -76,6 +76,18 @@ current main applied **with zero conflicts** (`merge/pr-25` worktree).
 
 ## Verdict
 
-**VALUABLE — merge after the three minor fixes (items 1–3).** The feature
-is coherent, backward compatible, tested, documented, and applies cleanly
-to current main with zero regressions (788/788, all gates green).
+**VALUABLE — merged.** The feature is coherent, backward compatible, tested,
+documented, and applied cleanly to current main with zero regressions
+(788/788, all gates green).
+
+## Merge log
+
+- `63324b5` PR commit + `6265ad5` hardening fixes on review branch
+  `merge/pr-25` (worktree).
+- `9ba9834` squash onto main — author John Rinehart preserved (committer
+  Thomas Monk), Co-authored-by trailer, `Refs: PR #25`.
+- `9cd7e9d` spec review record.
+- PR #25 closed with a summary comment.
+- CI on main for the merged tree: run `31334012871` **success** on Node 22
+  and Node 24 (tsc, lint, 791/791 tests, selfcheck, pack, audit, bench gate).
+- No npm/GitHub release (per user decision).

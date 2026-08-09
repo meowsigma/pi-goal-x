@@ -2,7 +2,7 @@
 
 All notable changes to pi-goal-x are documented here.
 
-## [Unreleased]
+## [0.26.2] — 2026-08-09
 
 ### Fixed
 

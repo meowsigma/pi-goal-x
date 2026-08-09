@@ -129,6 +129,8 @@ Start a guided regular goal:
 
 The agent can ask questions and propose a complete objective and task plan. Confirm the proposal to create the goal and begin work.
 
+The questionnaire dialog never truncates the question; when it is taller than the terminal it stays within the height and scrolls — `PgUp`/`PgDn` page and `Ctrl+↑/↓` line-scroll without moving the selection, `↑/↓` selection auto-follows into view, and a `▲`/`… +N more` edge indicator shows what is clipped.
+
 Start a guided Sisyphus goal:
 
 ```text

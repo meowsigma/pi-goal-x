@@ -338,10 +338,10 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				let currentLabel = "Audit complete";
 				let currentPct = 100;
 				for (let i = phases.length - 1; i >= 0; i--) {
-					if (elapsed >= phases[i].atMs) {
-						currentPhase = phases[i].phase;
-						currentLabel = phases[i].label;
-						currentPct = phases[i].percentage;
+					if (elapsed >= phases[i]!.atMs) {
+						currentPhase = phases[i]!.phase;
+						currentLabel = phases[i]!.label;
+						currentPct = phases[i]!.percentage;
 						break;
 					}
 				}

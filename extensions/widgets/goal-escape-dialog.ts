@@ -120,7 +120,7 @@ export async function showEscapeDialog(
 					}
 					if (matchesKey(data, "enter")) {
 						cancelled = false;
-						done(OPTIONS[selectedIndex].value);
+						done(OPTIONS[selectedIndex]!.value);
 						return;
 					}
 					if (matchesKey(data, "escape")) {

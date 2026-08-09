@@ -27,7 +27,7 @@ export function extractVerificationContract(objective: string): { objective: str
 		const trimmed = line.trim();
 		const m = VERIFICATION_CONTRACT_RE.exec(trimmed);
 		if (m) {
-			contract = m[1].trim();
+			contract = m[1]!.trim();
 			// Skip this line — don't add it to the cleaned objective
 		} else {
 			filtered.push(line);

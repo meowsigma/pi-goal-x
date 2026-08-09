@@ -89,7 +89,7 @@ export async function showTaskListOverlay(
 						const tasks = goal.taskList.tasks;
 						for (let i = 0; i < tasks.length; i++) {
 							const isLast = i === tasks.length - 1;
-							collectTaskEntries(tasks[i], 1, isLast, entries, goal.id);
+							collectTaskEntries(tasks[i]!, 1, isLast, entries, goal.id);
 						}
 					} else {
 						entries.push({ type: "empty-message", text: "(no tasks)" });
@@ -133,7 +133,7 @@ export async function showTaskListOverlay(
 						// If title alone fits, status needs to be on same line
 						// But we already handle it above for i=0. The status might overflow.
 						// If status doesn't fit on first line after title, put it on its own line
-						const firstLine = lines[0];
+						const firstLine = lines[0]!;
 						const allOnFirst = `${icon}  ${entry.title}  ${entry.status}`;
 						if (visibleWidth(firstLine) > innerWidth) {
 							// Status overflowed — put status on a separate dim line
@@ -249,7 +249,7 @@ export async function showTaskListOverlay(
 
 					const end = Math.min(scrollOffset + visibleHeight, renderedLineCount);
 					for (let i = scrollOffset; i < end; i++) {
-						const raw = renderedLines[i];
+						const raw = renderedLines[i]!;
 						// Each rendered line from renderEntry already wraps/truncates,
 						// but double-check for safety
 						const safe = visibleWidth(raw) > innerWidth
@@ -402,7 +402,7 @@ function collectTaskEntries(
 
 	if (task.subtasks && task.subtasks.length > 0) {
 		for (let i = 0; i < task.subtasks.length; i++) {
-			collectTaskEntries(task.subtasks[i], depth + 1, i === task.subtasks.length - 1, entries, goalId);
+			collectTaskEntries(task.subtasks[i]!, depth + 1, i === task.subtasks.length - 1, entries, goalId);
 		}
 	}
 }

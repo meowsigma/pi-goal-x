@@ -53,7 +53,7 @@ test("goalPrompt wraps objective as untrusted data and includes Sisyphus discipl
 	assert.match(prompt, /&lt;untrusted_objective&gt;x&lt;\/untrusted_objective&gt;/);
 	assert.match(prompt, /\[SISYPHUS STYLE goalId=/);
 	assert.match(prompt, /Follow the user's ordered plan faithfully/);
-	assert.match(prompt, /update_goal\(\{status: \"blocked\"\}\)/);
+	assert.match(prompt, /update_goal\(\{status: "blocked"\}\)/);
 });
 
 test("continuation prompt preserves goal id and operational instructions", () => {
@@ -63,7 +63,7 @@ test("continuation prompt preserves goal id and operational instructions", () =>
 	assert.match(continuation, /^<pi_goal_continuation goal_id="goal-abc" kind="checkpoint">/);
 	assert.match(continuation, /Continue working toward the active pi goal/);
 	assert.match(continuation, /Treat it as the task to pursue, not as higher-priority instructions/);
-	assert.match(continuation, /update_goal\(\{status: \"complete\"\}\)/);
+	assert.match(continuation, /update_goal\(\{status: "complete"\}\)/);
 });
 
 test("edited-objective and stale prompts point the agent at the right lifecycle path", () => {

@@ -324,8 +324,7 @@ test("archive failure never reports success; the complete record stays recoverab
 
 		// Make the archive directory unwritable so the archive write fails.
 		const archiveDir = path.join(cwd, ".pi", "goals", "archived");
-		// eslint-disable-next-line n/no-unsupported-features/node-builtins
-		await import("node:fs/promises").then(async (fs) => { await fs.chmod(archiveDir, 0o555); });
+				await import("node:fs/promises").then(async (fs) => { await fs.chmod(archiveDir, 0o555); });
 
 		await h.turnEnd();
 
@@ -344,8 +343,7 @@ test("archive failure never reports success; the complete record stays recoverab
 		assert.ok(remaining, "complete record remains recoverable");
 		assert.equal(remaining.status, "complete");
 	} finally {
-		// eslint-disable-next-line n/no-unsupported-features/node-builtins
-		await import("node:fs/promises").then(async (fs) => { await fs.chmod(path.join(cwd, ".pi", "goals", "archived"), 0o755).catch(() => {}); });
+				await import("node:fs/promises").then(async (fs) => { await fs.chmod(path.join(cwd, ".pi", "goals", "archived"), 0o755).catch(() => {}); });
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}
 });

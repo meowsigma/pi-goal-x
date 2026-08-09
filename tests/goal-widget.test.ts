@@ -41,9 +41,9 @@ function auditorProgress(overrides: Partial<AuditorWidgetProgress> = {}): Audito
 
 test("renderGoalWidgetLines renders the unified compact dashboard", () => {
 	const lines = renderGoalWidgetLines(goal(), theme, 100);
-	assert.match(lines[0], /^╭─ pi-goal-x ─ Componentize the goal widget/);
-	assert.doesNotMatch(lines[0], /1m05s/, "usage moved from the header into the status line");
-	assert.match(lines[1], /goal: sisyphus running \[1m05s 2\.5K\]/);
+	assert.match(lines[0]!, /^╭─ pi-goal-x ─ Componentize the goal widget/);
+	assert.doesNotMatch(lines[0]!, /1m05s/, "usage moved from the header into the status line");
+	assert.match(lines[1]!, /goal: sisyphus running \[1m05s 2\.5K\]/);
 	assert.match(lines.at(-1) ?? "", /^╰─ .*Ctrl\+Shift\+T: expand/);
 });
 
@@ -83,10 +83,10 @@ test("renderGoalWidgetLines shows paused reason and who paused", () => {
 
 test("renderGoalWidgetLines shows other open goals and unfocused multi-goal guidance", () => {
 	const focused = renderGoalWidgetLines(goal(), theme, 100, { openGoalCount: 3 });
-	assert.match(focused[1], /goal: sisyphus running \[1m05s 2\.5K\] \(\+2 open\)/);
+	assert.match(focused[1]!, /goal: sisyphus running \[1m05s 2\.5K\] \(\+2 open\)/);
 
 	const unfocused = renderGoalWidgetLines(null, theme, 100, { openGoalCount: 2 });
-	assert.match(unfocused[0], /^╭─ pi-goal-x ─ Goal focus required/);
+	assert.match(unfocused[0]!, /^╭─ pi-goal-x ─ Goal focus required/);
 	assert.match(unfocused.join("\n"), /2 open goals are available/);
 	assert.match(unfocused.join("\n"), /\/goal-focus/);
 });
@@ -94,7 +94,7 @@ test("renderGoalWidgetLines shows other open goals and unfocused multi-goal guid
 test("renderAuditorWidgetLines shows the structured audit dashboard (§15.3)", () => {
 	const progress = auditorProgress({ auditorLabel: "anthropic/claude" });
 	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	assert.match(lines[0], /Independent completion audit ─ anthropic\/claude/);
+	assert.match(lines[0]!, /Independent completion audit ─ anthropic\/claude/);
 	// Five check stages in order.
 	const text = lines.join("\n");
 	assert.ok(text.indexOf("Objective and success criteria") < text.indexOf("Verification contracts"));
@@ -152,13 +152,13 @@ test("renderAuditorWidgetLines shows the done phase without the stop hint", () =
 test("audit progress overrides normal goal display when provided", () => {
 	const progress = auditorProgress();
 	const lines = renderGoalWidgetLines(goal(), theme, 100, { auditorProgress: progress });
-	assert.match(lines[0], /Independent completion audit/);
-	assert.doesNotMatch(lines[0], /pi-goal-x ─/);
+	assert.match(lines[0]!, /Independent completion audit/);
+	assert.doesNotMatch(lines[0]!, /pi-goal-x ─/);
 });
 
 test("finished audit shows the result card view (§15.4)", () => {
 	const approved = renderAuditResultCardView({ verdict: "approved", report: "ok" }, theme, 100);
-	assert.match(approved[0], /Audit result ─ APPROVED/);
+	assert.match(approved[0]!, /Audit result ─ APPROVED/);
 	const approvedText = approved.join("\n");
 	assert.match(approvedText, /✓ Objective satisfied\./);
 	assert.match(approvedText, /✓ Verification requirements satisfied\./);
@@ -168,7 +168,7 @@ test("finished audit shows the result card view (§15.4)", () => {
 	const rejectedText = rejected.join("\n");
 	assert.match(rejectedText, /Audit result ─ CHANGES REQUIRED/);
 	assert.match(rejectedText, /✗ Tests were not run after the final change\./);
-	assert.match(rejectedText, /✗ Task \"docs\" has no evidence\./);
+	assert.match(rejectedText, /✗ Task "docs" has no evidence\./);
 });
 
 const testProposedAt = "2026-01-01T00:00:00.000Z";
@@ -312,8 +312,8 @@ test("GoalWidgetComponent renders through mock TUI path", () => {
 
 	const lines = component.render(100);
 	assert.ok(lines.length > 0, "Component renders lines");
-	assert.match(lines[0], /^╭─ pi-goal-x ─ Componentize the goal widget/);
-	assert.match(lines[1], /goal: sisyphus running \[1m05s 2\.5K\]/);
+	assert.match(lines[0]!, /^╭─ pi-goal-x ─ Componentize the goal widget/);
+	assert.match(lines[1]!, /goal: sisyphus running \[1m05s 2\.5K\]/);
 });
 
 test("GoalWidgetComponent shows open goal count when > 1", () => {
@@ -440,8 +440,8 @@ for (const width of [50, 70, 100, 109, 120]) {
 		const lines = component.render(width);
 		for (let i = 0; i < lines.length; i++) {
 			assert.ok(
-				visibleWidth(lines[i]) <= width,
-				`Line ${i} has visible width ${visibleWidth(lines[i])} > ${width}: ${JSON.stringify(lines[i].slice(0, 80))}`,
+				visibleWidth(lines[i]!) <= width,
+				`Line ${i} has visible width ${visibleWidth(lines[i]!)} > ${width}: ${JSON.stringify(lines[i]!.slice(0, 80))}`,
 			);
 		}
 	});
@@ -471,8 +471,8 @@ test("GoalWidgetComponent with auditor progress at width 109 (crash regression)"
 	const lines = component.render(width);
 	for (let i = 0; i < lines.length; i++) {
 		assert.ok(
-			lines[i] === "" || visibleWidth(lines[i]) <= width,
-			`Line ${i} has visible width ${visibleWidth(lines[i])} > ${width}: ${JSON.stringify(lines[i].slice(0, 80))}`,
+			lines[i] === "" || visibleWidth(lines[i]!) <= width,
+			`Line ${i} has visible width ${visibleWidth(lines[i]!)} > ${width}: ${JSON.stringify(lines[i]!.slice(0, 80))}`,
 		);
 	}
 });
@@ -491,8 +491,8 @@ test("GoalWidgetComponent unfocused with 38 open goals at width 109", () => {
 	const lines = component.render(width);
 	for (let i = 0; i < lines.length; i++) {
 		assert.ok(
-			lines[i] === "" || visibleWidth(lines[i]) <= width,
-			`Line ${i} has visible width ${visibleWidth(lines[i])} > ${width}: ${JSON.stringify(lines[i].slice(0, 80))}`,
+			lines[i] === "" || visibleWidth(lines[i]!) <= width,
+			`Line ${i} has visible width ${visibleWidth(lines[i]!)} > ${width}: ${JSON.stringify(lines[i]!.slice(0, 80))}`,
 		);
 	}
 });

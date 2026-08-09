@@ -34,7 +34,6 @@ const FIXTURE_GOAL = readFileSync(new URL("./fixtures/goals/active_goal_fixture.
 // ── Harness ──────────────────────────────────────────────────────────────────
 
 interface HandlerMap {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	[key: string]: (event: any, ctx: ExtensionContext) => Promise<unknown> | unknown;
 }
 
@@ -191,14 +190,14 @@ test("golden: user-driven turn cancels a pending continuation", async () => {
 
 		// Simulate a work turn that queues a continuation: turn_start, a bash
 		// tool call, then a non-tool-use assistant message at turn_end.
-		await h.handlers["turn_start"]({}, h.ctx);
-		await h.handlers["tool_call"]({ toolName: "bash", args: { command: "ls" } }, h.ctx);
-		await h.handlers["tool_execution_end"]({}, h.ctx);
-		await h.handlers["turn_end"]({ message: { role: "assistant", content: [{ type: "text", text: "done" }] } }, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({ toolName: "bash", args: { command: "ls" } }, h.ctx);
+		await h.handlers["tool_execution_end"]!({}, h.ctx);
+		await h.handlers["turn_end"]!({ message: { role: "assistant", content: [{ type: "text", text: "done" }] } }, h.ctx);
 
 		// The continuation timer is pending (non-idle ctx keeps it scheduled).
 		// A user-driven turn must cancel it before it fires.
-		await h.handlers["before_agent_start"]({
+		await h.handlers["before_agent_start"]!({
 			systemPrompt: "base",
 			prompt: "user typed a new instruction",
 			systemPromptOptions: {},
@@ -245,17 +244,17 @@ test("provider-error guard: turn_end with stopReason=error never queues a contin
 
 		// Cancel the continuation session_start armed (non-idle ctx keeps it
 		// scheduled) so the turn itself owns the queue decision.
-		await h.handlers["before_agent_start"]({
+		await h.handlers["before_agent_start"]!({
 			systemPrompt: "base",
 			prompt: "user typed: continue",
 			systemPromptOptions: {},
 		}, h.ctx);
 
 		// A work turn that ends in a provider error (work tool ran, then error).
-		await h.handlers["turn_start"]({}, h.ctx);
-		await h.handlers["tool_call"]({ toolName: "bash", args: { command: "ls" } }, h.ctx);
-		await h.handlers["tool_execution_end"]({}, h.ctx);
-		await h.handlers["turn_end"]({ message: { role: "assistant", stopReason: "error" } }, idleCtx(h.ctx));
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({ toolName: "bash", args: { command: "ls" } }, h.ctx);
+		await h.handlers["tool_execution_end"]!({}, h.ctx);
+		await h.handlers["turn_end"]!({ message: { role: "assistant", stopReason: "error" } }, idleCtx(h.ctx));
 
 		assert.equal(await countCheckpoints(h), 0, "error turn must not queue a continuation");
 	} finally {
@@ -270,16 +269,16 @@ test("provider-error guard: normal work turn still queues a continuation", async
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 
 		// Cancel the continuation session_start armed (see above).
-		await h.handlers["before_agent_start"]({
+		await h.handlers["before_agent_start"]!({
 			systemPrompt: "base",
 			prompt: "user typed: continue",
 			systemPromptOptions: {},
 		}, h.ctx);
 
-		await h.handlers["turn_start"]({}, h.ctx);
-		await h.handlers["tool_call"]({ toolName: "bash", args: { command: "ls" } }, h.ctx);
-		await h.handlers["tool_execution_end"]({}, h.ctx);
-		await h.handlers["turn_end"]({ message: { role: "assistant", content: [{ type: "text", text: "done" }] } }, idleCtx(h.ctx));
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({ toolName: "bash", args: { command: "ls" } }, h.ctx);
+		await h.handlers["tool_execution_end"]!({}, h.ctx);
+		await h.handlers["turn_end"]!({ message: { role: "assistant", content: [{ type: "text", text: "done" }] } }, idleCtx(h.ctx));
 
 		assert.equal(await countCheckpoints(h), 1, "normal work turn must queue a continuation");
 	} finally {
@@ -293,8 +292,8 @@ test("provider-error guard: agent_end with an error message never queues a conti
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 
-		await h.handlers["agent_end"]({ messages: [{ role: "assistant", stopReason: "error" }] }, idleCtx(h.ctx));
-		await h.handlers["agent_settled"]({}, idleCtx(h.ctx));
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "error" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 
 		assert.equal(await countCheckpoints(h), 0, "agent_end with an error message must not queue a continuation");
 	} finally {
@@ -308,10 +307,10 @@ test("successful agent_end waits for agent_settled before queuing a continuation
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 
-		await h.handlers["agent_end"]({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		assert.equal(await countCheckpoints(h), 0, "agent_end runs before pi is truly idle");
 
-		await h.handlers["agent_settled"]({}, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 		assert.equal(await countCheckpoints(h), 1, "agent_settled queues the continuation without idle polling");
 	} finally {
 		// temp dir cleanup is best-effort.

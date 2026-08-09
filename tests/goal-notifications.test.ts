@@ -44,7 +44,7 @@ test("buildGoalRunningNotification handles very long objective title", () => {
 	});
 	// Title should be truncated to ~92 chars
 	const titleLine = result.split("\n")[1];
-	assert.ok(titleLine.length < 120, "Long objective title is truncated");
+	assert.ok(titleLine!.length < 120, "Long objective title is truncated");
 });
 
 test("buildGoalRunningNotification shows Goal mode with manual mode", () => {
@@ -117,8 +117,8 @@ test("buildGoalRunningNotification produces consistent 3-line format", () => {
 		const result = buildGoalRunningNotification(args);
 		const lines = result.split("\n");
 		assert.equal(lines.length, 3, `3 lines for ${JSON.stringify(args)}`);
-		assert.match(lines[0], /[●◆] (Goal|Sisyphus) running/);
-		assert.match(lines[1], /├─ ⟡/);
-		assert.match(lines[2], /└─ (auto-continue on|manual mode)/);
+		assert.match(lines[0]!, /[●◆] (Goal|Sisyphus) running/);
+		assert.match(lines[1]!, /├─ ⟡/);
+		assert.match(lines[2]!, /└─ (auto-continue on|manual mode)/);
 	}
 });

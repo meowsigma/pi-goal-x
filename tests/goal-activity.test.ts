@@ -55,16 +55,16 @@ test("lifecycle events map to readable activity text", () => {
 
 test("audit rejection and error verdicts map distinctly", () => {
 	const rejected = deriveGoalActivity([ev("audit_result", "2026-01-01T09:00:00.000Z", { verdict: "disapproved", report: "tests missing" })], "g1");
-	assert.equal(rejected[0].text, "Completion review requested additional work.");
+	assert.equal(rejected[0]!.text, "Completion review requested additional work.");
 	const errored = deriveGoalActivity([ev("audit_result", "2026-01-01T09:00:00.000Z", { verdict: "error", report: "boom" })], "g1");
-	assert.equal(errored[0].text, "Completion review could not finish.");
+	assert.equal(errored[0]!.text, "Completion review could not finish.");
 });
 
 test("audit-skipped distinguishes disabled from user-aborted", () => {
 	const disabled = deriveGoalActivity([ev("audit_skipped", "2026-01-01T09:00:00.000Z", { reason: "disabled" })], "g1");
-	assert.equal(disabled[0].text, "Skipped independent completion review (auditor disabled).");
+	assert.equal(disabled[0]!.text, "Skipped independent completion review (auditor disabled).");
 	const aborted = deriveGoalActivity([ev("audit_skipped", "2026-01-01T09:00:00.000Z", { reason: "user_aborted" })], "g1");
-	assert.equal(aborted[0].text, "Completion review was aborted by the user.");
+	assert.equal(aborted[0]!.text, "Completion review was aborted by the user.");
 });
 
 test("task events prefer task titles over ids", () => {
@@ -85,20 +85,20 @@ test("task events prefer task titles over ids", () => {
 
 test("unknown task ids fall back to the id in quotes", () => {
 	const items = deriveGoalActivity([ev("task_started", "2026-01-01T09:00:00.000Z", { taskId: "t9" })], "g1");
-	assert.equal(items[0].text, "Started “t9”.");
+	assert.equal(items[0]!.text, "Started “t9”.");
 });
 
 test("evidence is included only when concise", () => {
 	const short = deriveGoalActivity([ev("task_complete", "2026-01-01T09:00:00.000Z", { taskId: "t1", evidence: "Done" })], "g1", {
 		taskTitles: TITLES,
 	});
-	assert.equal(short[0].text, "Completed “Review reports page and data source”. — Done");
+	assert.equal(short[0]!.text, "Completed “Review reports page and data source”. — Done");
 	const longEvidence = "x".repeat(200);
 	const long = deriveGoalActivity([ev("task_complete", "2026-01-01T09:00:00.000Z", { taskId: "t1", evidence: longEvidence })], "g1", {
 		taskTitles: TITLES,
 	});
-	assert.equal(long[0].text, "Completed “Review reports page and data source”.");
-	assert.ok(!long[0].text.includes(longEvidence));
+	assert.equal(long[0]!.text, "Completed “Review reports page and data source”.");
+	assert.ok(!long[0]!.text.includes(longEvidence));
 });
 
 test("long reasons are truncated safely", () => {
@@ -106,8 +106,8 @@ test("long reasons are truncated safely", () => {
 	const items = deriveGoalActivity([ev("task_skipped", "2026-01-01T09:00:00.000Z", { taskId: "t1", reason })], "g1", {
 		taskTitles: TITLES,
 	});
-	assert.ok(items[0].text.length < 200);
-	assert.ok(items[0].text.endsWith("..."));
+	assert.ok(items[0]!.text.length < 200);
+	assert.ok(items[0]!.text.endsWith("..."));
 });
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ test("default cap is the latest five entries; full history is available on reque
 	);
 	const capped = deriveGoalActivity(events, "g1");
 	assert.equal(capped.length, 5);
-	assert.equal(capped[0].at, "2026-01-01T09:03:00.000Z");
+	assert.equal(capped[0]!.at, "2026-01-01T09:03:00.000Z");
 	const full = deriveGoalActivity(events, "g1", { limit: 100 });
 	assert.equal(full.length, 7);
 });
@@ -166,5 +166,5 @@ test("only events for the requested goal are included", () => {
 	];
 	const items = deriveGoalActivity(events, "g1");
 	assert.equal(items.length, 1);
-	assert.equal(items[0].at, "2026-01-01T09:00:00.000Z");
+	assert.equal(items[0]!.at, "2026-01-01T09:00:00.000Z");
 });

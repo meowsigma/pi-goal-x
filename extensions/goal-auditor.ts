@@ -217,6 +217,7 @@ function makeAuditorResourceLoader(): ResourceLoader {
 	};
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- pi SDK types Model<any> idiomatically (pi-coding-agent sdk.d.ts)
 export function resolveAuditorModel(ctx: ExtensionContext, config: GoalSettings): { model: Model<any> | undefined; error?: string } {
 	if (!config.model && !config.provider) return { model: ctx.model };
 	if (config.provider && config.model) {
@@ -268,6 +269,7 @@ export function resolveAuditorSessionModelOptions(ctx: ExtensionContext): {
 	return { modelRegistry: ctx.modelRegistry };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- pi SDK types Model<any> idiomatically (pi-coding-agent sdk.d.ts)
 function modelLabel(model: Model<any> | undefined): string | undefined {
 	return model ? `${model.provider}/${model.id}` : undefined;
 }
@@ -379,7 +381,7 @@ export async function runGoalCompletionAuditor(args: {
 			}
 			if (event.type === "message_update") {
 				// Check for thinking events from the assistant stream
-				const streamEvent = (event as any).assistantMessageEvent;
+				const streamEvent = (event as { assistantMessageEvent?: { type?: string } }).assistantMessageEvent;
 				if (streamEvent?.type === "thinking_start") {
 					progress.phase = "thinking";
 					if (!progress.label) progress.label = "Analyzing goal...";
@@ -393,7 +395,7 @@ export async function runGoalCompletionAuditor(args: {
 				}
 				// For text content, show producing_report phase
 				progress.phase = "producing_report";
-				const message = event.message as any;
+				const message = event.message as { role?: string; content?: Array<{ type?: string; text?: string }> };
 				if (message?.role === "assistant") {
 					for (const part of message.content ?? []) {
 						if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
@@ -407,7 +409,7 @@ export async function runGoalCompletionAuditor(args: {
 				return;
 			}
 			if (event.type !== "message_end") return;
-			const message = event.message as any;
+			const message = event.message as { role?: string; content?: Array<{ type?: string; text?: string }> };
 			if (message.role !== "assistant") return;
 			for (const part of message.content ?? []) {
 				if (part.type === "text" && typeof part.text === "string") outputParts.push(part.text);

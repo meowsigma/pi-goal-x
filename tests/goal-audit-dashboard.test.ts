@@ -87,8 +87,8 @@ test("auditor identity is shown in the model and the rendered header", () => {
 	const model = deriveAuditorDashboardModel(progress(), { auditorLabel: "anthropic/claude-sonnet:high" });
 	assert.equal(model.auditorLabel, "anthropic/claude-sonnet:high");
 	const lines = renderAuditorDashboard(model, theme, 100);
-	assert.match(lines[0], /anthropic\/claude-sonnet:high/);
-	assert.match(lines[0], /2m18s/, "elapsed duration shown");
+	assert.match(lines[0]!, /anthropic\/claude-sonnet:high/);
+	assert.match(lines[0]!, /2m18s/, "elapsed duration shown");
 });
 
 test("percentage clamps to [0, 100]", () => {

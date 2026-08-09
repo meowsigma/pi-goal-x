@@ -121,8 +121,8 @@ function auditorProgress(): AuditorWidgetProgress {
 function assertWidthSafe(lines: string[], width: number): void {
 	for (let i = 0; i < lines.length; i++) {
 		assert.ok(
-			visibleWidth(lines[i]) <= width,
-			`line ${i} at width ${width} has visible width ${visibleWidth(lines[i])}: ${JSON.stringify(lines[i].slice(0, 60))}`,
+			visibleWidth(lines[i]!) <= width,
+			`line ${i} at width ${width} has visible width ${visibleWidth(lines[i]!)}: ${JSON.stringify(lines[i]!.slice(0, 60))}`,
 		);
 	}
 }
@@ -378,9 +378,9 @@ test("compact: running with tasks at 100 shows status, header counts + bar, curr
 	assert.ok(model);
 	const lines = renderCompactDashboard(model, theme, 100);
 	const text = lines.join("\n");
-	assert.match(lines[0], /^╭─ pi-goal-x ─ Add CSV export to reports/);
-	assert.doesNotMatch(lines[0], /12m47s/, "usage moved from the header into the status line");
-	assert.match(lines[1], /goal: running \[12m47s 18\.2K\] \(\+2 open\)/);
+	assert.match(lines[0]!, /^╭─ pi-goal-x ─ Add CSV export to reports/);
+	assert.doesNotMatch(lines[0]!, /12m47s/, "usage moved from the header into the status line");
+	assert.match(lines[1]!, /goal: running \[12m47s 18\.2K\] \(\+2 open\)/);
 	// Header row: counts first (skipped counted as done → ✓3), task bar, then
 	// the current task's subtask bar beside it (`· Sub 2/3`); the standalone
 	// compact progress lines are gone.
@@ -461,7 +461,7 @@ test("expanded: full dashboard at 100 shows sections and complete task tree", ()
 	assert.ok(model);
 	const lines = renderExpandedDashboard(model, theme, 100);
 	const text = lines.join("\n");
-	assert.match(lines[1], /goal: running \[12m47s 18\.2K\] \(\+2 open\)/);
+	assert.match(lines[1]!, /goal: running \[12m47s 18\.2K\] \(\+2 open\)/);
 	assert.match(text, /├─ Progress /);
 	assert.match(text, /3\/5 tasks · 60%/);
 	assert.match(text, /├─ Tasks /);

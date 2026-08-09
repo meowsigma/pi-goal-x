@@ -50,7 +50,6 @@ export function createMockTUI(): { tui: TUI; state: MockTUIState } {
 
 // ── Mock ctx.ui.custom() ────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type CustomFactory = (tui: TUI, theme: Theme, keybindings: unknown, done: (result: any) => void) => Component | Promise<Component>;
 
 export interface CustomCallRecord {

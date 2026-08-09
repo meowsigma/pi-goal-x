@@ -434,7 +434,7 @@ export function reconstructGoalLedger(events: GoalLedgerEvent[]): ReconstructedL
 
 export function latestAuditorResultForGoal(events: GoalLedgerEvent[], goalId: string): { verdict: "approved" | "disapproved" | "error"; report: string; at: string } | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
+    const event = events[i]!
     if (event.type === "audit_result" && event.goalId === goalId) {
       return { verdict: event.verdict, report: event.report, at: event.at };
     }
@@ -445,7 +445,7 @@ export function latestAuditorResultForGoal(events: GoalLedgerEvent[], goalId: st
 export function latestEventsForGoal(events: GoalLedgerEvent[], goalId: string, limit = 10): GoalLedgerEvent[] {
   const result: GoalLedgerEvent[] = [];
   for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
+    const event = events[i]!
     if ("goalId" in event && event.goalId === goalId) {
       result.unshift(event);
       if (result.length >= limit) break;
@@ -456,7 +456,7 @@ export function latestEventsForGoal(events: GoalLedgerEvent[], goalId: string, l
 
 export function latestGoalLifecycleEvent(events: GoalLedgerEvent[], goalId: string): GoalLedgerEvent | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
+    const event = events[i]!
     if ("goalId" in event && event.goalId === goalId) {
       return event;
     }

@@ -26,6 +26,8 @@ jobs:
         run: npm ci
       - name: Type check
         run: npm run check
+      - name: Lint
+        run: npm run lint
       - name: Full test suite
         run: npm run test:all
       - name: Test-manifest self-check

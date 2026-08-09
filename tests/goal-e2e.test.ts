@@ -218,9 +218,9 @@ test("multiple syncs then complete: final objective in archived file", () => {
 		const archivedContent = readArchivedFile(ctx, archived);
 
 		// Only the last objective
-		assert.ok(archivedContent.includes(objs[2]), "archived must have the final objective");
-		assert.ok(!archivedContent.includes(objs[0]), "archived must NOT have obj1");
-		assert.ok(!archivedContent.includes(objs[1]), "archived must NOT have obj2");
+		assert.ok(archivedContent.includes(objs[2]!), "archived must have the final objective");
+		assert.ok(!archivedContent.includes(objs[0]!), "archived must NOT have obj1");
+		assert.ok(!archivedContent.includes(objs[1]!), "archived must NOT have obj2");
 	} finally {
 		cleanup(ctx);
 	}

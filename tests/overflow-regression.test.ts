@@ -39,8 +39,8 @@ test("addWrappedPipe fix: no overflow at any width from 20 to 120", () => {
 		const fixLines = fixedAddWrappedPipe(content, safeWidth);
 		for (let i = 0; i < fixLines.length; i++) {
 			assert.ok(
-				visibleWidth(fixLines[i]) <= safeWidth,
-				`Fixed at safeWidth=${safeWidth}, line ${i}: visibleWidth=${visibleWidth(fixLines[i])} > ${safeWidth}`,
+				visibleWidth(fixLines[i]!) <= safeWidth,
+				`Fixed at safeWidth=${safeWidth}, line ${i}: visibleWidth=${visibleWidth(fixLines[i]!)} > ${safeWidth}`,
 			);
 		}
 	}
@@ -57,14 +57,14 @@ test("addWrappedPipe fix: first line without prefix never exceeds width", () => 
 		);
 		// First line has no pipe prefix, should fit in safeWidth
 		assert.ok(
-			visibleWidth(fixLines[0]) <= safeWidth,
-			`safeWidth=${safeWidth}: first line overflows: ${visibleWidth(fixLines[0])} > ${safeWidth}`,
+			visibleWidth(fixLines[0]!) <= safeWidth,
+			`safeWidth=${safeWidth}: first line overflows: ${visibleWidth(fixLines[0]!)} > ${safeWidth}`,
 		);
 		// Continuation lines with pipe prefix should also fit
 		for (let i = 1; i < fixLines.length; i++) {
 			assert.ok(
-				visibleWidth(fixLines[i]) <= safeWidth,
-				`safeWidth=${safeWidth}: continuation line ${i} overflows: ${visibleWidth(fixLines[i])} > ${safeWidth}`,
+				visibleWidth(fixLines[i]!) <= safeWidth,
+				`safeWidth=${safeWidth}: continuation line ${i} overflows: ${visibleWidth(fixLines[i]!)} > ${safeWidth}`,
 			);
 		}
 	}
@@ -85,7 +85,7 @@ test("addWrappedPipe fix: styled content with ANSI codes", () => {
 
 		const lines = fixedAddWrappedPipe(content, safeWidth);
 		for (let i = 0; i < lines.length; i++) {
-			const w = visibleWidth(lines[i]);
+			const w = visibleWidth(lines[i]!);
 			assert.ok(
 				w <= safeWidth,
 				`safeWidth=${safeWidth}, styled line ${i}: visibleWidth=${w} > ${safeWidth}`,
@@ -109,10 +109,10 @@ test("addWrappedPipe fix: content with theme.fg styling patterns", () => {
 		for (const styledLine of styledLines) {
 			const lines = fixedAddWrappedPipe(styledLine, safeWidth);
 			for (let i = 0; i < lines.length; i++) {
-				const w = visibleWidth(lines[i]);
+				const w = visibleWidth(lines[i]!);
 				assert.ok(
 					w <= safeWidth,
-					`safeWidth=${safeWidth}, styled line ${i}: visibleWidth=${w} > ${safeWidth}, content=${JSON.stringify(lines[i].slice(0, 50))}`,
+					`safeWidth=${safeWidth}, styled line ${i}: visibleWidth=${w} > ${safeWidth}, content=${JSON.stringify(lines[i]!.slice(0, 50))}`,
 				);
 			}
 		}
@@ -128,7 +128,7 @@ test("addWrappedPipe fix: CJK wide character content", () => {
 
 		const lines = fixedAddWrappedPipe(cjkContent, safeWidth);
 		for (let i = 0; i < lines.length; i++) {
-			const w = visibleWidth(lines[i]);
+			const w = visibleWidth(lines[i]!);
 			assert.ok(
 				w <= safeWidth,
 				`safeWidth=${safeWidth}, CJK line ${i}: visibleWidth=${w} > ${safeWidth}`,
@@ -143,7 +143,7 @@ test("addWrappedPipe fix: mixed CJK and ASCII content", () => {
 
 		const lines = fixedAddWrappedPipe(mixed, safeWidth);
 		for (let i = 0; i < lines.length; i++) {
-			const w = visibleWidth(lines[i]);
+			const w = visibleWidth(lines[i]!);
 			assert.ok(
 				w <= safeWidth,
 				`safeWidth=${safeWidth}, mixed CJK/ASCII line ${i}: visibleWidth=${w} > ${safeWidth}`,
@@ -160,7 +160,7 @@ test("addWrappedPipe fix: single long word (no word breaks)", () => {
 		const longWord = "Supercalifragilisticexpialidocious".repeat(10);
 		const lines = fixedAddWrappedPipe(longWord, safeWidth);
 		for (let i = 0; i < lines.length; i++) {
-			const w = visibleWidth(lines[i]);
+			const w = visibleWidth(lines[i]!);
 			assert.ok(
 				w <= safeWidth,
 				`safeWidth=${safeWidth}, long-word line ${i}: visibleWidth=${w} > ${safeWidth}`,
@@ -178,7 +178,7 @@ test("addWrappedPipe fix: content at exact wrap boundary", () => {
 
 		const lines = fixedAddWrappedPipe(content, safeWidth);
 		for (let i = 0; i < lines.length; i++) {
-			const w = visibleWidth(lines[i]);
+			const w = visibleWidth(lines[i]!);
 			assert.ok(
 				w <= safeWidth,
 				`safeWidth=${safeWidth}, exact-boundary line ${i}: visibleWidth=${w} > ${safeWidth}`,
@@ -192,7 +192,7 @@ test("addWrappedPipe fix: content with leading/trailing whitespace", () => {
 		const padded = "   A line with leading spaces and trailing spaces that should still wrap correctly at narrow widths without overflow   ".repeat(3);
 		const lines = fixedAddWrappedPipe(padded, safeWidth);
 		for (let i = 0; i < lines.length; i++) {
-			const w = visibleWidth(lines[i]);
+			const w = visibleWidth(lines[i]!);
 			assert.ok(
 				w <= safeWidth,
 				`safeWidth=${safeWidth}, whitespace line ${i}: visibleWidth=${w} > ${safeWidth}`,
@@ -208,7 +208,7 @@ test("addWrappedPipe fix: content exactly at minimum safeWidth=20", () => {
 	const content = "x".repeat(safeWidth * 4) + " " + "y".repeat(safeWidth * 4);
 	const lines = fixedAddWrappedPipe(content, safeWidth);
 	for (let i = 0; i < lines.length; i++) {
-		const w = visibleWidth(lines[i]);
+		const w = visibleWidth(lines[i]!);
 		assert.ok(
 			w <= safeWidth,
 			`safeWidth=${safeWidth}, line ${i}: visibleWidth=${w} > ${safeWidth}`,
@@ -262,7 +262,7 @@ test("wrapTextWithAnsi at minimum width 1 never overflows", () => {
 	const content = "Hello world this is a test of wrapping at minimum width settings";
 	const wrapped = wrapTextWithAnsi(content, 1);
 	for (let i = 0; i < wrapped.length; i++) {
-		const w = visibleWidth(wrapped[i]);
+		const w = visibleWidth(wrapped[i]!);
 		assert.ok(
 			w <= 1,
 			`wrap at width 1, line ${i}: visibleWidth=${w} > 1`,
@@ -274,7 +274,7 @@ test("wrapTextWithAnsi at width 0 (clamped edge case)", () => {
 	const content = "Test content at zero width";
 	const wrapped = wrapTextWithAnsi(content, 0);
 	for (let i = 0; i < wrapped.length; i++) {
-		const w = visibleWidth(wrapped[i]);
+		const w = visibleWidth(wrapped[i]!);
 		assert.ok(
 			// At width 0, each line should be at most a few chars
 			w <= 5,
@@ -298,8 +298,8 @@ test("addWrappedPipe fix: full crash scenario simulation", () => {
 	const fixedLines = fixedAddWrappedPipe(crashContent, safeWidth);
 	for (let i = 0; i < fixedLines.length; i++) {
 		assert.ok(
-			visibleWidth(fixedLines[i]) <= safeWidth,
-			`Fixed version overflows at width ${safeWidth}, line ${i}: visibleWidth=${visibleWidth(fixedLines[i])}`,
+			visibleWidth(fixedLines[i]!) <= safeWidth,
+			`Fixed version overflows at width ${safeWidth}, line ${i}: visibleWidth=${visibleWidth(fixedLines[i]!)}`,
 		);
 	}
 });
@@ -313,7 +313,7 @@ test("addWrappedPipe fix: all widths from 20 to 120 with crash scenario content"
 	for (let safeWidth = 20; safeWidth <= 120; safeWidth++) {
 		const lines = fixedAddWrappedPipe(crashContent, safeWidth);
 		for (let i = 0; i < lines.length; i++) {
-			const w = visibleWidth(lines[i]);
+			const w = visibleWidth(lines[i]!);
 			assert.ok(
 				w <= safeWidth,
 				`safeWidth=${safeWidth}, crash-scenario line ${i}: visibleWidth=${w} > ${safeWidth}`,

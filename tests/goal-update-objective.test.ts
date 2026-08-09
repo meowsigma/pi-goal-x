@@ -187,8 +187,8 @@ test("tweak persist path: taskList persisted when tasks parameter provided", () 
 
 		assert.ok(tweaked.taskList, "taskList must be set on tweaked goal");
 		assert.equal(tweaked.taskList.tasks.length, 2, "must have 2 tasks");
-		assert.equal(tweaked.taskList.tasks[0].id, "t1");
-		assert.equal(tweaked.taskList.tasks[1].verificationContract, "Must verify");
+		assert.equal(tweaked.taskList.tasks[0]!.id, "t1");
+		assert.equal(tweaked.taskList.tasks[1]!.verificationContract, "Must verify");
 		assert.equal(tweaked.objective, "Updated objective with new tasks");
 
 		// Verify disk has the task list JSON
@@ -231,8 +231,8 @@ test("tweak persist path: original taskList inherited when tasks omitted", () =>
 
 		assert.ok(withInherited.taskList, "inherited taskList must be present");
 		assert.equal(withInherited.taskList.tasks.length, 1);
-		assert.equal(withInherited.taskList.tasks[0].id, "orig1");
-		assert.equal(withInherited.taskList.tasks[0].title, "Original task");
+		assert.equal(withInherited.taskList.tasks[0]!.id, "orig1");
+		assert.equal(withInherited.taskList.tasks[0]!.title, "Original task");
 		assert.equal(withInherited.objective, updatedObjective);
 
 		// Verify disk has both the new objective and the original task

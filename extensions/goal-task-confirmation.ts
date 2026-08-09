@@ -144,7 +144,7 @@ async function showTaskListConfirmationDialog(ctx: ExtensionContext, proposalTex
 						return;
 					}
 					if (matchesKey(data, "enter")) {
-						done({ decision: OPTIONS[selectedIndex].value });
+						done({ decision: OPTIONS[selectedIndex]!.value });
 						return;
 					}
 					if (matchesKey(data, "escape")) {

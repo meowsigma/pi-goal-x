@@ -56,6 +56,7 @@ export interface ProposalPresentationSegments {
 
 /** Strip ANSI SGR sequences so structural scans see the plain text. */
 function stripAnsiCodes(value: string): string {
+	// eslint-disable-next-line no-control-regex -- deliberate ANSI SGR escape-sequence matching
 	return value.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
@@ -82,7 +83,7 @@ export function findProposalPresentationSegments(lines: string[], tailStart: num
 	if (tasksStart < 0 || tasksStart >= tailStart) return null;
 	let tasksEnd = tasksStart;
 	for (let i = tasksStart + 1; i < tailStart; i++) {
-		const plain = stripAnsiCodes(lines[i]);
+		const plain = stripAnsiCodes(lines[i]!);
 		if (/^\s*\[[ x~]\]/.test(plain)) {
 			tasksEnd = i;
 			continue;
@@ -95,7 +96,7 @@ export function findProposalPresentationSegments(lines: string[], tailStart: num
 	// so pull the tail start back to it when present.
 	let effectiveTail = tailStart;
 	for (let i = tailStart - 1; i > tasksEnd; i--) {
-		if (lines[i].includes("press 'a' to toggle")) {
+		if (lines[i]!.includes("press 'a' to toggle")) {
 			effectiveTail = i;
 			break;
 		}
@@ -183,7 +184,7 @@ function fitDialogViewport(
 	// Selection auto-follow: nudge scrollTop so the selected option's range is
 	// inside the content window (minimal scroll; clamp below).
 	if (scroll.needsFollow && scroll.optionRanges[scroll.followIndex]) {
-		const [os, oe] = scroll.optionRanges[scroll.followIndex];
+		const [os, oe] = scroll.optionRanges[scroll.followIndex]!;
 		if (os < scroll.scrollTop || oe >= scroll.scrollTop + contentWindow) {
 			scroll.scrollTop = oe >= scroll.scrollTop + contentWindow
 				? Math.min(os, Math.max(0, oe - contentWindow + 1))
@@ -207,7 +208,7 @@ function fitDialogViewport(
 		// visible when the end is reached (never while clipped — geometry).
 		viewport.push(dimStyle(`… +${hiddenBelow} more · PgUp/PgDn scroll`));
 	} else {
-		viewport.push(lines[lines.length - 1]);
+		viewport.push(lines[lines.length - 1]!);
 	}
 	return viewport;
 }
@@ -244,10 +245,10 @@ function fitProposalPresentation(
 	// the tasks from the start. The dropped task lines remain fully readable in
 	// the scrollback presentation. Never exceeds maxDialogLines.
 	const tailNoBlanks = tail.filter((l) => l.trim() !== "");
-	const hasAuditor = tail.length > 0 && tail[0].includes("press 'a' to toggle");
+	const hasAuditor = tail.length > 0 && tail[0]!.includes("press 'a' to toggle");
 	const restTail = hasAuditor ? tailNoBlanks.slice(1) : tailNoBlanks;
 	const keepRest = Math.min(restTail.length, Math.max(0, maxDialogLines - keepHead - (hasAuditor ? 1 : 0)));
-	const tailKept = [...(hasAuditor ? [tail[0]] : []), ...restTail.slice(restTail.length - keepRest)];
+	const tailKept = [...(hasAuditor ? [tail[0]!] : []), ...restTail.slice(restTail.length - keepRest)];
 	const keepTasks = Math.min(tasks.length, Math.max(0, maxDialogLines - keepHead - tailKept.length));
 	return [...head, ...tasks.slice(0, keepTasks), ...tailKept];
 }
@@ -466,7 +467,7 @@ function advanceAfterAnswer() {
 			editor.setText("");
 		}
 
-		enterQuestion(questions[0]);
+		enterQuestion(questions[0]!);
 
 		function handleInput(data: string) {
 			if (inputMode) {
@@ -609,7 +610,7 @@ function advanceAfterAnswer() {
 				const wrapWidth = Math.max(1, safeWidth - PIPE_WIDTH);
 				const wrapped = wrapTextWithAnsi(styledLine, wrapWidth);
 				for (let i = 0; i < wrapped.length; i++) {
-					lines.push(i === 0 ? wrapped[i] : PIPE_PREFIX + wrapped[i]);
+					lines.push(i === 0 ? wrapped[i]! : PIPE_PREFIX + wrapped[i]!);
 				}
 			};
 
@@ -649,9 +650,9 @@ function advanceAfterAnswer() {
 						// "[x] t1: ..." being misinterpreted as a key-value pair.
 						const pipeTaskMatch = afterPipe.match(/^(\[.\])(\s+)(.+)$/);
 						if (pipeTaskMatch) {
-							const bracket = pipeTaskMatch[1];
-							const sep = pipeTaskMatch[2];
-							const rest = pipeTaskMatch[3];
+							const bracket = pipeTaskMatch[1]!;
+							const sep = pipeTaskMatch[2]!;
+							const rest = pipeTaskMatch[3]!;
 							// Preserve inner whitespace between │ and the task marker (e.g. "   " in "│   [x]...")
 							const pipeContent = trimmed.slice(1);
 							const innerWs = pipeContent.slice(0, pipeContent.length - pipeContent.trimStart().length);
@@ -694,9 +695,9 @@ function advanceAfterAnswer() {
 					// 6. Task checkbox item — "[ ] ...", "[x] ...", or "[~] ..." (with optional indent)
 					const checkMatch = trimmed.match(/^(\[.\])(\s+)(.+)$/);
 					if (checkMatch) {
-						const bracket = checkMatch[1];
-						const sep = checkMatch[2];
-						const rest = checkMatch[3];
+						const bracket = checkMatch[1]!;
+						const sep = checkMatch[2]!;
+						const rest = checkMatch[3]!;
 						const indent = rawLine.slice(0, rawLine.length - trimmed.length);
 						const color = bracket === "[x]" ? "success" : "warning";
 						addWrapped(indent + theme.fg(color, bracket) + sep + theme.fg("muted", rest));
@@ -716,8 +717,8 @@ function advanceAfterAnswer() {
 				const tabs: string[] = ["← "];
 				for (let i = 0; i < questions.length; i++) {
 					const isActive = i === currentTab;
-					const isAnswered = answers.has(questions[i].id);
-					const label = ` ${isAnswered ? "■" : "□"} ${questions[i].id} `;
+					const isAnswered = answers.has(questions[i]!.id);
+					const label = ` ${isAnswered ? "■" : "□"} ${questions[i]!.id} `;
 					tabs.push(isActive ? theme.bg("selectedBg", theme.fg("text", label)) : theme.fg(isAnswered ? "success" : "muted", label));
 					tabs.push(" ");
 				}
@@ -733,7 +734,7 @@ function advanceAfterAnswer() {
 				optionsStartIndex = lines.length;
 				for (let i = 0; i < opts.length; i++) {
 					const start = lines.length;
-					const opt = opts[i];
+					const opt = opts[i]!;
 					const selected = i === optionIndex;
 					const prefix = selected ? theme.fg("accent", "> ") : "  ";
 					const recTag = !opt.isCustom && q?.recommended === i ? theme.fg("success", " ★") : "";
@@ -792,8 +793,9 @@ function advanceAfterAnswer() {
 			add(theme.fg("accent", "─".repeat(safeWidth)));
 			// Safety net: ensure no returned line exceeds the terminal width
 			for (let i = 0; i < lines.length; i++) {
-				if (lines[i] && visibleWidth(lines[i]) > safeWidth) {
-					lines[i] = truncateToWidth(lines[i], safeWidth);
+				const line = lines[i];
+				if (line && visibleWidth(line) > safeWidth) {
+					lines[i] = truncateToWidth(line, safeWidth);
 				}
 			}
 			// Churn guard: bound to the terminal height (see factory top) so the

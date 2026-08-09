@@ -194,7 +194,7 @@ describe("Subagent E2E", () => {
 		try {
 			const result = f.run();
 			assertToolEvents(result.stdout, "update_goal", (events) => {
-				const ev = events[0];
+				const ev = events[0]!;
 				assert.equal(ev.start.args.status, "complete",
 					"args must contain status complete");
 				assert.equal(ev.start.args.verificationSummary, undefined,
@@ -218,7 +218,7 @@ describe("Subagent E2E", () => {
 		try {
 			const result = f.run();
 			assertToolEvents(result.stdout, "update_goal", (events) => {
-				const ev = events[0];
+				const ev = events[0]!;
 				assert.equal(ev.start.args.status, "complete",
 					"args must contain status complete");
 				assert.equal(ev.start.args.verificationSummary, undefined,

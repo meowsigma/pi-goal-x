@@ -276,7 +276,7 @@ export function registerDraftingTools(core: GoalCore): void {
 		}, { additionalProperties: false }),
 		async execute(_id, params, _signal, _update, ctx) {
 			if (!activeDraft(core)) return { content: [{ type: "text", text: "No guided goal draft is active." }], details: goalDetails(core.state.goal) };
-			const questions: GoalQuestionnaireQuestion[] = params.questions.map((q: any) => ({ ...q, allowCustom: q.allow_custom }));
+			const questions: GoalQuestionnaireQuestion[] = params.questions.map((q: GoalQuestionnaireQuestion & { allow_custom?: boolean }) => ({ ...q, allowCustom: q.allow_custom }));
 			core.enterGoalModal();
 			try {
 				const result = await runGoalQuestionnaire(ctx, questions);

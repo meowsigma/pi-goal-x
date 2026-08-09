@@ -181,7 +181,7 @@ export function extractGoalIdFromInjectedMessage(text: string): string | null {
 	// Borrowed from pi-codex-goal. More robust than bare bracket text because
 	// the angle brackets + attributes are nearly impossible for users to type
 	// by accident, and the structure is grep-able / parse-able by external tooling.
-	const xmlMatch = text.match(/^<pi_goal_continuation\s+goal_id=\"([^\"]+)\"/);
+	const xmlMatch = text.match(/^<pi_goal_continuation\s+goal_id="([^"]+)"/);
 	if (xmlMatch) return xmlMatch[1] ?? null;
 	const match = text.match(/^\[(?:GOAL CHECKPOINT|GOAL CONTINUATION|GOAL STALE) goalId=([^\]\s]+)\]/);
 	return match?.[1] ?? null;

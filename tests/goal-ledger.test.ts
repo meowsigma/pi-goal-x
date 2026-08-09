@@ -42,8 +42,8 @@ test("appendGoalEvent creates ledger and appends event", () => {
 
   const result = readGoalLedger(ctx);
   assert.equal(result.events.length, 1);
-  assert.equal(result.events[0].type, "goal_created");
-  assert.equal((result.events[0] as { goalId: string }).goalId, "g1");
+  assert.equal(result.events[0]!.type, "goal_created");
+  assert.equal((result.events[0]! as { goalId: string }).goalId, "g1");
   assert.equal(result.malformed, 0);
   cleanup(ctx);
 });

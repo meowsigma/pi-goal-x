@@ -25,13 +25,13 @@ export function deriveTasksFromObjective(objective: string): GoalTask[] | null {
 		const checklist = line.match(/^(?:-\s*)?\[\s\]\s+(.+)$/);
 		if (checklist) {
 			sawChecklist = true;
-			tasks.push({ id: `step-${tasks.length + 1}`, title: checklist[1].trim(), status: "pending" });
+			tasks.push({ id: `step-${tasks.length + 1}`, title: checklist[1]!.trim(), status: "pending" });
 			continue;
 		}
 		// Ordered steps at line starts.
 		const numbered = line.match(/^(\d{1,2})\s*[.):]\s+(.+)$/);
 		if (numbered) {
-			tasks.push({ id: `step-${tasks.length + 1}`, title: numbered[2].trim(), status: "pending" });
+			tasks.push({ id: `step-${tasks.length + 1}`, title: numbered[2]!.trim(), status: "pending" });
 		}
 	}
 

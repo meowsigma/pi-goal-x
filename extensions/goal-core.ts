@@ -71,7 +71,7 @@ export function statusLabel(goal: Pick<GoalDisplayRecordLike, "sisyphus" | "stat
 export function footerStatus(goal: GoalDisplayRecordLike): string {
 	const usageBits: string[] = [];
 	if (goal.usage.activeSeconds > 0) usageBits.push(formatDuration(goal.usage.activeSeconds));
-	if (goal.usage.tokensUsed > 0) usageBits.push(formatTokenValue(goal.usage.tokensUsed).split(" ")[0]);
+	if (goal.usage.tokensUsed > 0) usageBits.push(formatTokenValue(goal.usage.tokensUsed).split(" ")[0]!);
 	const usage = usageBits.length > 0 ? ` [${usageBits.join(" ")}]` : "";
 	const prefix = goal.sisyphus ? "goal✊" : "goal";
 	return `${prefix}: ${statusLabel(goal)}${usage} - ${truncateText(goal.objective, 60)}`;

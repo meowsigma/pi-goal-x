@@ -118,14 +118,14 @@ test("regression: agent question stays readable when the goal panel leaves littl
 	// border AND the question text, leaving only option fragments + footer.
 	const lines = renderGoalQuestionDialog({ rows: 24, baseFrameLines: 19 });
 	assert.ok(lines.length <= 10, "dialog stays within the terminal-height bound");
-	assert.match(lines[0], /^─+$/, "top border must be visible");
+	assert.match(lines[0]!, /^─+$/, "top border must be visible");
 	assert.ok(lines.some((l) => l.includes(REPRO_QUESTION_TEXT)), "question text must be visible");
 	assert.ok(lines.some((l) => l.includes("Dev toolchain only")), "recommended first option must be visible");
 	// §options-scroll: when content is clipped the reserved bottom edge is the
 	// scroll indicator ("… +N more · PgUp/PgDn scroll") — the border is
 	// reachable by scrolling to the end. The indicator, not a silent slice,
 	// tells the user the remaining options exist.
-	const last = lines[lines.length - 1];
+	const last = lines[lines.length - 1]!;
 	assert.ok(
 		/^─+$/.test(last) || last.includes("more · PgUp/PgDn scroll"),
 		"bottom edge is the border or the scroll indicator when clipped",
@@ -207,7 +207,7 @@ test("regression: the goal confirmation dialog presents the tasks and the audito
 	// presentation.
 	const lines = renderProposalDialog({ rows: 24, baseFrameLines: 19 });
 	assert.ok(lines.length <= 10, "dialog stays within the terminal-height bound");
-	assert.match(lines[0], /^─+$/, "top border must be visible");
+	assert.match(lines[0]!, /^─+$/, "top border must be visible");
 	assert.ok(lines.some((l) => l.includes("Confirm Goal Draft")), "question must be visible");
 	assert.ok(lines.some((l) => l.includes("Tasks proposed for confirmation:")), "tasks header must be visible");
 	assert.ok(
@@ -220,7 +220,7 @@ test("regression: the goal confirmation dialog presents the tasks and the audito
 	);
 	assert.ok(lines.some((l) => l.includes("Confirm — create this goal now")), "confirm option must be visible");
 	assert.ok(lines.some((l) => l.includes("Enter select")), "footer hint must be visible");
-	assert.match(lines[lines.length - 1], /^─+$/, "bottom border must be visible");
+	assert.match(lines[lines.length - 1]!, /^─+$/, "bottom border must be visible");
 });
 
 test("fitDialogLines keeps the protected head and never exceeds the bound", () => {
@@ -296,7 +296,7 @@ test("fitDialogLines viewport: ▲ indicator and never-exceeds-bound across the 
 	// Scrolled down: the top content row gives way to a themed ▲ indicator.
 	const scrolled: DialogScrollState = { scrollTop: 4, needsFollow: false, optionRanges: [], followIndex: 0 };
 	const out = fitDialogLines(lines, 5, 2, null, scrolled);
-	assert.ok(out[0].startsWith("▲ 4 more"), "▲ indicator at the top when scrolled down");
+	assert.ok(out[0]!.startsWith("▲ 4 more"), "▲ indicator at the top when scrolled down");
 	assert.ok(out.length <= 5);
 	// Churn-guard invariant: never exceeds the bound at ANY scroll position or
 	// degenerate budget (the head itself may fill the bound).
@@ -386,12 +386,12 @@ test("fitDialogLines proposal mode: never exceeds the bound even at degenerate b
 	// Budget 6: head + tail kept from its end (border/footer first).
 	const tight = fitDialogLines(PROPOSAL_UNIT_LINES, 6, 2, PROPOSAL_UNIT_SEGMENTS);
 	assert.ok(tight.length <= 6);
-	assert.match(tight[tight.length - 1], /^─+$/, "bottom border must be visible");
+	assert.match(tight[tight.length - 1]!, /^─+$/, "bottom border must be visible");
 	assert.ok(tight.some((l) => l.includes("Enter select")), "footer hint must be visible");
 	// Budget 3: head + bottom border only, still within the bound.
 	const tiny = fitDialogLines(PROPOSAL_UNIT_LINES, 3, 2, PROPOSAL_UNIT_SEGMENTS);
 	assert.equal(tiny.length, 3);
-	assert.match(tiny[tiny.length - 1], /^─+$/, "bottom border must be visible");
+	assert.match(tiny[tiny.length - 1]!, /^─+$/, "bottom border must be visible");
 	// Budget 1: the head itself fills the bound.
 	assert.equal(fitDialogLines(PROPOSAL_UNIT_LINES, 1, 2, PROPOSAL_UNIT_SEGMENTS).length, 1);
 });
@@ -539,7 +539,7 @@ test("fitDialogLines proposal mode: the auditor toggle line is never sacrificed 
 	assert.ok(fitted.some((l) => l.includes("press 'a' to toggle")), "auditor toggle line stays in frame");
 	assert.ok(fitted.some((l) => l.includes("[ ] task-1: First")), "at least one task line stays in frame");
 	assert.ok(fitted.some((l) => l.includes("Confirm — create this goal now")), "options stay in frame");
-	assert.match(fitted[fitted.length - 1], /^─+$/, "bottom border stays");
+	assert.match(fitted[fitted.length - 1]!, /^─+$/, "bottom border stays");
 });
 
 test("regression: the bounded proposal dialog keeps task lines and the auditor toggle with real-TUI ANSI styling", () => {
@@ -548,7 +548,7 @@ test("regression: the bounded proposal dialog keeps task lines and the auditor t
 	// zero task lines and no auditor status. Both must be visible under ANSI
 	// styling within the bound.
 	const component = openProposalDialogComponent({ rows: 24, baseFrameLines: 19 });
-	const plain = component.render(100).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+	const plain = component.render(100).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "")); // eslint-disable-line no-control-regex -- ANSI SGR matching
 	assert.ok(plain.length <= 10, "dialog stays within the bound");
 	assert.ok(plain.some((l) => l.includes("[ ] task-1:")), "a task line is visible under ANSI styling");
 	assert.ok(plain.some((l) => l.includes("press 'a' to toggle")), "auditor toggle line is visible under ANSI styling");
@@ -632,7 +632,7 @@ test("bounded agent question: every option is reachable via PgUp/PgDn, nothing t
 			recommended: 0,
 		}],
 	});
-	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "");
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
 	const top = component.render(100).map(strip);
 	assert.ok(top.length <= 10, "dialog stays within the terminal-height bound");
 	assert.ok(top.join("\n").includes("Which definition of parity should the release goal adopt?"), "question fully visible at the top");
@@ -712,7 +712,7 @@ test("multi-question tabs: each tab's options reachable and the viewport resets 
 });
 
 test("selection auto-follow: ↓ on an off-screen option scrolls it into view (ANSI-styled)", () => {
-	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "");
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
 	const component = openQuestionnaireComponent({
 		rows: 24,
 		baseFrameLines: 19,
@@ -741,7 +741,7 @@ test("selection auto-follow: ↓ on an off-screen option scrolls it into view (A
 });
 
 test("input mode keeps the editor visible when bounded (tail-keep unchanged)", () => {
-	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "");
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
 	const component = openQuestionnaireComponent({
 		rows: 24,
 		baseFrameLines: 19,

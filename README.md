@@ -355,6 +355,7 @@ Each session can focus on one goal while the project keeps other goals open.
 /goal-status verbose         Show the focused goal with full diagnostic detail
 /goal-status health          Check goal storage/runtime health (read-only)
 /goal-refresh                Re-read storage caches and report external changes
+/goal-recovery               Read-only recovery report; `/goal-recovery repair` fixes stale locks + snapshot after confirmation
 /goal-focus                  Select an open goal
 /goal-unfocus                Remove the session’s focus
 /goal-tweak <change>         Revise the focused goal

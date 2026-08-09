@@ -214,3 +214,24 @@ throttle boundary, full-events API untouched. All pass; suite 765/765;
   matches after write; delta updates keep the key fresh; legacy fallback is
   served (hydration marker proves snapshot origin); legacy file removed on
   write. Suite 775/775; tsc + lint clean.
+
+## 2026-08-09 — Phase 3d: read-only recovery report + guarded repair
+
+- New `extensions/goal-recovery.ts` + `/goal-recovery` command (read-only by
+  default): reports malformed goal files (active_goal_*.md that fail to
+  parse), malformed ledger lines (from the ledger reader), stale locks
+  (`.locks/*.lock` with a dead pid or age > 30s TTL), and orphaned pool-
+  snapshot entries (no matching file). `formatRecoveryReport` renders the
+  report; never appends ledger events or rewrites goal files.
+- `/goal-recovery repair`: removes stale locks and refreshes the pool
+  snapshot — only with `ctx.ui.confirm` approval, and every touched file is
+  copied to `.pi/goals/.recovery-backup/<timestamp>/` first. Malformed goal
+  files and ledger lines are reported but never rewritten automatically
+  (rewriting user-owned data is out of scope; automatic ledger rewriting is
+  a documented non-goal).
+- README + curated command list tests updated (16 commands).
+- Tests (5, tests/goal-recovery.test.ts): healthy report; all four failure
+  classes identified; confirmation rejection touches nothing; confirmed
+  repair backs up + removes lock + refreshes snapshot (orphan gone);
+  read-only invariance (no ledger appends, no goal-file rewrites).
+  Suite 780/780; tsc + lint clean; gate PASS.

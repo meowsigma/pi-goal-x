@@ -8,7 +8,7 @@
  * `npm run test:integration`.
  */
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import goalExtension from "../../extensions/goal.ts";
 import { createGoal, goalFocusDetails } from "../../extensions/goal-record.ts";
-import { parseGoalFile, writeActiveGoalFile } from "../../extensions/storage/goal-files.ts";
+import { activePathForGoal, parseGoalFile, serializeGoalFile, writeActiveGoalFile } from "../../extensions/storage/goal-files.ts";
 import { goalLedgerPath } from "../../extensions/goal-ledger.ts";
 
 interface Harness {
@@ -201,6 +201,44 @@ describe("five-tool handler integration", () => {
 			assert.match(notification, /OK Goal file:/);
 			assert.equal(activeGoalFiles(f.cwd).length, 1, "health mode must not mutate goal storage");
 			assert.equal(ledgerEvents(f.cwd).length, 0, "health mode must not append ledger events");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("/goal-refresh invalidates caches and reports external changes", async () => {
+		const f = fixture();
+		try {
+			// Initial settings file so the settings diff compares content, not
+			// absence -> presence (a first-time write is already visible to the
+			// before-stat and correctly reports no change).
+			writeFileSync(path.join(f.cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ subtaskDepth: 2 }), "utf8");
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+			await start(h);
+
+			await h.commands.get("goal-refresh")?.handler("", h.ctx);
+			const first = h.notifies.at(-1)?.msg ?? "";
+			assert.match(first, /no changes detected/, "unchanged state reports no changes");
+
+			// External edits (raw fs, bypassing the extension's own cache
+			// invalidation): a second goal file, a ledger line, and a settings
+			// rewrite with different content.
+			const second = createGoal({ objective: "External goal", autoContinue: false, sisyphus: false }, Date.UTC(2026, 8, 4, 10, 0, 0));
+			writeFileSync(path.join(f.cwd, ".pi", "goals", path.basename(activePathForGoal({ cwd: f.cwd }, second))), serializeGoalFile(second), "utf8");
+			appendFileSync(goalLedgerPath({ cwd: f.cwd }), JSON.stringify({ type: "goal_created", goalId: second.id, objective: "External goal", sisyphus: false, autoContinue: false, at: new Date().toISOString() }) + "\n", "utf8");
+			writeFileSync(path.join(f.cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ subtaskDepth: 3, provider: "anthropic" }), "utf8");
+
+			await h.commands.get("goal-refresh")?.handler("", h.ctx);
+			const report = h.notifies.at(-1)?.msg ?? "";
+			assert.match(report, /goal-refresh: re-read caches from disk — 3 change\(s\):/);
+			assert.ok(report.includes(`pool: 1 goal(s) added — ${second.id}`), `pool addition reported for ${second.id}`);
+			assert.match(report, /ledger: 0 -> 1 events/);
+			assert.match(report, /settings: effective settings changed \(external edit\)/);
+
+			// A second refresh with no new external edits reports no changes again.
+			await h.commands.get("goal-refresh")?.handler("", h.ctx);
+			const again = h.notifies.at(-1)?.msg ?? "";
+			assert.match(again, /no changes detected/);
 		} finally {
 			f.cleanup();
 		}

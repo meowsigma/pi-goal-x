@@ -88,6 +88,7 @@ const EXPECTED_REGISTERED_COMMANDS = [
 	"sisyphus-direct",
 	"goal-list",
 	"goal-status",
+	"goal-refresh",
 	"goal-focus",
 	"goal-unfocus",
 	"goal-settings",
@@ -104,7 +105,7 @@ test("baseline: execution and drafting tools are registered in pinned order", ()
 	assert.deepEqual(registeredTools, [...EXPECTED_REGISTERED_TOOLS]);
 });
 
-test("baseline: exactly 14 slash commands are registered, in pinned order", () => {
+test("baseline: exactly 15 slash commands are registered, in pinned order", () => {
 	const { pi, registeredCommands } = createRecordingPi();
 	piGoalExtension(pi as never);
 

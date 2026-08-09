@@ -15,7 +15,7 @@ import { parseGoalFile } from "../extensions/storage/goal-files.ts";
 
 const CURATED_COMMANDS = [
 	"goal", "sisyphus", "goal-direct", "sisyphus-direct", "goal-tweak", "goal-pause", "goal-resume",
-	"goal-clear", "goal-list", "goal-status", "goal-focus", "goal-unfocus", "goal-settings", "goal-cancel",
+	"goal-clear", "goal-list", "goal-status", "goal-refresh", "goal-focus", "goal-unfocus", "goal-settings", "goal-cancel",
 ];
 
 const REMOVED_COMMANDS = ["goals", "goals-set", "sisyphus-set", "goal-abort"];

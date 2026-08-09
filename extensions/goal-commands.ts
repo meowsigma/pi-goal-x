@@ -17,12 +17,44 @@ import {
 	otherOpenGoalCount,
 } from "./goal-pool.ts";
 import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
-import { readGoalLedger } from "./goal-ledger.ts";
+import { invalidateGoalLedgerCache, readGoalLedger } from "./goal-ledger.ts";
 import { buildGoalStatusText } from "./goal-status.ts";
-import { effectiveSettingsReport, envOverrideFor } from "./goal-settings.ts";
-import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
+import { effectiveSettingsReport, envOverrideFor, invalidateGoalSettingsCache } from "./goal-settings.ts";
+import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
+
+export interface GoalRefreshState {
+	poolIds: Iterable<string>;
+	ledgerEvents: number;
+	ledgerMalformed: number;
+	/** Stable fingerprint of the effective settings (JSON of the parsed file). */
+	settings: string;
+}
+
+/**
+ * Pure diff of a goal-refresh cycle (before invalidation vs after re-read).
+ * Unit-testable without the command harness; the command renders the changes.
+ */
+export function diffGoalRefreshState(before: GoalRefreshState, after: GoalRefreshState): string[] {
+	const changes: string[] = [];
+	const beforeIds = new Set(before.poolIds);
+	const afterIds = new Set(after.poolIds);
+	const added = [...afterIds].filter((id) => !beforeIds.has(id)).sort();
+	const removed = [...beforeIds].filter((id) => !afterIds.has(id)).sort();
+	if (added.length > 0) changes.push(`pool: ${added.length} goal(s) added — ${added.join(", ")}`);
+	if (removed.length > 0) changes.push(`pool: ${removed.length} goal(s) removed — ${removed.join(", ")}`);
+	if (after.ledgerEvents !== before.ledgerEvents) {
+		changes.push(`ledger: ${before.ledgerEvents} -> ${after.ledgerEvents} events`);
+	}
+	if (after.ledgerMalformed !== before.ledgerMalformed) {
+		changes.push(`ledger: malformed entries ${before.ledgerMalformed} -> ${after.ledgerMalformed}`);
+	}
+	if (before.settings !== after.settings) {
+		changes.push("settings: effective settings changed (external edit)");
+	}
+	return changes;
+}
 import {
 	AUDITOR_THINKING_LEVELS,
 	buildAuditorModelChoices,
@@ -155,6 +187,49 @@ export function registerGoalCommands(core: GoalCore): void {
 		core.clearContinuationState();
 		core.clearActiveAccounting();
 		core.replaceGoal({ objective, autoContinue: true, sisyphus: mode === "sisyphus" }, ctx, true, verificationContract);
+	}
+
+	async function runGoalRefresh(ctx: ExtensionContext): Promise<void> {
+		// Pre-state snapshots are cache-served (0 fs ops); the re-reads after
+		// invalidation go cold. This is the explicit user-owned path for picking
+		// up external edits — no watchers, no per-turn polling.
+		const beforePool = readActiveGoalPool(ctx);
+		const beforeLedger = readGoalLedger(ctx);
+		// Settings: the before fingerprint is cache-served; the after one is a
+		// cold re-read after invalidation — so an external settings edit shows
+		// up as a fingerprint difference.
+		const beforeSettings = settingsFingerprint(ctx);
+
+		invalidateGoalPoolCache();
+		invalidateGoalLedgerCache();
+		invalidateGoalSettingsCache();
+
+		const afterPool = readActiveGoalPool(ctx);
+		const afterLedger = readGoalLedger(ctx);
+		const afterSettings = settingsFingerprint(ctx);
+
+		const changes = diffGoalRefreshState({
+			poolIds: beforePool.keys(),
+			ledgerEvents: beforeLedger.events.length,
+			ledgerMalformed: beforeLedger.malformed,
+			settings: beforeSettings,
+		}, {
+			poolIds: afterPool.keys(),
+			ledgerEvents: afterLedger.events.length,
+			ledgerMalformed: afterLedger.malformed,
+			settings: afterSettings,
+		});
+
+		const text = changes.length > 0
+			? `goal-refresh: re-read caches from disk — ${changes.length} change(s):\n${changes.map((c) => `  - ${c}`).join("\n")}`
+			: "goal-refresh: no changes detected — caches were already current.";
+		ctx.ui.notify(text, "info");
+		core.updateUI(ctx);
+	}
+
+	/** Stable fingerprint of the effective settings (cache-served before invalidation). */
+	function settingsFingerprint(ctx: ExtensionContext): string {
+		return JSON.stringify(loadGoalSettingsFileConfig(ctx.cwd));
 	}
 
 	async function showGoalStatus(rawArgs: string, ctx: ExtensionContext): Promise<void> {
@@ -545,6 +620,12 @@ export function registerGoalCommands(core: GoalCore): void {
 		description: "Show the unified goal dashboard (read-only). Append \"verbose\" for full detail or \"health\" for storage/runtime checks.",
 		handler: async (rawArgs, ctx) => {
 			await showGoalStatus(rawArgs ?? "", ctx);
+		},
+	});
+	pi.registerCommand("goal-refresh", {
+		description: "Re-read goal storage caches (pool, ledger, settings) from disk and report what changed. Picks up external edits to .pi files — no file watchers needed.",
+		handler: async (_rawArgs, ctx) => {
+			await runGoalRefresh(ctx);
 		},
 	});
 	pi.registerCommand("goal-focus", {

@@ -183,6 +183,12 @@ Run read-only storage/runtime health checks:
 /goal-status health
 ```
 
+Re-read goal storage caches (pool, ledger, settings) from disk and report what changed — picks up external edits to `.pi` files without file watchers:
+
+```text
+/goal-refresh
+```
+
 Select an open goal for the current session:
 
 ```text
@@ -348,6 +354,7 @@ Each session can focus on one goal while the project keeps other goals open.
 /goal-status                 Show the focused goal (unified dashboard)
 /goal-status verbose         Show the focused goal with full diagnostic detail
 /goal-status health          Check goal storage/runtime health (read-only)
+/goal-refresh                Re-read storage caches and report external changes
 /goal-focus                  Select an open goal
 /goal-unfocus                Remove the session’s focus
 /goal-tweak <change>         Revise the focused goal

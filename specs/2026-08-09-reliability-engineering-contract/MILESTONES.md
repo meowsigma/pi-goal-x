@@ -176,3 +176,21 @@ growth), version mismatch → full, malformed body → full, truncation below
 coverage → full, external growth replay, mutation-path maintenance across the
 throttle boundary, full-events API untouched. All pass; suite 765/765;
 `tsc --noEmit` clean; lint clean; gate PASS 3/3 consecutive runs.
+
+## 2026-08-09 — Phase 3b: /goal-refresh command
+
+- Registered `goal-refresh` (goal-commands.ts): invalidates the pool, ledger
+  (incl. checkpoint mirror), and settings caches, then re-reads cold and
+  reports a diff — the explicit user-owned path for external `.pi` edits; no
+  watchers, no per-turn polling.
+- Pure `diffGoalRefreshState(before, after)` (exported, unit-testable): pool
+  goal additions/removals, ledger event-count + malformed-entry changes,
+  settings fingerprint changes (cache-served before vs cold after — a live
+  stat can never see a pre-command change, so the parsed-settings fingerprint
+  is the comparison key).
+- README: `/goal-refresh` added to the quick-reference + command table;
+  curated command list tests updated 14 → 15 (pinned order).
+- Tests: 5 unit (unchanged / pool add+remove / ledger growth / malformed /
+  settings fingerprint / combined) + 1 integration flow (unchanged → external
+  goal file + ledger line + settings rewrite via raw fs → 3 changes reported
+  → again no changes). Suite 771/771; tsc + lint clean; gate PASS.

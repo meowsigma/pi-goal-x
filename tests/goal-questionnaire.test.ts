@@ -7,6 +7,7 @@ import type { GoalTask } from "../extensions/goal-record.ts";
 import { renderConfirmationTasks } from "../extensions/goal-task-confirmation.ts";
 import {
 	computeDialogLineLimit,
+	type DialogScrollState,
 	findProposalPresentationSegments,
 	fitDialogLines,
 	formatQuestionnaireAnswers,
@@ -120,7 +121,15 @@ test("regression: agent question stays readable when the goal panel leaves littl
 	assert.match(lines[0], /^─+$/, "top border must be visible");
 	assert.ok(lines.some((l) => l.includes(REPRO_QUESTION_TEXT)), "question text must be visible");
 	assert.ok(lines.some((l) => l.includes("Dev toolchain only")), "recommended first option must be visible");
-	assert.match(lines[lines.length - 1], /^─+$/, "bottom border must be visible");
+	// §options-scroll: when content is clipped the reserved bottom edge is the
+	// scroll indicator ("… +N more · PgUp/PgDn scroll") — the border is
+	// reachable by scrolling to the end. The indicator, not a silent slice,
+	// tells the user the remaining options exist.
+	const last = lines[lines.length - 1];
+	assert.ok(
+		/^─+$/.test(last) || last.includes("more · PgUp/PgDn scroll"),
+		"bottom edge is the border or the scroll indicator when clipped",
+	);
 });
 
 // Proposal confirmation repro: the goal confirmation dialog (showProposalDialog)
@@ -230,28 +239,75 @@ test("fitDialogLines tail-keeps context-heavy dialogs so options/footer/border s
 	assert.deepEqual(fitDialogLines(lines, 8, 3), ["─", "Confirm", "", "1. A", "2. B", "", "footer", "─"]);
 });
 
-test("fitDialogLines keeps the top options for plain select-mode questions", () => {
+test("fitDialogLines viewport: full content stays reachable, nothing truncated or dropped", () => {
 	const lines = ["─", "Q", "", "1. first", "2. second", "3. third", "", "footer", "─"];
-	// Select question (options right after the head): top options + footer +
-	// bottom border stay; the recommended first option is never hidden.
-	assert.deepEqual(fitDialogLines(lines, 6, 3, true), ["─", "Q", "", "1. first", "footer", "─"]);
-	assert.deepEqual(fitDialogLines(lines, 8, 3, true), ["─", "Q", "", "1. first", "2. second", "3. third", "footer", "─"]);
+	// Bound 6: content window 5 + reserved bottom edge. The top options stay
+	// visible (recommended/first option never hidden) and the clipped rest is
+	// advertised with a scroll hint instead of being silently dropped.
+	const scroll: DialogScrollState = { scrollTop: 0, needsFollow: false, optionRanges: [], followIndex: 0 };
+	assert.deepEqual(fitDialogLines(lines, 6, 3, null, scroll), [
+		"─",
+		"Q",
+		"",
+		"1. first",
+		"2. second",
+		"… +3 more · PgUp/PgDn scroll",
+	]);
+	// Scroll position is clamped to the content end.
+	scroll.scrollTop = 99;
+	assert.deepEqual(fitDialogLines(lines, 6, 3, null, scroll), [
+		"▲ 3 more",
+		"2. second",
+		"3. third",
+		"",
+		"footer",
+		"─",
+	]);
+	// Every content line is reachable across the scroll range: the union of
+	// viewports over all scroll positions covers the full dialog.
+	const full = new Set(lines);
+	const seen = new Set<string>();
+	for (let s = 0; s <= lines.length; s++) {
+		for (const l of fitDialogLines(lines, 6, 3, null, { scrollTop: s, needsFollow: false, optionRanges: [], followIndex: 0 })) {
+			if (!l.startsWith("… +") && !l.startsWith("▲")) seen.add(l);
+		}
+	}
+	for (const l of full) assert.ok(seen.has(l), `content line reachable: ${l}`);
 });
 
-test("fitDialogLines never exceeds the bound even at degenerate budgets", () => {
+test("fitDialogLines viewport: selection auto-follow nudges the window into view", () => {
 	const lines = ["─", "Q", "", "1. first", "2. second", "3. third", "", "footer", "─"];
-	// 8-row terminal: maxDialogLines=4 → head + footer + border only, no overflow.
-	assert.deepEqual(fitDialogLines(lines, 4, 2, true), ["─", "Q", "footer", "─"]);
-	assert.equal(fitDialogLines(lines, 4, 2, true).length, 4);
-	// Budget 3: one option line fits before the footer/border.
-	assert.deepEqual(fitDialogLines(lines, 5, 2, true), ["─", "Q", "1. first", "footer", "─"]);
-	assert.equal(fitDialogLines(lines, 5, 2, true).length, 5);
-	// Budget 1: only the bottom border fits after the head.
-	assert.equal(fitDialogLines(lines, 3, 2, true).length, 3);
-	// Head-only when the head itself fills the bound.
-	assert.deepEqual(fitDialogLines(lines, 2, 2, true), ["─", "Q"]);
-	// Same guarantee for the tail-keep path.
-	assert.ok(fitDialogLines(["─", "Q", "", "ctx", "", "1. A", "", "footer", "─"], 4, 2, false).length <= 4);
+	const ranges: Array<[number, number]> = [[3, 3], [4, 4], [5, 5]];
+	// Selection below the window: follow nudges scrollTop so it is visible.
+	const scroll: DialogScrollState = { scrollTop: 0, needsFollow: true, optionRanges: ranges, followIndex: 2 };
+	const out = fitDialogLines(lines, 4, 3, null, scroll);
+	assert.equal(scroll.scrollTop, 3, "window nudged to reveal the selected option");
+	assert.ok(out.some((l) => l.includes("3. third")), "selected option visible");
+	assert.equal(scroll.needsFollow, false, "follow flag consumed");
+	// Selection already visible: no nudge.
+	const ranges2: Array<[number, number]> = [[1, 1], [3, 3], [5, 5]];
+	const scroll2: DialogScrollState = { scrollTop: 0, needsFollow: true, optionRanges: ranges2, followIndex: 0 };
+	fitDialogLines(lines, 4, 3, null, scroll2);
+	assert.equal(scroll2.scrollTop, 0, "no nudge when the selection is already visible");
+});
+
+test("fitDialogLines viewport: ▲ indicator and never-exceeds-bound across the scroll range", () => {
+	const lines = ["─", "Q", "", "1. first", "2. second", "3. third", "", "footer", "─"];
+	// Scrolled down: the top content row gives way to a themed ▲ indicator.
+	const scrolled: DialogScrollState = { scrollTop: 4, needsFollow: false, optionRanges: [], followIndex: 0 };
+	const out = fitDialogLines(lines, 5, 2, null, scrolled);
+	assert.ok(out[0].startsWith("▲ 4 more"), "▲ indicator at the top when scrolled down");
+	assert.ok(out.length <= 5);
+	// Churn-guard invariant: never exceeds the bound at ANY scroll position or
+	// degenerate budget (the head itself may fill the bound).
+	for (const bound of [1, 2, 3, 4, 5, 8]) {
+		for (let s = 0; s <= lines.length + 2; s++) {
+			const sc: DialogScrollState = { scrollTop: s, needsFollow: false, optionRanges: [], followIndex: 0 };
+			assert.ok(fitDialogLines(lines, bound, Math.min(2, bound), null, sc).length <= bound, `bound ${bound} at scroll ${s}`);
+		}
+	}
+	// Tail-keep (no scroll state) keeps its own bound guarantee.
+	assert.ok(fitDialogLines(["─", "Q", "", "ctx", "", "1. A", "", "footer", "─"], 4, 2).length <= 4);
 });
 
 // Proposal-confirmation synthetic render (goal confirmation dialog shape):
@@ -281,14 +337,14 @@ const PROPOSAL_UNIT_LINES = [
 const PROPOSAL_UNIT_SEGMENTS = { tasksStart: 6, tasksEnd: 9, tailStart: 13 };
 
 test("fitDialogLines proposal mode: content that fits renders byte-identical", () => {
-	assert.deepEqual(fitDialogLines(PROPOSAL_UNIT_LINES, 30, 2, false, PROPOSAL_UNIT_SEGMENTS), PROPOSAL_UNIT_LINES);
+	assert.deepEqual(fitDialogLines(PROPOSAL_UNIT_LINES, 30, 2, PROPOSAL_UNIT_SEGMENTS), PROPOSAL_UNIT_LINES);
 });
 
 test("fitDialogLines proposal mode: head + tasks + options/footer/border kept within budget", () => {
 	// Budget 12: head (2) + tasks header + all 3 task lines + the whole tail.
 	// The objective-box middle and the auditor line are sacrificed in-frame.
 	assert.deepEqual(
-		fitDialogLines(PROPOSAL_UNIT_LINES, 12, 2, false, PROPOSAL_UNIT_SEGMENTS),
+		fitDialogLines(PROPOSAL_UNIT_LINES, 12, 2, PROPOSAL_UNIT_SEGMENTS),
 		[
 			"─",
 			" Confirm Goal Draft",
@@ -310,7 +366,7 @@ test("fitDialogLines proposal mode: strips blank spacing, then drops task lines 
 	// Budget 10: head + tasks header + first 2 task lines + options/footer/
 	// border (the blank between options and footer is stripped; task-3 drops
 	// only after that, and stays readable in the scrollback presentation).
-	const fitted = fitDialogLines(PROPOSAL_UNIT_LINES, 10, 2, false, PROPOSAL_UNIT_SEGMENTS);
+	const fitted = fitDialogLines(PROPOSAL_UNIT_LINES, 10, 2, PROPOSAL_UNIT_SEGMENTS);
 	assert.deepEqual(fitted, [
 		"─",
 		" Confirm Goal Draft",
@@ -328,16 +384,16 @@ test("fitDialogLines proposal mode: strips blank spacing, then drops task lines 
 
 test("fitDialogLines proposal mode: never exceeds the bound even at degenerate budgets", () => {
 	// Budget 6: head + tail kept from its end (border/footer first).
-	const tight = fitDialogLines(PROPOSAL_UNIT_LINES, 6, 2, false, PROPOSAL_UNIT_SEGMENTS);
+	const tight = fitDialogLines(PROPOSAL_UNIT_LINES, 6, 2, PROPOSAL_UNIT_SEGMENTS);
 	assert.ok(tight.length <= 6);
 	assert.match(tight[tight.length - 1], /^─+$/, "bottom border must be visible");
 	assert.ok(tight.some((l) => l.includes("Enter select")), "footer hint must be visible");
 	// Budget 3: head + bottom border only, still within the bound.
-	const tiny = fitDialogLines(PROPOSAL_UNIT_LINES, 3, 2, false, PROPOSAL_UNIT_SEGMENTS);
+	const tiny = fitDialogLines(PROPOSAL_UNIT_LINES, 3, 2, PROPOSAL_UNIT_SEGMENTS);
 	assert.equal(tiny.length, 3);
 	assert.match(tiny[tiny.length - 1], /^─+$/, "bottom border must be visible");
 	// Budget 1: the head itself fills the bound.
-	assert.equal(fitDialogLines(PROPOSAL_UNIT_LINES, 1, 2, false, PROPOSAL_UNIT_SEGMENTS).length, 1);
+	assert.equal(fitDialogLines(PROPOSAL_UNIT_LINES, 1, 2, PROPOSAL_UNIT_SEGMENTS).length, 1);
 });
 
 test("findProposalPresentationSegments locates the tasks section and options tail", () => {
@@ -478,7 +534,7 @@ test("fitDialogLines proposal mode: the auditor toggle line is never sacrificed 
 	];
 	const segs = findProposalPresentationSegments(lines, 8);
 	assert.ok(segs, "proposal segments found");
-	const fitted = fitDialogLines(lines, 10, 2, false, segs);
+	const fitted = fitDialogLines(lines, 10, 2, segs);
 	assert.ok(fitted.length <= 10, "never exceeds the bound");
 	assert.ok(fitted.some((l) => l.includes("press 'a' to toggle")), "auditor toggle line stays in frame");
 	assert.ok(fitted.some((l) => l.includes("[ ] task-1: First")), "at least one task line stays in frame");
@@ -506,4 +562,204 @@ test("pressing 'a' toggles the auditor status with visible feedback in the bound
 	const after = component.render(100).join("\n");
 	assert.ok(after.includes("○ Auditor disabled"), "toggle feedback is visible after 'a'");
 	assert.ok(!after.includes("● Auditor enabled"), "status flipped off");
+});
+
+// §options-scroll flow tests — the reported bug (bounded questionnaire hides
+// options) fixed by in-dialog viewport scrolling. All tests drive the real
+// component (render + handleInput) with an ANSI-emitting theme so the mock-
+// theme blind spot is exercised.
+
+const PAGE_DOWN = "\x1b[6~";
+const PAGE_UP = "\x1b[5~";
+const CTRL_DOWN = "\x1bOb";
+const CTRL_UP = "\x1bOa";
+const ARROW_DOWN = "\x1b[B";
+const ARROW_UP = "\x1b[A";
+const TAB_KEY = "\t";
+const ENTER_KEY = "\r";
+
+/** Open a questionnaire against an ANSI-emitting theme with real TUI dims. */
+function openQuestionnaireComponent(
+	args: {
+		rows: number;
+		baseFrameLines: number;
+		questions: Array<{
+			id: string;
+			question: string;
+			context?: string;
+			options: string[];
+			recommended?: number;
+			allowCustom?: boolean;
+		}>;
+	},
+	width = 100,
+) {
+	const ctx = createMockExtensionContext();
+	void runGoalQuestionnaire(ctx, args.questions);
+	const record = ctx._customCalls[0];
+	assert.ok(record, "goal_questionnaire opens a custom dialog");
+	const { tui } = createMockTUI();
+	const augmented = Object.assign(tui, {
+		terminal: { rows: args.rows },
+		previousLines: Array.from({ length: args.baseFrameLines }, () => "x"),
+	});
+	const ansiTheme = {
+		fg: (_c: string, v: string) => ANSI_STYLE(v),
+		bold: (v: string) => v,
+		bg: () => "",
+		dim: (v: string) => v,
+	} as unknown as ReturnType<typeof createMockTheme>;
+	return record.factory(augmented, ansiTheme, {}, () => {}) as unknown as {
+		render(w: number): string[];
+		handleInput(data: string): void;
+	};
+}
+
+test("bounded agent question: every option is reachable via PgUp/PgDn, nothing truncated (ANSI-styled)", () => {
+	// The reported repro shape: a long question + several options at a tight
+	// bound. Before the fix, fitDialogLines kept only the TOP options and
+	// silently dropped the rest.
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [{
+			id: "scope",
+			question: "Which definition of parity should the release goal adopt?",
+			options: [
+				"Preserve the no-execute product definition — SFIToolkit.stata and .error become the ONLY documented incompatibilities (exact vendor signatures + deterministic typed refusal + prominent docs)",
+				"Full vendor parity — adopt execution semantics for SFIToolkit.stata and SFIToolkit.error even though they execute / terminate the process, matching the vendor module in full",
+			],
+			recommended: 0,
+		}],
+	});
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "");
+	const top = component.render(100).map(strip);
+	assert.ok(top.length <= 10, "dialog stays within the terminal-height bound");
+	assert.ok(top.join("\n").includes("Which definition of parity should the release goal adopt?"), "question fully visible at the top");
+	assert.ok(top.join("\n").includes("1. Preserve the no-execute product definition"), "recommended option visible");
+	assert.ok(top.join("\n").includes("more · PgUp/PgDn scroll"), "bottom edge advertises the clipped content and the scroll affordance");
+
+	component.handleInput!(PAGE_DOWN);
+	const scrolled = component.render(100).map(strip);
+	assert.ok(scrolled.length <= 10, "still within the bound after scrolling");
+	assert.ok(scrolled.join("\n").includes("2. Full vendor parity"), "option 2 is reachable after PageDown");
+	assert.ok(scrolled.join("\n").includes("▲ "), "▲ indicator shows when scrolled down");
+
+	component.handleInput!(PAGE_UP);
+	const back = component.render(100).map(strip).join("\n");
+	assert.ok(back.includes("1. Preserve the no-execute product definition"), "PageUp returns to the recommended option");
+	assert.ok(back.includes("Which definition of parity should the release goal adopt?"), "question still fully readable at the top");
+
+	// Every option label is reachable across the scroll range: the union of
+	// all viewports covers the full content — nothing is permanently hidden.
+	const seen = new Set<string>();
+	for (let i = 0; i < 12; i++) {
+		for (const l of component.render(100).map(strip)) seen.add(l);
+		component.handleInput!(PAGE_DOWN);
+	}
+	const all = [...seen].join("\n");
+	for (const label of ["1. Preserve the no-execute", "2. Full vendor parity"]) {
+		assert.ok(all.includes(label), `reachable across the scroll range: ${label}`);
+	}
+
+	// Ctrl+↑/↓ line-scroll moves the viewport a single line at a time.
+	component.handleInput!(CTRL_DOWN);
+	const ctrl = component.render(100);
+	assert.ok(ctrl.length <= 10, "bound preserved under line-scroll");
+});
+
+test("multi-question tabs: each tab's options reachable and the viewport resets per tab", () => {
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [
+			{
+				id: "scope",
+				question: "First question with a long option list.",
+				options: [
+					"Scope option A — with a very long label that wraps across several lines of the bounded dialog window",
+					"Scope option B — another long wrapped label so the options exceed the dialog height and force scrolling",
+					"Scope option C — still more wrapped text below the fold",
+				],
+				recommended: 0,
+			},
+			{
+				id: "span",
+				question: "Second question, also long.",
+				options: [
+					"Span option 1",
+					"Span option 2",
+				],
+				recommended: 1,
+			},
+		],
+	});
+	// Scroll question 1 down so its later options are visible.
+	component.handleInput!(PAGE_DOWN);
+	const q1Scrolled = component.render(100).join("\n");
+	assert.ok(q1Scrolled.includes("Scope option B"), "question 1 options reachable after scroll");
+
+	// Switch to question 2: the viewport resets to the top.
+	component.handleInput!(TAB_KEY);
+	const q2Top = component.render(100).join("\n");
+	assert.ok(q2Top.includes("Second question, also long."), "question 2 opens from the top");
+	assert.ok(q2Top.includes("Span option 1"), "question 2 first option visible");
+	assert.ok(!q2Top.includes("▲ "), "no stale scroll position on the new tab");
+
+	component.handleInput!(PAGE_DOWN);
+	const q2Scrolled = component.render(100).join("\n");
+	assert.ok(q2Scrolled.includes("Span option 2"), "question 2 options reachable via scroll");
+});
+
+test("selection auto-follow: ↓ on an off-screen option scrolls it into view (ANSI-styled)", () => {
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "");
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [{
+			id: "q",
+			question: "Pick one — the later options are below the fold.",
+			options: [
+				"Option one — short",
+				"Option two — short",
+				"Option three — short",
+				"Option four — short",
+				"Option five — short",
+				"Option six — short",
+			],
+			recommended: 0,
+		}],
+	});
+	// Walk the selection down past the fold; each ↓ auto-follows the viewport.
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ARROW_DOWN);
+	const view = component.render(100).map(strip).join("\n");
+	assert.ok(view.includes("Option five"), "selection auto-follow keeps the selected option visible");
+	assert.ok(view.includes("> 5. Option five"), "selection marker on the visible option");
+});
+
+test("input mode keeps the editor visible when bounded (tail-keep unchanged)", () => {
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "");
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [{
+			id: "q",
+			question: "Type your answer below the option hints.",
+			options: [
+				"Option one — with a long wrapped label that pushes the option hints far up the dialog",
+				"Option two — with an equally long wrapped label for the hint block",
+			],
+		}],
+	});
+	// Enter on the custom option enters input mode.
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ENTER_KEY);
+	const view = component.render(100).map(strip).join("\n");
+	assert.ok(view.includes("Your answer:"), "editor prompt visible");
+	assert.ok(view.includes("Enter to submit"), "editor submit hint visible");
+	assert.ok(component.render(100).length <= 10, "input-mode dialog stays within the bound");
 });

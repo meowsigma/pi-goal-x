@@ -108,54 +108,108 @@ export function findProposalPresentationSegments(lines: string[], tailStart: num
  * question. The protected head (top border + tabs + question line) is always
  * kept; the remaining budget is spent on the tail — options/footer/bottom
  * border — so long context blocks (proposal confirmations) are sliced from
- * their head exactly as the pre-fix tail-slice did (383ae52 surface). When the
- * options block starts immediately after the head (plain agent questions with
- * no context block), the TOP options are kept instead of the tail so the
- * recommended/first option stays visible; the footer hint and bottom border
- * are always the last rendered lines. Never returns more than maxDialogLines.
+ * their head exactly as the pre-fix tail-slice did (383ae52 surface). The
+ * footer hint and bottom border are always the last rendered lines. Never
+ * returns more than maxDialogLines.
  *
  * Proposal confirmations (proposal segments given) keep the head, the tasks
  * section (header + every task line), and the options/footer/bottom border in
  * frame; only the objective-box middle is sacrificed in-frame — the full
  * objective is always present in the scrollable transcript presentation
  * (propose_goal_draft renderCall), so nothing of the goal is ever omitted.
+ *
+ * §options-scroll: when a `scroll` state is given (select-mode question tabs
+ * and the submit summary), the dialog becomes a `less`-style viewport over the
+ * FULL content — nothing is truncated, nothing is sliced away — and the
+ * options are always reachable by scrolling (PageUp/PageDown, Ctrl+↑/↓, and
+ * ↑/↓ selection auto-follow). See fitDialogViewport.
  */
+export interface DialogScrollState {
+	/** Current viewport offset over the full content lines. */
+	scrollTop: number;
+	/** When true, the fitter nudges scrollTop so the selection range is visible. */
+	needsFollow: boolean;
+	/** Line ranges [start, end] of each selectable option in the full content. */
+	optionRanges: Array<[number, number]>;
+	/** Index of the current selection in optionRanges. */
+	followIndex: number;
+}
+
 export function fitDialogLines(
 	lines: string[],
 	maxDialogLines: number,
 	protectedHead: number,
-	optionsImmediatelyAfterHead = false,
 	proposal: ProposalPresentationSegments | null = null,
+	scroll: DialogScrollState | null = null,
+	dimStyle: (s: string) => string = (s) => s,
 ): string[] {
 	if (maxDialogLines <= 0 || lines.length <= maxDialogLines) return lines;
 	const keepHead = Math.min(protectedHead, maxDialogLines);
+	if (proposal) {
+		return fitProposalPresentation(lines, maxDialogLines, keepHead, proposal);
+	}
+	if (scroll) {
+		return fitDialogViewport(lines, maxDialogLines, scroll, dimStyle);
+	}
+	// Context-heavy / input / submit dialogs without a scroll state: keep the
+	// head and the tail (options/footer/bottom border) exactly as the pre-fix
+	// tail-slice did.
 	const budget = maxDialogLines - keepHead;
 	if (budget <= 0) return lines.slice(0, keepHead);
 	const rest = lines.slice(protectedHead);
 	if (rest.length <= budget) return [...lines.slice(0, keepHead), ...rest];
-	if (proposal) {
-		return fitProposalPresentation(lines, maxDialogLines, keepHead, proposal);
-	}
-	if (optionsImmediatelyAfterHead) {
-		// Plain select-mode question: keep the footer hint + bottom border (as
-		// many as fit), then spend the remaining room on the TOP options so the
-		// recommended/first option stays visible; leading blank separators are
-		// dropped first when room is short. Never exceeds maxDialogLines.
-		const headLines = lines.slice(0, keepHead);
-		const firstContent = rest.findIndex((l) => l.trim().length > 0);
-		const lead = firstContent > 0 ? rest.slice(0, firstContent) : [];
-		const contentStart = firstContent > 0 ? firstContent : 0;
-		const tailBudget = Math.min(2, budget); // footer hint + bottom border
-		const tail = rest.slice(-tailBudget);
-		const room = budget - tailBudget;
-		const keepContent = Math.max(0, Math.min(rest.length - contentStart, room));
-		const keepLead = Math.max(0, Math.min(lead.length, room - keepContent));
-		const content = rest.slice(contentStart, contentStart + keepContent);
-		return [...headLines, ...lead.slice(0, keepLead), ...content, ...tail];
-	}
-	// Context-heavy / input / submit dialogs: keep the head and the tail
-	// (options, footer, bottom border) exactly as the pre-fix tail-slice did.
 	return [...lines.slice(0, keepHead), ...rest.slice(rest.length - budget)];
+}
+
+/**
+ * §options-scroll viewport fit: never truncate or drop content — window the
+ * full dialog lines with a scrollTop offset so every line (question, context,
+ * options, footer, border) stays reachable. The last viewport row is reserved
+ * as the bottom edge: the bottom border when the end is reached, otherwise a
+ * themed `… +N more · PgUp/PgDn scroll` indicator (mirrors the dashboard's
+ * `… +N more task` rows). A themed `▲ N more` indicator replaces the first
+ * content row when scrolled down. Selection auto-follow (needsFollow) nudges
+ * the window so the selected option's line range is inside it. Output length
+ * is exactly maxDialogLines when clipped, never more (churn-guard invariant).
+ */
+function fitDialogViewport(
+	lines: string[],
+	maxDialogLines: number,
+	scroll: DialogScrollState,
+	dimStyle: (s: string) => string,
+): string[] {
+	const contentWindow = Math.max(0, maxDialogLines - 1);
+	const contentEnd = Math.max(0, lines.length - 1);
+	// Selection auto-follow: nudge scrollTop so the selected option's range is
+	// inside the content window (minimal scroll; clamp below).
+	if (scroll.needsFollow && scroll.optionRanges[scroll.followIndex]) {
+		const [os, oe] = scroll.optionRanges[scroll.followIndex];
+		if (os < scroll.scrollTop || oe >= scroll.scrollTop + contentWindow) {
+			scroll.scrollTop = oe >= scroll.scrollTop + contentWindow
+				? Math.min(os, Math.max(0, oe - contentWindow + 1))
+				: os;
+		}
+		scroll.needsFollow = false;
+	}
+	scroll.scrollTop = Math.max(0, Math.min(scroll.scrollTop, Math.max(0, contentEnd - contentWindow)));
+	const s = scroll.scrollTop;
+	const hiddenAbove = s;
+	const hiddenBelow = contentEnd - (s + contentWindow);
+	const viewport = lines.slice(s, s + contentWindow);
+	if (hiddenAbove > 0 && viewport.length > 0) {
+		viewport[0] = dimStyle(`▲ ${hiddenAbove} more`);
+	}
+	if (hiddenBelow > 0) {
+		// The reserved bottom edge row advertises the scroll affordance — it
+		// replaces the border while content is clipped below (mirrors the
+		// dashboard's `… +N more task` rows) and gives way to the border at the
+		// end. The footer hint sits directly above the border, so it is only
+		// visible when the end is reached (never while clipped — geometry).
+		viewport.push(dimStyle(`… +${hiddenBelow} more · PgUp/PgDn scroll`));
+	} else {
+		viewport.push(lines[lines.length - 1]);
+	}
+	return viewport;
 }
 
 /**
@@ -291,6 +345,10 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		let inputQuestionId: string | null = null;
 		let cachedLines: string[] | undefined;
 		let optionsStartIndex = -1;
+		// §options-scroll viewport state (select-mode + submit tabs only).
+		let scrollTop = 0;
+		let needsFollow = false;
+		let optionRanges: Array<[number, number]> = [];
 		let auditorEnabled = auditorToggleInit?.defaultEnabled ?? true;
 		const answers = new Map<string, GoalQuestionnaireAnswer>();
 		const drafts = new Map<string, string>();
@@ -340,6 +398,9 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		function enterQuestion(q: GoalQuestionnaireQuestion) {
 			const existing = answers.get(q.id);
 			const draft = drafts.get(q.id);
+			// §options-scroll: start each question tab from the top.
+			scrollTop = 0;
+			needsFollow = false;
 			if (q.options.length === 0) {
 				inputMode = true;
 				inputQuestionId = q.id;
@@ -354,7 +415,14 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			}
 		}
 
-		function advanceAfterAnswer() {
+		function enterSubmitTab() {
+	// §options-scroll: the submit summary also opens from the top.
+	optionIndex = 0;
+	scrollTop = 0;
+	needsFollow = false;
+}
+
+function advanceAfterAnswer() {
 			if (!isMulti) {
 				submit(false);
 				return;
@@ -363,7 +431,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			else currentTab = questions.length;
 			const nextQ = currentQuestion();
 			if (nextQ) enterQuestion(nextQ);
-			else optionIndex = 0;
+			else enterSubmitTab();
 			refresh();
 		}
 
@@ -416,7 +484,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 					currentTab = matchesKey(data, Key.tab) ? (currentTab + 1) % totalTabs : (currentTab - 1 + totalTabs) % totalTabs;
 					const nextQ = currentQuestion();
 					if (nextQ) enterQuestion(nextQ);
-					else optionIndex = 0;
+					else enterSubmitTab();
 					refresh();
 					return;
 				}
@@ -433,7 +501,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 					currentTab = (currentTab + 1) % totalTabs;
 					const nextQ = currentQuestion();
 					if (nextQ) enterQuestion(nextQ);
-					else optionIndex = 0;
+					else enterSubmitTab();
 					refresh();
 					return;
 				}
@@ -441,10 +509,39 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 					currentTab = (currentTab - 1 + totalTabs) % totalTabs;
 					const nextQ = currentQuestion();
 					if (nextQ) enterQuestion(nextQ);
-					else optionIndex = 0;
+					else enterSubmitTab();
 					refresh();
 					return;
 				}
+			}
+
+			// §options-scroll viewport keys (select-mode question tabs AND the
+			// submit summary): page and line scroll without moving the selection.
+			// Handled before the submit-tab early return so the summary scrolls
+			// too. ↑/↓ still select and auto-follow into view on the next render.
+			if (matchesKey(data, Key.pageUp)) {
+				scrollTop -= Math.max(1, (maxDialogLines ?? 10) - 1);
+				needsFollow = false;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.pageDown)) {
+				scrollTop += Math.max(1, (maxDialogLines ?? 10) - 1);
+				needsFollow = false;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.ctrl("up"))) {
+				scrollTop -= 1;
+				needsFollow = false;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.ctrl("down"))) {
+				scrollTop += 1;
+				needsFollow = false;
+				refresh();
+				return;
 			}
 
 			if (currentTab === questions.length) {
@@ -455,11 +552,13 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 
 			if (matchesKey(data, Key.up)) {
 				optionIndex = Math.max(0, optionIndex - 1);
+				needsFollow = true; // §options-scroll: keep the selection visible
 				refresh();
 				return;
 			}
 			if (matchesKey(data, Key.down)) {
 				optionIndex = Math.min(opts.length - 1, optionIndex + 1);
+				needsFollow = true;
 				refresh();
 				return;
 			}
@@ -633,11 +732,13 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			function renderOptions() {
 				optionsStartIndex = lines.length;
 				for (let i = 0; i < opts.length; i++) {
+					const start = lines.length;
 					const opt = opts[i];
 					const selected = i === optionIndex;
 					const prefix = selected ? theme.fg("accent", "> ") : "  ";
 					const recTag = !opt.isCustom && q?.recommended === i ? theme.fg("success", " ★") : "";
 					addWrapped(prefix + theme.fg(selected ? "accent" : "text", `${i + 1}. ${opt.label}`) + recTag);
+					optionRanges[i] = [start, lines.length - 1];
 				}
 			}
 
@@ -705,11 +806,21 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			// objective-box middle is sacrificed there because the full objective
 			// is always in the scrollable transcript presentation (renderCall).
 			if (maxDialogLines !== undefined && lines.length > maxDialogLines) {
-				const optionsImmediatelyAfterHead = !inputMode && currentTab !== questions.length && !!q && !q.context && opts.length > 0;
 				const proposalSegments = !inputMode && currentTab !== questions.length && !!q && q.context
 					? findProposalPresentationSegments(lines, optionsStartIndex)
 					: null;
-				lines = fitDialogLines(lines, maxDialogLines, protectedCount, optionsImmediatelyAfterHead, proposalSegments);
+				// §options-scroll: select-mode question tabs and the submit summary
+				// are a viewport over the full content (never truncated); input
+				// mode keeps the legacy tail-keep so the editor stays the priority.
+				let scrollState: DialogScrollState | null = null;
+				if (!inputMode) {
+					scrollState = { scrollTop, needsFollow, optionRanges, followIndex: optionIndex };
+				}
+				lines = fitDialogLines(lines, maxDialogLines, protectedCount, proposalSegments, scrollState, (s) => theme.fg("dim", s));
+				if (scrollState) {
+					scrollTop = scrollState.scrollTop;
+					needsFollow = scrollState.needsFollow;
+				}
 			}
 			cachedLines = lines;
 			return lines;

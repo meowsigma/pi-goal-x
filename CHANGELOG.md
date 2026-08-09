@@ -2,6 +2,26 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **Goal questionnaire never hides options when height-bounded**: the
+  terminal-height churn guard sliced options out of the `goal_questionnaire`
+  dialog — the select-mode fit kept only the TOP options (option 2+ dropped
+  entirely, e.g. a long question + 2 options at a 9-line bound), the
+  context-heavy path could drop the first/recommended option, and there is no
+  scrollback fallback (the tool-call line shows only the tool name), so a
+  hidden option was a blind option. The dialog is now a `less`-style viewport
+  over the full content: nothing is truncated, every option stays reachable
+  via in-dialog scrolling (PageUp/PageDown page, Ctrl+↑/↓ line-scroll, ↑/↓
+  selection auto-follows into view), a themed `▲ N more` /
+  `… +N more · PgUp/PgDn scroll` edge indicator advertises clipped content
+  (dashboard convention), the question and context are never ellipsized, and
+  the churn-guard bound is preserved (the frame never exceeds the terminal
+  height). Input mode keeps the editor prioritized; proposal confirmations
+  keep their task + auditor segment protection unchanged.
+
 ## [0.26.1] — 2026-08-08
 
 ### Fixed

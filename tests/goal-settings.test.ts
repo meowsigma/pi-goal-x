@@ -19,6 +19,7 @@ import {
 	loadGoalSettings,
 	saveGoalSettingsFileConfig,
 	effectiveSettingsReport,
+	formatGoalKeybinding,
 	type GoalSettings,
 } from "../extensions/goal-settings.ts";
 
@@ -73,6 +74,32 @@ test("parseGoalSettings: unknown keys rejected", () => {
 		() => parseGoalSettings({ disableTasks: true, disableContracts: false, foo: "bar" }),
 		/Unknown pi-goal-x-settings.json key/,
 	);
+});
+
+test("formatGoalKeybinding: renders readable labels for named keys", () => {
+	assert.equal(formatGoalKeybinding("ctrl+shift+t"), "Ctrl+Shift+T");
+	assert.equal(formatGoalKeybinding("ctrl+shift+up"), "Ctrl+Shift+↑");
+	assert.equal(formatGoalKeybinding("ctrl+shift+pageUp"), "Ctrl+Shift+PageUp");
+	assert.equal(formatGoalKeybinding("ctrl+alt+pageDown"), "Ctrl+Alt+PageDown");
+	assert.equal(formatGoalKeybinding("ctrl+home"), "Ctrl+Home");
+	assert.equal(formatGoalKeybinding("ctrl+alt+enter"), "Ctrl+Alt+Enter");
+});
+
+test("parseGoalSettings: task keybindings use pi-tui key names", () => {
+	assert.deepEqual(parseGoalSettings({ keybindings: { dashboard: {
+		toggleExpand: "ctrl+shift+t",
+		scrollUp: "ctrl+shift+up",
+		scrollDown: "ctrl+shift+down",
+	} } }), { keybindings: { dashboard: {
+		toggleExpand: "ctrl+shift+t",
+		scrollUp: "ctrl+shift+up",
+		scrollDown: "ctrl+shift+down",
+	} } });
+	assert.equal(loadGoalSettings("/tmp/does-not-exist", {}).keybindings?.dashboard.toggleExpand, "ctrl+shift+t");
+});
+
+test("parseGoalSettings: unknown task keybindings are rejected", () => {
+	assert.throws(() => parseGoalSettings({ keybindings: { dashboard: { expand: "ctrl+t" } } }), /Unknown dashboard keybinding/);
 });
 
 test("parseGoalSettings: multiple unknown keys rejected", () => {
@@ -249,6 +276,21 @@ test("loadGoalSettings: objectiveMaxChars defaults to no limit and honors the en
 		assert.equal(loadGoalSettings(dir, { PI_GOAL_OBJECTIVE_MAX_CHARS: "8000" }).objectiveMaxChars, 8000, "env var overrides file");
 	});
 	assert.equal(loadGoalSettings("/tmp/does-not-exist", {}).objectiveMaxChars, undefined, "unset = no limit");
+});
+
+test("saveGoalSettingsFileConfig: task keybindings round-trip", () => {
+	withTempDir((dir) => {
+		saveGoalSettingsFileConfig(dir, { keybindings: { dashboard: {
+			toggleExpand: "ctrl+shift+t",
+			scrollUp: "ctrl+shift+up",
+			scrollDown: "ctrl+shift+down",
+		} } });
+		assert.deepEqual(loadGoalSettingsFileConfig(dir).keybindings, { dashboard: {
+			toggleExpand: "ctrl+shift+t",
+			scrollUp: "ctrl+shift+up",
+			scrollDown: "ctrl+shift+down",
+		} });
+	});
 });
 
 test("saveGoalSettingsFileConfig: objectiveMaxChars persists (including 0) and clears", () => {

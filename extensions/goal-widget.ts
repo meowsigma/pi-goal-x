@@ -2,7 +2,7 @@ import { matchesKey } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
 import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
-import { loadGoalSettings } from "./goal-settings.ts";
+import { DEFAULT_GOAL_KEYBINDINGS, loadGoalSettings } from "./goal-settings.ts";
 import { serializeGoalFile } from "./storage/goal-files.ts";
 import type { AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
@@ -111,6 +111,8 @@ export async function toggleTaskViaService(core: GoalCore, ctx: ExtensionContext
 export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 		core.terminalInputUnsubscribe?.();
+		const settings = loadGoalSettings(typeof ctx.cwd === "string" ? ctx.cwd : process.cwd());
+		const keybindings = settings.keybindings?.dashboard ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
 		core.terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
 			// If an audit is running, Escape aborts the audit instead of pausing.
 			// Must return { consume: true } so the TUI doesn't also process the key
@@ -157,7 +159,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// Ctrl+Shift+T — toggle the unified dashboard between compact and
 			// expanded task views (the task-list overlay is merged into the
 			// dashboard; §10).
-			if (matchesKey(data, "ctrl+shift+t")) {
+			if (matchesKey(data, keybindings.toggleExpand)) {
 				core.toggleDashboardExpanded();
 				return { consume: true };
 			}
@@ -182,8 +184,8 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 					return { consume: true };
 				}
 			}
-			if (matchesKey(data, "ctrl+shift+up") || matchesKey(data, "ctrl+shift+down") || matchesKey(data, "ctrl+shift+pageUp") || matchesKey(data, "ctrl+shift+pageDown") || matchesKey(data, "ctrl+shift+home") || matchesKey(data, "ctrl+shift+end")) {
-				const key = matchesKey(data, "ctrl+shift+up") ? "up" : matchesKey(data, "ctrl+shift+down") ? "down" : matchesKey(data, "ctrl+shift+pageUp") ? "pageUp" : matchesKey(data, "ctrl+shift+pageDown") ? "pageDown" : matchesKey(data, "ctrl+shift+home") ? "home" : "end";
+			if (matchesKey(data, keybindings.scrollUp) || matchesKey(data, keybindings.scrollDown) || matchesKey(data, "ctrl+shift+pageUp") || matchesKey(data, "ctrl+shift+pageDown") || matchesKey(data, "ctrl+shift+home") || matchesKey(data, "ctrl+shift+end")) {
+				const key = matchesKey(data, keybindings.scrollUp) ? "up" : matchesKey(data, keybindings.scrollDown) ? "down" : matchesKey(data, "ctrl+shift+pageUp") ? "pageUp" : matchesKey(data, "ctrl+shift+pageDown") ? "pageDown" : matchesKey(data, "ctrl+shift+home") ? "home" : "end";
 				if (core.goalWidgetComponentRef?.current?.handleCompactScrollKey(key)) {
 					return { consume: true };
 				}

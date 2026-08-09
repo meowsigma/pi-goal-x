@@ -509,3 +509,38 @@ test("expanded: no task sections when tasks are disabled (§9.5)", () => {
 	assert.doesNotMatch(text, /Current task/);
 	assert.match(text, /Verification/);
 });
+
+test("compact: custom dashboard keybindings render in the footer hints", () => {
+	const model = modelFor(withTasks(fiveTaskTree(), { currentTaskId: "t3" }));
+	assert.ok(model);
+	const custom = { toggleExpand: "ctrl+alt+t", scrollUp: "ctrl+alt+u", scrollDown: "ctrl+alt+d" } as const;
+	// Wide (100): no overflow — the expand hint shows the configured toggle key.
+	const wide = renderCompactDashboard(model, theme, 100, { keybindings: custom }).join("\n");
+	assert.match(wide, /Ctrl\+Alt\+T: expand tasks/);
+	assert.doesNotMatch(wide, /Ctrl\+Shift\+T/, "the default toggle key is replaced when configured");
+	// Wide (100) with a six-task tree: overflow — both configured scroll keys
+	// appear in the hint (a sixth task exceeds the 5-row viewport at 100).
+	const six = modelFor(withTasks([...fiveTaskTree(), task("t6", "Extra row for overflow")], { currentTaskId: "t3" }));
+	assert.ok(six);
+	const wideOverflow = renderCompactDashboard(six, theme, 100, { keybindings: custom }).join("\n");
+	assert.match(wideOverflow, /Ctrl\+Alt\+T: expand · Ctrl\+Alt\+U\/Ctrl\+Alt\+D: scroll/);
+	assert.match(wideOverflow, /\+1 more task/);
+	// Defaults render identically when keybindings are omitted (width 100 so
+	// the hint fits; at 80 the auditor note truncates the hint the same way
+	// on current main — pre-existing, not a regression).
+	const defaults = renderCompactDashboard(six, theme, 100).join("\n");
+	assert.match(defaults, /Ctrl\+Shift\+T: expand · Ctrl\+Shift\+↑↓: scroll/);
+	// Long custom key names are tolerated: the hint ellipsizes inside the box
+	// instead of widening it (width safety preserved).
+	const longKeys = { toggleExpand: "ctrl+alt+shift+super+t", scrollUp: "ctrl+alt+pageUp", scrollDown: "ctrl+alt+pageDown" } as const;
+	const longLines = renderCompactDashboard(model, theme, 80, { keybindings: longKeys });
+	for (const line of longLines) assert.ok(visibleWidth(line) <= 80, `custom long-key footer stays within width: ${JSON.stringify(line)}`);
+});
+
+test("expanded: the collapse footer shows the configured toggle key", () => {
+	const model = modelFor(withTasks(fiveTaskTree(), { currentTaskId: "t3" }));
+	assert.ok(model);
+	const custom = { toggleExpand: "ctrl+alt+t", scrollUp: "ctrl+alt+up", scrollDown: "ctrl+alt+down" } as const;
+	assert.match(renderExpandedDashboard(model, theme, 100, { keybindings: custom }).join("\n"), /Esc\/Ctrl\+Alt\+T: collapse/);
+	assert.match(renderExpandedDashboard(model, theme, 100).join("\n"), /Esc\/Ctrl\+Shift\+T: collapse/);
+});

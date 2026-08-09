@@ -34,7 +34,11 @@ export interface GoalStatusTextOptions {
 	focused: boolean;
 	otherOpenGoals: number;
 	ledgerEvents?: GoalLedgerEvent[];
+	ledgerMalformed?: number;
 	verbose?: boolean;
+	health?: boolean;
+	/** Supplied by the command layer only for the explicit health check. */
+	activeFilePresent?: boolean;
 	/** Effective settings lines with provenance (verbose only). */
 	settingsReport?: string[];
 	width?: number;
@@ -55,6 +59,7 @@ export interface GoalStatusTextOptions {
  */
 export function buildGoalStatusText(options: GoalStatusTextOptions): string {
 	const width = options.width ?? GOAL_STATUS_WIDTH;
+	if (options.health) return buildHealthStatus(options, width);
 	if (!options.goal) {
 		return options.otherOpenGoals > 0
 			? renderUnfocusedDashboard(options.otherOpenGoals, PLAIN_THEME, width).join("\n")
@@ -85,6 +90,101 @@ export function buildGoalStatusText(options: GoalStatusTextOptions): string {
 		parts.push(lastAuditBlock(audit, width));
 	}
 	return parts.join("\n\n");
+}
+
+interface HealthCheck {
+	label: string;
+	value: string;
+	severity: "ok" | "warn" | "error";
+}
+
+/**
+ * Render a concise, read-only integrity report. This deliberately checks
+ * storage/runtime coherence only; it does not infer that the work itself is
+ * complete from task counts or contracts.
+ */
+function buildHealthStatus(options: GoalStatusTextOptions, width: number): string {
+	const goal = options.goal;
+	if (!goal) {
+		const focus = options.otherOpenGoals > 0
+			? `WARN — no goal is focused; ${options.otherOpenGoals} open goal${options.otherOpenGoals === 1 ? "" : "s"} remain.`
+			: "OK — no goal is focused and there are no open goals.";
+		return ["Goal health: " + (options.otherOpenGoals > 0 ? "WARN" : "OK"), `Focus: ${focus}`, "Run /goal-status for the normal dashboard."].join("\n");
+	}
+
+	const checks: HealthCheck[] = [];
+	checks.push({
+		label: "Focus",
+		value: options.focused ? "focused" : "not focused",
+		severity: options.focused ? "ok" : "warn",
+	});
+	checks.push({
+		label: "Lifecycle",
+		value: `${statusLabelForHealth(goal)}${goal.autoContinue ? " · auto-continue on" : " · auto-continue off"}`,
+		severity: goal.status === "active" || goal.status === "paused" || goal.status === "blocked" || goal.status === "budget_limited" || goal.status === "complete" ? "ok" : "error",
+	});
+
+	if (goal.status !== "complete") {
+		const fileSeverity = options.activeFilePresent === false ? "error" : options.activeFilePresent === true ? "ok" : "warn";
+		checks.push({
+			label: "Goal file",
+			value: goal.activePath ? (options.activeFilePresent === false ? `missing · ${goal.activePath}` : goal.activePath) : "missing active path",
+			severity: fileSeverity,
+		});
+	}
+
+	const malformed = options.ledgerMalformed ?? 0;
+	checks.push({
+		label: "Ledger",
+		value: malformed > 0 ? `${malformed} malformed entr${malformed === 1 ? "y" : "ies"}` : "valid",
+		severity: malformed > 0 ? "warn" : "ok",
+	});
+
+	if (goal.taskList) {
+		const tasks = flattenHealthTasks(goal.taskList.tasks);
+		const completed = tasks.filter((task) => task.status === "complete" || task.status === "skipped").length;
+		const pending = tasks.length - completed;
+		const contractedPending = tasks.filter((task) => task.status === "pending" && Boolean(task.verificationContract?.trim())).length;
+		checks.push({
+			label: "Tasks",
+			value: `${completed}/${tasks.length} terminal · ${pending} pending${contractedPending > 0 ? ` · ${contractedPending} contracted` : ""}`,
+			severity: goal.taskList.blockCompletion && pending > 0 ? "warn" : "ok",
+		});
+	}
+
+	if (typeof goal.tokenBudget === "number" && goal.tokenBudget > 0) {
+		const percentage = Math.round((goal.usage.tokensUsed / goal.tokenBudget) * 100);
+		checks.push({
+			label: "Budget",
+			value: `${formatCompactTokensForHealth(goal.usage.tokensUsed)} / ${formatCompactTokensForHealth(goal.tokenBudget)} (${Math.max(0, percentage)}%)`,
+			severity: goal.status === "budget_limited" || percentage >= 100 ? "warn" : percentage >= 90 ? "warn" : "ok",
+		});
+	}
+
+	const overall = checks.some((check) => check.severity === "error") ? "ERROR" : checks.some((check) => check.severity === "warn") ? "WARN" : "OK";
+	const lines = [`Goal health: ${overall}`, `Goal: ${truncateText(goal.objective, Math.max(20, width - 12))}`];
+	for (const check of checks) lines.push(`${check.severity === "error" ? "ERROR" : check.severity === "warn" ? "WARN" : "OK"} ${check.label}: ${check.value}`);
+	lines.push("", "This is a storage/runtime health check, not a completion verdict.");
+	return lines.join("\n");
+}
+
+function flattenHealthTasks(tasks: GoalTask[]): GoalTask[] {
+	const result: GoalTask[] = [];
+	for (const task of tasks) {
+		result.push(task);
+		if (task.subtasks) result.push(...flattenHealthTasks(task.subtasks));
+	}
+	return result;
+}
+
+function statusLabelForHealth(goal: GoalRecord): string {
+	return goal.status === "budget_limited" ? "budget limited" : goal.status;
+}
+
+function formatCompactTokensForHealth(value: number): string {
+	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+	if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+	return String(Math.max(0, Math.floor(value)));
 }
 
 function lastAuditBlock(

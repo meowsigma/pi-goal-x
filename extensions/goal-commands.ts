@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
 import { detailedSummary, oneLineSummary } from "./goal-format.ts";
@@ -161,12 +163,19 @@ export function registerGoalCommands(core: GoalCore): void {
 		const view = core.goalForDisplay() ?? core.state.goal;
 		const otherCount = otherOpenGoalCount(core.goalsById, core.focusedGoalId);
 		const verbose = /^\s*verbose\b/i.test(rawArgs);
+		const health = /^\s*health\b/i.test(rawArgs);
+		const ledger = readGoalLedger(ctx);
 		const text = buildGoalStatusText({
 			goal: view,
 			focused: view !== null && core.focusedGoalId === view.id,
 			otherOpenGoals: otherCount,
-			ledgerEvents: readGoalLedger(ctx).events,
+			ledgerEvents: ledger.events,
+			ledgerMalformed: ledger.malformed,
 			verbose,
+			health,
+			activeFilePresent: health && view?.activePath
+				? existsSync(path.resolve(ctx.cwd, view.activePath))
+				: undefined,
 			// §13.2: effective settings with provenance appear only in verbose mode;
 			// the standard mode stays free of settings noise (§13.1).
 			settingsReport: verbose ? effectiveSettingsReport(ctx.cwd) : [],
@@ -481,8 +490,8 @@ export function registerGoalCommands(core: GoalCore): void {
 			ctx.ui.notify("Provide the replacement objective: /goal-tweak <new objective>", "info");
 			return;
 		}
-		if (trimmed.length > (loadGoalSettings(ctx.cwd).objectiveMaxChars ?? 0)) {
-			const max = loadGoalSettings(ctx.cwd).objectiveMaxChars;
+		const max = loadGoalSettings(ctx.cwd).objectiveMaxChars;
+		if (trimmed.length > (max ?? 0)) {
 			if (max !== undefined && max > 0) {
 				ctx.ui.notify(`Replacement objective exceeds ${max} characters (${trimmed.length}).`, "warning");
 				return;
@@ -533,7 +542,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		},
 	});
 	pi.registerCommand("goal-status", {
-		description: "Show the unified goal dashboard for the focused goal (read-only). Append \"verbose\" for full diagnostic detail (goal id, revision, objective, task tree with evidence and contracts, ledger history, budget, pause/blocker, paths, audit report, effective settings).",
+		description: "Show the unified goal dashboard (read-only). Append \"verbose\" for full detail or \"health\" for storage/runtime checks.",
 		handler: async (rawArgs, ctx) => {
 			await showGoalStatus(rawArgs ?? "", ctx);
 		},

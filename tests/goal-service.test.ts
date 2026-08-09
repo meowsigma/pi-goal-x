@@ -165,6 +165,51 @@ describe("GoalService mutation pipeline", () => {
 		}
 	});
 
+	it("batches multiple ledger events from one mutation", () => {
+		const f = fixture();
+		try {
+			const at = new Date().toISOString();
+			const result = f.service.apply({ cwd: f.cwd }, {
+				reconcile: false,
+				mutate: (g) => ({ ...g, status: "paused" as const, autoContinue: false }),
+				ledger: [
+					{ type: "goal_paused", goalId: f.written.id, reason: "first", status: "paused", at },
+					{ type: "goal_resumed", goalId: f.written.id, reason: "second", at },
+				],
+			});
+			assert.ok(result.ok, "mutation must succeed");
+			const events = ledgerEvents(f.cwd) as Array<{ type: string }>;
+			assert.deepEqual(events.map((event) => event.type), ["goal_paused", "goal_resumed"]);
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("preserves a buffered turn when the lock is temporarily contended", () => {
+		const f = fixture();
+		try {
+			f.service.beginTurn({ cwd: f.cwd }, f.written.id);
+			const result = f.service.apply({ cwd: f.cwd }, {
+				reconcile: false,
+				mutate: (g) => ({ ...g, objective: "=== Goal ===\nObjective: Retried flush" }),
+			});
+			assert.ok(result.ok, "in-turn mutation should be buffered");
+			const lock = acquireGoalLock({ cwd: f.cwd }, f.written.id);
+			try {
+				assert.equal(f.service.flushTurn({ cwd: f.cwd }), null, "contended flush should defer");
+				assert.equal(f.service.isTurnBuffered(), true, "deferred transaction must remain buffered");
+			} finally {
+				lock.release();
+			}
+			const flushed = f.service.flushTurn({ cwd: f.cwd });
+			assert.ok(flushed, "the buffered transaction should flush after contention clears");
+			assert.ok(parseGoalFile(path.join(f.cwd, ".pi", "goals", activeFiles(f.cwd)[0]!))?.objective.includes("Retried flush"));
+			assert.equal(f.service.isTurnBuffered(), false);
+		} finally {
+			f.cleanup();
+		}
+	});
+
 	it("expected goal id mismatch rejects without writing or appending", () => {
 		const f = fixture();
 		try {

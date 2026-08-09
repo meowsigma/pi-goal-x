@@ -508,7 +508,6 @@ export function createGoalCore(
 		// goal budget_limited exactly once (status no longer active, so accounting
 		// stops and the transition cannot re-fire), emit the ledger event, arm the
 		// one-time wrap-up steering, and cancel pending continuations.
-		const budgetGoal2 = state.goal;
 		if (budgetGoal && budgetGoal.status === "active" && typeof budgetGoal.tokenBudget === "number" && budgetReached(budgetGoal)) {
 			const transition = goalService.apply(ctx, {
 				reconcile: false,

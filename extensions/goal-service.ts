@@ -1,5 +1,5 @@
 import { cloneGoal, nowIso, type GoalFocusReason, type GoalRecord, type GoalTask, type GoalUsage } from "./goal-record.ts";
-import { appendGoalEvent, type GoalLedgerEvent , appendGoalEvents } from "./goal-ledger.ts";
+import { appendGoalEvent, appendGoalEvents, type GoalLedgerEvent } from "./goal-ledger.ts";
 import { findTaskInTree, updateTaskInTree } from "./goal-policy.ts";
 import {
 	GOALS_DIR,
@@ -175,7 +175,12 @@ export class GoalService {
 
 	/** Open (or reopen) the per-turn transaction for the focused goal. */
 	beginTurn(ctx: GoalServiceContext, goalId: string | null): void {
-		if (this.turn.active) this.flushTurn(ctx);
+		if (this.turn.active) {
+			this.flushTurn(ctx);
+			// Lock contention must not discard the previous transaction. Keep it
+			// open so the next turn boundary retries the same buffered write.
+			if (this.turn.active) return;
+		}
 		this.turn = { active: true, goalId, goal: null, archive: false, ledger: [] };
 	}
 
@@ -186,16 +191,20 @@ export class GoalService {
 	 */
 	flushTurn(ctx: GoalServiceContext): GoalRecord | null {
 		if (!this.turn.active) return null;
-		this.turn.active = false;
 		const goal = this.turn.goal;
-		if (!goal) return null;
+		if (!goal) {
+			this.turn.active = false;
+			return null;
+		}
 		let lock: GoalLock;
 		try {
 			lock = acquireGoalLock(ctx, goal.id);
 		} catch {
-			// Another writer holds the lock; skip this flush (same policy as persist).
+			// Another writer holds the lock; preserve the buffer so a later turn
+			// boundary can retry it instead of silently losing the mutation.
 			return null;
 		}
+		this.turn.active = false;
 		try {
 			const freshDisk = this.readFreshDiskGoal(ctx, goal);
 			const base = freshDisk ?? goal;
@@ -203,25 +212,7 @@ export class GoalService {
 			const written = this.turn.archive || next.status === "complete"
 				? archiveGoalFile(ctx, next)
 				: writeActiveGoalFile(ctx, next);
-			if (this.turn.ledger.length > 0) {
-				const batch = appendGoalEvents(ctx, this.turn.ledger);
-				if (!batch.ok) {
-					// Fall back to per-event appends so each failure still surfaces
-					// through the diagnostic hook with its original granularity.
-					for (const event of this.turn.ledger) {
-						const append = appendGoalEvent(ctx, event);
-						if (!append.ok) {
-							this.ref.onDiagnostic({
-								severity: "warning",
-								source: "ledger",
-								goalId: "goalId" in event ? event.goalId : undefined,
-								eventType: event.type,
-								message: `Ledger append failed for ${event.type}${("goalId" in event) ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
-							});
-						}
-					}
-				}
-			}
+			this.appendLedgerEventsBestEffort(ctx, this.turn.ledger);
 			this.trackBaseline(written.id, written.usage);
 			this.ref.setFocused(written);
 			return written;
@@ -262,6 +253,28 @@ export class GoalService {
 			tokens: Math.max(0, current.usage.tokensUsed - baseline.tokensUsed),
 			seconds: Math.max(0, current.usage.activeSeconds - baseline.activeSeconds),
 		};
+	}
+
+	/**
+	 * Append ledger events without making them part of the authoritative state
+	 * transaction. A batch is the common path; individual retries preserve the
+	 * existing best-effort behavior and keep failures observable per event.
+	 */
+	private appendLedgerEventsBestEffort(ctx: GoalServiceContext, events: GoalLedgerEvent[]): void {
+		if (events.length === 0) return;
+		if (events.length > 1 && appendGoalEvents(ctx, events).ok) return;
+		for (const event of events) {
+			const append = appendGoalEvent(ctx, event);
+			if (!append.ok) {
+				this.ref.onDiagnostic({
+					severity: "warning",
+					source: "ledger",
+					goalId: "goalId" in event ? event.goalId : undefined,
+					eventType: event.type,
+					message: `Ledger append failed for ${event.type}${"goalId" in event ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
+				});
+			}
+		}
 	}
 
 	/** Safe focused record reconciliation from disk. */
@@ -426,20 +439,7 @@ export class GoalService {
 				} catch {
 					events = [];
 				}
-				for (const event of events) {
-					const append = appendGoalEvent(ctx, event);
-					if (!append.ok) {
-						// Ledger append failure after the authoritative write keeps the
-						// successful state transition; surface an observable diagnostic.
-						this.ref.onDiagnostic({
-							severity: "warning",
-							source: "ledger",
-							goalId: "goalId" in event ? event.goalId : undefined,
-							eventType: event.type,
-							message: `Ledger append failed for ${event.type}${("goalId" in event) ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
-						});
-					}
-				}
+				this.appendLedgerEventsBestEffort(ctx, events);
 			}
 
 			// 6. in-memory pool/focus commit.
@@ -594,18 +594,7 @@ export class GoalService {
 			const written = writeActiveGoalFile(ctx, mutated);
 			if (spec.ledger) {
 				try {
-					for (const event of spec.ledger(written, updatedTask)) {
-						const append = appendGoalEvent(ctx, event);
-						if (!append.ok) {
-							this.ref.onDiagnostic({
-								severity: "warning",
-								source: "ledger",
-								goalId: "goalId" in event ? event.goalId : undefined,
-								eventType: event.type,
-								message: `Ledger append failed for ${event.type}${("goalId" in event) ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
-							});
-						}
-					}
+					this.appendLedgerEventsBestEffort(ctx, spec.ledger(written, updatedTask));
 				} catch (err) {
 					// Unexpected ledger-spec error after the authoritative write keeps
 					// the successful state transition.
@@ -689,25 +678,7 @@ export class GoalService {
 		const previousGoalId = this.ref.getFocused()?.id ?? null;
 		const written = writeActiveGoalFile(ctx, sanitizeGoalPaths(ctx, spec.goal));
 		if (spec.ledger && spec.ledger.length > 0) {
-			// Batch append (P1-8): one write+append for the whole event block.
-			const batch = appendGoalEvents(ctx, spec.ledger);
-			if (!batch.ok) {
-				// Fall back to per-event appends so each failure still surfaces
-				// through the diagnostic hook with its original granularity.
-				for (const event of spec.ledger) {
-					const append = appendGoalEvent(ctx, event);
-					if (!append.ok) {
-						// Best-effort ledger; creation still succeeds.
-						this.ref.onDiagnostic({
-							severity: "warning",
-							source: "ledger",
-							goalId: "goalId" in event ? event.goalId : undefined,
-							eventType: event.type,
-							message: `Ledger append failed for ${event.type}${"goalId" in event ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
-						});
-					}
-				}
-			}
+			this.appendLedgerEventsBestEffort(ctx, spec.ledger);
 		}
 		this.ref.setFocused(written);
 		this.trackBaseline(written.id, written.usage);
@@ -723,25 +694,7 @@ export class GoalService {
 			this.turn.ledger.push(...events);
 			return;
 		}
-		if (events.length > 1) {
-			// Batch append (P1-8): one write+append for the whole event block.
-			const batch = appendGoalEvents(ctx, events);
-			if (batch.ok) return;
-		}
-		for (const event of events) {
-			const append = appendGoalEvent(ctx, event);
-			if (!append.ok) {
-				// Ledger append failure must not crash the surrounding flow, but it
-				// stays observable through the diagnostic hook.
-				this.ref.onDiagnostic({
-					severity: "warning",
-					source: "ledger",
-					goalId: "goalId" in event ? event.goalId : undefined,
-					eventType: event.type,
-					message: `Ledger append failed for ${event.type}${"goalId" in event ? ` (goal ${event.goalId})` : ""}: ${String(append.error)}`,
-				});
-			}
-		}
+		this.appendLedgerEventsBestEffort(ctx, events);
 	}
 
 	/** Diagnostic write for the debug widget toggle (separate debug dir; not a goal mutation). */

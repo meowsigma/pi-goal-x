@@ -99,7 +99,7 @@ The curated fourteen-command palette:
 | `/goal-direct <objective>` | Direct regular-goal creation without drafting |
 | `/sisyphus-direct <objective>` | Direct Sisyphus creation without drafting |
 | `/goal-list` | List all open goals and the current focus |
-| `/goal-status` | Read-only focused-goal summary plus other-open-goal count |
+| `/goal-status` | Read-only focused-goal summary plus other-open-goal count; append `verbose` for diagnostics or `health` for storage/runtime checks |
 | `/goal-focus` | Choose this session's focused goal |
 | `/goal-unfocus` | Detach the session without modifying the shared goal |
 | `/goal-settings` | Fully operable settings editor for all eight persisted fields |

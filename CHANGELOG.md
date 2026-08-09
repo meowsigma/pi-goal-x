@@ -2,6 +2,22 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.26.3] — 2026-08-09
+
+### Added
+
+- `/goal-status health` provides a concise, read-only check of goal focus,
+  lifecycle, active-file presence, malformed ledger entries, task progress,
+  and token-budget pressure.
+
+### Fixed
+
+- Turn-buffered mutations now remain retryable when a per-goal lock is
+  temporarily contended instead of being silently discarded.
+- GoalService mutation paths share one batched ledger append and diagnostic
+  implementation, reducing duplicated persistence logic and improving
+  multi-event write performance.
+
 ## [0.26.2] — 2026-08-09
 
 ### Fixed

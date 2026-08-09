@@ -190,6 +190,22 @@ describe("five-tool handler integration", () => {
 		}
 	});
 
+	it("/goal-status health is wired as a read-only command mode", async () => {
+		const f = fixture();
+		try {
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+			await start(h);
+			await h.commands.get("goal-status")?.handler("health", h.ctx);
+			const notification = h.notifies.at(-1)?.msg ?? "";
+			assert.match(notification, /^Goal health: OK/);
+			assert.match(notification, /OK Goal file:/);
+			assert.equal(activeGoalFiles(f.cwd).length, 1, "health mode must not mutate goal storage");
+			assert.equal(ledgerEvents(f.cwd).length, 0, "health mode must not append ledger events");
+		} finally {
+			f.cleanup();
+		}
+	});
+
 	it("update_goal(complete) with an approved auditor fixture completes and archives at turn_end", async () => {
 		const f = fixture();
 		let auditArgs: any = null;

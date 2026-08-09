@@ -177,6 +177,12 @@ Show the focused goal:
 /goal-status
 ```
 
+Run read-only storage/runtime health checks:
+
+```text
+/goal-status health
+```
+
 Select an open goal for the current session:
 
 ```text
@@ -341,6 +347,7 @@ Each session can focus on one goal while the project keeps other goals open.
 /goal-list                   List open goals
 /goal-status                 Show the focused goal (unified dashboard)
 /goal-status verbose         Show the focused goal with full diagnostic detail
+/goal-status health          Check goal storage/runtime health (read-only)
 /goal-focus                  Select an open goal
 /goal-unfocus                Remove the session’s focus
 /goal-tweak <change>         Revise the focused goal

@@ -192,3 +192,44 @@ test("complete goal standard output shows the §4.7 message", () => {
 	});
 	assert.match(text, /All required work is complete/);
 });
+
+test("health mode reports storage, ledger, task, and budget warnings without claiming completion", () => {
+	const text = buildGoalStatusText({
+		goal: goal({
+			taskList: { tasks: [task("t1", "Pending verification")], blockCompletion: true, proposedAt: "2026-01-01T00:00:00.000Z" },
+			tokenBudget: 20_000,
+			usage: { tokensUsed: 19_500, activeSeconds: 10 },
+		}),
+		focused: true,
+		otherOpenGoals: 0,
+		ledgerMalformed: 2,
+		health: true,
+		activeFilePresent: false,
+	});
+	assert.match(text, /^Goal health: ERROR/);
+	assert.match(text, /ERROR Goal file: missing/);
+	assert.match(text, /WARN Ledger: 2 malformed entries/);
+	assert.match(text, /WARN Tasks: 0\/1 terminal · 1 pending/);
+	assert.match(text, /WARN Budget: 19\.5K \/ 20K \(98%\)/);
+	assert.match(text, /not a completion verdict/);
+});
+
+test("health mode can report an internally healthy goal", () => {
+	const text = buildGoalStatusText({
+		goal: goal({ usage: { tokensUsed: 100, activeSeconds: 2 } }),
+		focused: true,
+		otherOpenGoals: 0,
+		ledgerMalformed: 0,
+		health: true,
+		activeFilePresent: true,
+	});
+	assert.match(text, /^Goal health: OK/);
+	assert.match(text, /OK Goal file:/);
+	assert.match(text, /OK Ledger: valid/);
+});
+
+test("health mode explains an unfocused session", () => {
+	const text = buildGoalStatusText({ goal: null, focused: false, otherOpenGoals: 2, health: true });
+	assert.match(text, /^Goal health: WARN/);
+	assert.match(text, /no goal is focused/);
+});

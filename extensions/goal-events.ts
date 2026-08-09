@@ -300,6 +300,11 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.advanceTurnSeq();
 		const currentSystemPrompt = () => ctx.getSystemPrompt?.() || event.systemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
+		// Several prompt enrichments may need the same ledger snapshot. Keep one
+		// local read for this hook instead of repeatedly traversing the cached
+		// ledger when rejection and post-compaction steering overlap.
+		let promptLedger: ReturnType<typeof readGoalLedger> | undefined;
+		const getPromptLedger = () => promptLedger ??= readGoalLedger(ctx);
 
 		// If this turn was triggered by a hidden goal checkpoint that no longer
 		// matches the active goal, abort the whole turn instead of letting the
@@ -353,10 +358,10 @@ export function registerGoalEvents(core: GoalCore): void {
 				pauseExtras.push(`Pause reason: ${current.pauseReason ?? "(unknown)"}`);
 				if (current.pauseSuggestedAction) pauseExtras.push(`Suggested action: ${current.pauseSuggestedAction}`);
 			}
-			// Inject durable auditor feedback if available
-			let auditorExtra = "";
-			try {
-				const ledger = readGoalLedger(ctx);
+				// Inject durable auditor feedback if available
+				let auditorExtra = "";
+				try {
+					const ledger = getPromptLedger();
 				const auditorResult = latestAuditorResultForGoal(ledger.events, current.id);
 				if (auditorResult && auditorResult.verdict === "disapproved") {
 					auditorExtra = `\n\n[AUDITOR REJECTION] An independent auditor previously rejected a completion request for this goal. Reason: ${auditorResult.report.slice(0, 300)}\nAddress the auditor's objections before requesting completion again.`;
@@ -395,7 +400,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (stalledNote) prompt += stalledNote;
 		// Inject durable auditor feedback if the latest result was a rejection
 		try {
-			const ledger = readGoalLedger(ctx);
+			const ledger = getPromptLedger();
 			const auditorResult = latestAuditorResultForGoal(ledger.events, activeGoal.id);
 			if (auditorResult && auditorResult.verdict === "disapproved" && ledger.events.some((e) => e.type === "completion_requested" && e.goalId === activeGoal.id)) {
 				prompt = `${prompt}\n\n[AUDITOR REJECTION goalId=${activeGoal.id}]\nAn independent auditor previously rejected a completion request for this goal. Reason: ${auditorResult.report.slice(0, 300)}\nAddress the auditor's objections before requesting completion again.`;
@@ -405,9 +410,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		}
 		if (core.runtime.isPostCompactReminderPending() && shouldInjectPostCompactReminder({ pending: true, goal: activeGoal })) {
 			core.runtime.clearPostCompactReminder();
-			// Use deterministic compaction summary instead of generic reminder
-			try {
-				const ledger = readGoalLedger(ctx);
+				// Use deterministic compaction summary instead of generic reminder
+				try {
+					const ledger = getPromptLedger();
 				const compaction = buildCompactionSummary({ goalsById: core.goalsById, focusedGoalId: core.focusedGoalId, ledgerEvents: ledger.events });
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${activeGoal.id}]\n${compaction}`;
 			} catch {
@@ -473,4 +478,3 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (core.state.goal) core.persist(ctx);
 	});
 }
-

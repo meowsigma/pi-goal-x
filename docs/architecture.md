@@ -182,6 +182,7 @@ user confirms.
 - `/sisyphus [seed]` starts a Sisyphus guided draft.
 - `/goal-direct <objective>` and `/sisyphus-direct <objective>` create directly without drafting.
 - `/goal-list` prints all open goals with id, status, mode, usage, objective title, path, and a focus marker.
+- `/goal-status health` performs a read-only coherence check for focus, lifecycle, goal-file presence, malformed ledger entries, task progress, and token-budget pressure; it never acts as a completion verdict.
 - `/goal-focus` uses `ctx.ui.select` when multiple goals are open and updates only session focus.
 - `/goal-unfocus` writes a null session focus entry, clears continuation/runtime state, aborts in-flight work and audits for that session, and leaves the shared active goal file and project-global focus ledger unchanged. Focus revision tokens prevent pending completion and task-list results from mutating a goal after detachment.
 - `/goal-resume` resumes the focused paused goal; when unfocused with multiple open goals, it asks the user to choose. Choosing an already active goal only focuses it.

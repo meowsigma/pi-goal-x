@@ -235,3 +235,20 @@ throttle boundary, full-events API untouched. All pass; suite 765/765;
   repair backs up + removes lock + refreshes snapshot (orphan gone);
   read-only invariance (no ledger appends, no goal-file rewrites).
   Suite 780/780; tsc + lint clean; gate PASS.
+
+## 2026-08-09 — Phase 3e: crash/interruption + multi-process fault tests
+
+- New tests/fault-injection.test.ts (5 tests, real child processes):
+  - torn goal-file write (partial temp + truncated goal file) is detected as
+    malformed, temp files are never parsed, a re-write atomically restores;
+  - torn ledger tail (partial JSONL line) is counted malformed, valid events
+    before it are intact, and the checkpoint tail replay tolerates it;
+  - stale lock (dead pid, old mtime) is reclaimed promptly; a live child
+    holder makes acquisition fail fast (bounded, <2s — no TUI freeze);
+  - two child processes write the same goal concurrently via the extension's
+    atomic writer — every surviving file parses cleanly and is one complete
+    writer's version, never a hybrid;
+  - a child process appends a goal file + ledger event while the parent's
+    caches are warm — the refresh diff reports both (cross-process
+    invalidation pickup).
+  Suite 785/785; tsc + lint clean; gate PASS; diff-check clean.

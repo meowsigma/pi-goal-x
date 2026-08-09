@@ -252,3 +252,12 @@ throttle boundary, full-events API untouched. All pass; suite 765/765;
     caches are warm — the refresh diff reports both (cross-process
     invalidation pickup).
   Suite 785/785; tsc + lint clean; gate PASS; diff-check clean.
+
+## 2026-08-09 (post-goal steer) — CI slimmed
+
+- Single **Node 24** job (the node 22 matrix leg dropped; Node 24 covers the
+  `>=22.15.0` floor), halving runner time.
+- `concurrency` group with `cancel-in-progress: true`: a new push/PR update
+  cancels the previous run instead of queueing duplicates.
+- All gates kept (check, lint, test:all, selfcheck, pack dry-run, audit,
+  bench gate) — every remaining step is seconds-level (~30s wall-clock job).

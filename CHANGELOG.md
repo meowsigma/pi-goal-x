@@ -2,6 +2,48 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.27.0] — 2026-08-09
+
+### Added
+
+- **`/goal-refresh`** — re-reads the pool, ledger (incl. checkpoint), and
+  settings caches from disk and reports what changed; the explicit user-owned
+  path for picking up external edits to `.pi` files (no watchers, no per-turn
+  polling).
+- **`/goal-recovery`** — read-only storage/recovery report: malformed goal
+  files, malformed ledger lines, stale locks, and orphaned pool-snapshot
+  entries. `/goal-recovery repair` removes stale locks and refreshes the pool
+  snapshot after confirmation, with every touched file backed up to
+  `.pi/goals/.recovery-backup/` first (malformed files/lines are reported
+  only — never rewritten).
+- **Versioned atomic ledger checkpoint** (`.pi/goals/.goal-ledger-
+  checkpoint.json`) — startup loads the reconstructed state and replays only
+  the ledger tail instead of parsing the whole JSONL; written atomically on
+  the mutation path (throttled to hold the append headroom), with automatic
+  full-parse fallback for missing/corrupt/version-mismatched checkpoints.
+- **GitHub Actions CI** — Node 22 + 24 matrix runs `npm ci` → check → lint →
+  test:all → selfcheck → pack dry-run → audit → NAF benchmark gate on every
+  push and PR.
+- **Engineering contract** — `package.json` declares Node `>=22.15.0` and pi
+  SDK peer ranges `>=0.83.0 <0.85.0` (compat-tested on 0.83.0 and 0.84.1);
+  Dependabot (weekly); a small ESLint gate; `noUncheckedIndexedAccess`
+  enabled; superseded `docs/goal-ts-refactor-test-strategy.md` no longer
+  shipped in the tarball.
+- New benchmark rows for the checkpoint path and the pool-snapshot fast path
+  (see BENCH-AFTER.md).
+
+### Fixed
+
+- **Pool-snapshot cold-start fast path** — the snapshot lived inside the
+  goals directory whose mtime it uses as its freshness key, so its own write
+  invalidated the key and every cold read paid an extra readdir fallback
+  (3 ops instead of the claimed 2). Moved to `.pi/.goals-pool-snapshot.json`;
+  `B1.pool.cold` is back to 2 ops; legacy in-dir snapshots are still read as
+  a one-time fallback.
+- **Test runner on Node 22** — `--test-isolation=none` (Node ≥ 23.4 only) is
+  now probed and omitted on older releases, so the suite runs on the
+  declared Node 22.15+ floor (verified 785/785 on Node 22.23).
+
 ## [0.26.3] — 2026-08-09
 
 ### Added

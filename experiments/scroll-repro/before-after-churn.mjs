@@ -27,7 +27,8 @@
 // scenario scrolls, or when a spinner tick emits output while the user is
 // scrolled up reading the dialog.
 
-import { TUI, Container } from "../../node_modules/@earendil-works/pi-tui/dist/tui.js";
+import { Container } from "../../node_modules/@earendil-works/pi-tui/dist/tui.js";
+import { TuiMainScreen } from "../../node_modules/@earendil-works/pi-tui/dist/index.js";
 import { runGoalQuestionnaire } from "../../extensions/goal-questionnaire.ts";
 
 const ROWS = Number(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? 40);
@@ -167,7 +168,7 @@ function makeSpinner(tui) {
 
 async function runScenario(chatLines, context, label, expectsFits) {
 	const { terminal, writes } = makeTerminal();
-	const tui = new TUI(terminal, false, "/tmp/tui-before-after-churn");
+	const tui = new TuiMainScreen(terminal, false, "/tmp/tui-before-after-churn");
 	// REAL pi layout: header, chat, status(spinner), editorContainer, footer.
 	const header = new Container();
 	header.render = () => ["pi • model • cwd"];

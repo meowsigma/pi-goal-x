@@ -12,7 +12,8 @@
 //
 // Usage: node repro-dialog-render.mjs [chatLines] [dialogLines] [rows]
 
-import { TUI, Container } from "../../node_modules/@earendil-works/pi-tui/dist/tui.js";
+import { Container } from "../../node_modules/@earendil-works/pi-tui/dist/tui.js";
+import { TuiMainScreen } from "../../node_modules/@earendil-works/pi-tui/dist/index.js";
 
 const CHAT_LINES = Number(process.argv[2] ?? 60);
 const DIALOG_LINES = Number(process.argv[3] ?? 34);
@@ -96,7 +97,7 @@ function classify(buffer, label, rows, startRow) {
 
 // ── Scenario A: current behavior — non-overlay dialog replacing the editor ──
 {
-	const tui = new TUI(terminal, false, "/tmp/tui-repro");
+	const tui = new TuiMainScreen(terminal, false, "/tmp/tui-repro");
 	const chat = new Chat();
 	const footer = new Container(); footer.render = () => ["─ footer ─"];
 	const editorContainer = new Container();
@@ -127,7 +128,7 @@ function classify(buffer, label, rows, startRow) {
 
 // ── Scenario B: overlay dialog (composited in place) ──
 {
-	const tui = new TUI(terminal, false, "/tmp/tui-repro");
+	const tui = new TuiMainScreen(terminal, false, "/tmp/tui-repro");
 	const chat = new Chat();
 	const footer = new Container(); footer.render = () => ["─ footer ─"];
 	const editorContainer = new Container();

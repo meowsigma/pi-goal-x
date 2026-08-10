@@ -2,6 +2,26 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.27.2] — 2026-08-10
+
+### Fixed
+
+- **Goal widget never fills the terminal — scroll-up works when the terminal
+  is exactly the goal UI's height** — when the terminal window was just (or
+  less than) the height of the goal UI, the widget rendered its full
+  unbounded height: the goal UI consumed every row, the editor/chat fell out
+  of the viewport, and every widget update triggered pi-tui's shrink
+  full-render (`\x1b[2J\x1b[H\x1b[3J`), erasing terminal scrollback — so
+  scrolling up had nothing to show. The widget now reads the terminal height
+  at render time (`tui.terminal.rows`) and bounds its rendered lines to
+  `terminalRows − 6` (reserving the status line, editor, footer, and a chat
+  row) across every state (compact, expanded, audit, debug, result card,
+  unfocused). The bound is a deterministic head slice: content that fits
+  renders exactly as before, the widget never oscillates, and non-TUI
+  callers (`/goal-status`) stay unbounded.
+
+Spec: specs/2026-08-10-widget-height-bound-scrollback-fix/
+
 ## [0.27.1] — 2026-08-10
 
 ### Fixed

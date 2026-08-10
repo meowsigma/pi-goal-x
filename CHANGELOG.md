@@ -2,6 +2,30 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.27.3] — 2026-08-11
+
+### Fixed
+
+- **Terminal stays scrollable while the expanded goal widget overflows it —
+  no more jump-to-bottom on goal updates** — once the expanded widget was
+  taller than the terminal, every goal-state change (usage tick, task
+  completion, activity-feed growth, status change) altered the widget's
+  rendered line count, which changed the buffer's line count, which made the
+  terminal re-pin to the bottom — so scrolling up to read the agent's chat
+  never held while the widget was active. The widget now keeps a **sticky
+  cap**: the first render where its natural height reaches the terminal
+  bound (`terminalRows − 6`) latches that exact height for the rest of the
+  mode, rendering a deterministic head slice when content grows and blank
+  rows when it shrinks, so the buffer line count never changes from
+  goal-state updates. The cap adapts to the terminal (growing the window
+  reveals more of the widget; when the widget fits, everything renders and
+  terminal scrolling works), resets per mode (compact, expanded, audit,
+  result card, debug, unfocused), stays optional for non-TUI callers
+  (`/goal-status`), and emits no clear/scrollback-wipe sequences
+  (`\x1b[2J`/`\x1b[3J`/1049).
+
+Spec: specs/2026-08-11-stable-widget-height/
+
 ## [0.27.2] — 2026-08-10
 
 ### Fixed

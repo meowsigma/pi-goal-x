@@ -577,6 +577,7 @@ const ARROW_DOWN = "\x1b[B";
 const ARROW_UP = "\x1b[A";
 const TAB_KEY = "\t";
 const ENTER_KEY = "\r";
+const ESC_KEY = "\x1b";
 
 /** Open a questionnaire against an ANSI-emitting theme with real TUI dims. */
 function openQuestionnaireComponent(
@@ -598,7 +599,7 @@ function openQuestionnaireComponent(
 	void runGoalQuestionnaire(ctx, args.questions);
 	const record = ctx._customCalls[0];
 	assert.ok(record, "goal_questionnaire opens a custom dialog");
-	const { tui } = createMockTUI();
+	const { tui, state } = createMockTUI();
 	const augmented = Object.assign(tui, {
 		terminal: { rows: args.rows },
 		previousLines: Array.from({ length: args.baseFrameLines }, () => "x"),
@@ -609,9 +610,21 @@ function openQuestionnaireComponent(
 		bg: () => "",
 		dim: (v: string) => v,
 	} as unknown as ReturnType<typeof createMockTheme>;
-	return record.factory(augmented, ansiTheme, {}, () => {}) as unknown as {
+	const component = record.factory(augmented, ansiTheme, {}, () => {}) as unknown as {
 		render(w: number): string[];
 		handleInput(data: string): void;
+		focused: boolean;
+	};
+	return {
+		render: component.render.bind(component),
+		handleInput: component.handleInput!.bind(component),
+		/** Set/clear the dialog focus flag exactly as the pi TUI does. */
+		set focused(v: boolean) { component.focused = v; },
+		get focused(): boolean { return component.focused; },
+		/** setShowHardwareCursor call log (mock TUI records every call). */
+		hardwareCursorCalls: () => [...state.setShowHardwareCursorCalls],
+		/** Raw (unstripped) render lines, for CURSOR_MARKER inspection. */
+		rawRender: (w = 100) => component.render(w),
 	};
 }
 
@@ -762,4 +775,68 @@ test("input mode keeps the editor visible when bounded (tail-keep unchanged)", (
 	assert.ok(view.includes("Your answer:"), "editor prompt visible");
 	assert.ok(view.includes("Enter to submit"), "editor submit hint visible");
 	assert.ok(component.render(100).length <= 10, "input-mode dialog stays within the bound");
+});
+
+// ── Custom-answer input acceptance (specs/2026-08-09-questionnaire-custom-answers-and-options) ─
+// The dialog must anchor the answer editor for text input: Focusable
+// propagation (CURSOR_MARKER emitted by the Editor when focused) and the
+// hardware cursor on while typing, off otherwise (pi docs/tui.md).
+
+const CURSOR_MARKER = "\u001B_pi:c\u0007";
+
+test("input mode: Editor emits CURSOR_MARKER and hardware cursor is on while typing", () => {
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [{
+			id: "q",
+			question: "Pick or write your answer",
+			options: ["Alpha", "Beta", "Gamma"],
+		}],
+	});
+	// pi TUI sets focused=true when the custom dialog gains focus.
+	component.focused = true;
+	// Select-mode: cursor stays off even though the dialog is focused.
+	assert.ok(component.hardwareCursorCalls().every((v) => v === false), "hardware cursor off in select mode");
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ENTER_KEY); // "Write your own answer..."
+	const calls = component.hardwareCursorCalls();
+	assert.equal(calls[calls.length - 1], true, "hardware cursor enabled on entering input mode");
+	const markerLines = component.rawRender(100).filter((l) => l.includes(CURSOR_MARKER));
+	assert.equal(markerLines.length, 1, "Editor emits CURSOR_MARKER at the cursor position when focused");
+	// ASCII typing lands in the editor.
+	for (const ch of "hello") component.handleInput!(ch);
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
+	assert.ok(component.render(100).map(strip).join("\n").includes("hello"), "typed text lands in the editor");
+	// IME-style composed text (e.g. CJK) also lands once focus is anchored.
+	for (const ch of "我的答案") component.handleInput!(ch);
+	assert.ok(component.render(100).map(strip).join("\n").includes("我的答案"), "composed text lands in the editor");
+	// Esc leaves input mode and releases the cursor.
+	component.handleInput!(ESC_KEY);
+	const afterEsc = component.hardwareCursorCalls();
+	assert.equal(afterEsc[afterEsc.length - 1], false, "hardware cursor off after leaving input mode");
+});
+
+test("custom answer flows to the summary as (wrote) and Enter submits it", () => {
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [
+			{ id: "q1", question: "First question", options: ["A1", "A2"] },
+			{ id: "q2", question: "Second question", options: ["B1", "B2"] },
+		],
+	});
+	component.focused = true;
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ENTER_KEY); // "Write your own answer..." on q1
+	for (const ch of "my custom answer") component.handleInput!(ch);
+	component.handleInput!(ENTER_KEY); // submit the custom answer → q2
+	component.handleInput!(TAB_KEY); // to the submit summary tab
+	const view = component.render(100).map(strip).join("\n");
+	assert.ok(view.includes("Ready to submit"), "submit summary shown");
+	assert.ok(view.includes("(wrote) my custom answer"), "custom answer recorded as (wrote) in the summary");
 });

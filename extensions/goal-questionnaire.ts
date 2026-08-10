@@ -344,6 +344,11 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		let optionIndex = 0;
 		let inputMode = false;
 		let inputQuestionId: string | null = null;
+		// Focusable container state: the TUI sets `focused` when the dialog has
+		// focus; we propagate it to the embedded Editor while in input mode so
+		// the editor emits CURSOR_MARKER and the hardware cursor is positioned
+		// for IME input (pi docs/tui.md — Focusable Interface).
+		let dialogFocused = false;
 		let cachedLines: string[] | undefined;
 		let optionsStartIndex = -1;
 		// §options-scroll viewport state (select-mode + submit tabs only).
@@ -406,6 +411,9 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				inputMode = true;
 				inputQuestionId = q.id;
 				editor.setText(draft ?? (existing?.wasCustom ? existing.answer : ""));
+				// Anchor the editor while the dialog has focus (see enterInputMode).
+				editor.focused = dialogFocused;
+				tui.setShowHardwareCursor(dialogFocused);
 			} else if (existing?.wasCustom) {
 				optionIndex = q.options.length;
 			} else if (existing && !existing.wasCustom) {
@@ -441,6 +449,29 @@ function advanceAfterAnswer() {
 			answers.set(qId, { id: qId, question: q?.question ?? qId, answer: value, wasCustom });
 		}
 
+		/**
+		 * Activate the answer editor for a question: position the hardware
+		 * cursor and mark the Editor focused (emits CURSOR_MARKER for IME).
+		 */
+		function enterInputMode(qId: string) {
+			inputMode = true;
+			inputQuestionId = qId;
+			const draft = drafts.get(qId);
+			const existing = answers.get(qId);
+			editor.setText(draft ?? (existing?.wasCustom ? existing.answer : ""));
+			editor.focused = dialogFocused;
+			tui.setShowHardwareCursor(dialogFocused);
+		}
+
+		/** Deactivate the answer editor: release the cursor and clear the editor. */
+		function leaveInputMode() {
+			inputMode = false;
+			inputQuestionId = null;
+			editor.focused = false;
+			tui.setShowHardwareCursor(false);
+			editor.setText("");
+		}
+
 		editor.onSubmit = (value) => {
 			if (!inputQuestionId) return;
 			const trimmed = value.trim();
@@ -450,9 +481,7 @@ function advanceAfterAnswer() {
 			}
 			drafts.delete(inputQuestionId);
 			saveAnswer(inputQuestionId, trimmed, true);
-			inputMode = false;
-			inputQuestionId = null;
-			editor.setText("");
+			leaveInputMode();
 			advanceAfterAnswer();
 		};
 
@@ -462,9 +491,7 @@ function advanceAfterAnswer() {
 				if (text.trim()) drafts.set(inputQuestionId, text);
 				else drafts.delete(inputQuestionId);
 			}
-			inputMode = false;
-			inputQuestionId = null;
-			editor.setText("");
+			leaveInputMode();
 		}
 
 		enterQuestion(questions[0]!);
@@ -573,11 +600,7 @@ function advanceAfterAnswer() {
 
 			if (matchesKey(data, Key.enter) && q) {
 				if (q.options.length === 0 || opts[optionIndex]?.isCustom) {
-					inputMode = true;
-					inputQuestionId = q.id;
-					const draft = drafts.get(q.id);
-					const existing = answers.get(q.id);
-					editor.setText(draft ?? (existing?.wasCustom ? existing.answer : ""));
+					enterInputMode(q.id);
 					refresh();
 					return;
 				}
@@ -828,7 +851,20 @@ function advanceAfterAnswer() {
 			return lines;
 		}
 
-		return { render, invalidate: () => { cachedLines = undefined; }, handleInput };
+		return {
+			render,
+			invalidate: () => { cachedLines = undefined; },
+			handleInput,
+			// Focusable (pi docs/tui.md): propagate focus to the embedded Editor
+			// so it emits CURSOR_MARKER and the hardware cursor is positioned
+			// correctly for IME input while the answer editor is active.
+			get focused(): boolean { return dialogFocused; },
+			set focused(v: boolean) {
+				dialogFocused = v;
+				editor.focused = v && inputMode;
+				tui.setShowHardwareCursor(v && inputMode);
+			},
+		};
 	});
 }
 

@@ -66,3 +66,34 @@ is the **after** assertion and fails (exit 1) on either churn bug:
    ticks), and any output while the user is scrolled up snaps the viewport to
    the bottom — fixed by `setWorkingVisible(false)` for the dialog duration
    (0 bytes/tick after the fix).
+
+## Goal widget stable height (2026-08-11)
+
+`widget-height-variability.mjs` measures the widget's NATURAL (unbounded)
+rendered height across a realistic goal-state progression — activity-feed
+growth, current-task contract/evidence wrapping, verification text, budget,
+task growth. Root-cause evidence: on a 24-row terminal (cap 18) the expanded
+dashboard's natural height spans 4..31 and the capped rendered height churns
+4 → 13 → 15 → 14 → 18, so the buffer line count changes and the terminal
+jumps to the bottom.
+
+```
+node experiments/scroll-repro/widget-height-variability.mjs [--rows N] [--expect]
+```
+
+`widget-height-bound.mjs` drives the real `TuiMainScreen` with pi's real
+regular-mode geometry (ScrollView transcript + VStack dock + real
+`GoalWidgetComponent`) and asserts, per scenario:
+
+- widget rendered lines ≤ `terminalRows − WIDGET_HEIGHT_RESERVE`;
+- chat reachable in terminal scrollback; editor/footer visible;
+- **0** `\x1b[2J` / `\x1b[3J` / 1049 emissions on widget updates;
+- **sticky cap** (spec 2026-08-11): once the widget's natural height reaches
+  the cap, the rendered height AND buffer line count stay constant across
+  goal-state changes; the fits case is byte-identical; terminal resizes adapt
+  (grow reveals more widget, shrink re-latches); regime changes (compact↔
+  expanded, audit, result card) re-evaluate from natural.
+
+```
+node experiments/scroll-repro/widget-height-bound.mjs --expect
+```

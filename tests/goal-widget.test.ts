@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { renderGoalWidgetLines, renderAuditorWidgetLines, renderAuditResultCardView, GoalWidgetComponent, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
+import { renderGoalWidgetLines, renderAuditorWidgetLines, renderAuditResultCardView, GoalWidgetComponent, applyStableHeightBound, type GoalWidgetRecord, type AuditorWidgetProgress } from "../extensions/widgets/goal-widget.ts";
 import type { GoalTask } from "../extensions/goal-record.ts";
 import { createMockTUI, createMockTheme } from "./tui-test-utils.ts";
 
@@ -1032,4 +1032,179 @@ test("GoalWidgetComponent render height is deterministic across repeated renders
 	const third = component.render(100).length;
 	assert.equal(first, second);
 	assert.equal(second, third);
+});
+
+// ── sticky-cap stable height (spec 2026-08-11-stable-widget-height) ────────
+
+const freshStableState = () => ({ stickyCap: undefined as number | undefined, stickyRegime: undefined as string | undefined, stickyTerminalRows: undefined as number | undefined });
+
+test("applyStableHeightBound: latches at the cap once natural exceeds it (cap crossing up)", () => {
+	const state = freshStableState();
+	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE); // 18
+	const natural10 = Array.from({ length: 10 }, (_, i) => `n${i}`);
+	const natural25 = Array.from({ length: 25 }, (_, i) => `n${i}`);
+	const natural30 = Array.from({ length: 30 }, (_, i) => `n${i}`);
+
+	// fits first: untouched, no latch
+	assert.deepEqual(applyStableHeightBound(natural10, 24, state, "regime"), natural10);
+	assert.equal(state.stickyCap, undefined);
+
+	// crosses the cap: latches at the cap, head slice
+	const out = applyStableHeightBound(natural25, 24, state, "regime");
+	assert.equal(out.length, cap);
+	assert.deepEqual(out, natural25.slice(0, cap));
+	assert.equal(state.stickyCap, cap);
+
+	// still above: constant
+	assert.equal(applyStableHeightBound(natural30, 24, state, "regime").length, cap);
+	assert.equal(applyStableHeightBound(natural25, 24, state, "regime").length, cap);
+});
+
+test("applyStableHeightBound: pads deterministically when natural dips below the cap (cap crossing down)", () => {
+	const state = freshStableState();
+	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE); // 18
+	applyStableHeightBound(Array.from({ length: 25 }), 24, state, "regime"); // latch at 18
+	const natural12 = Array.from({ length: 12 }, (_, i) => `n${i}`);
+
+	const padded = applyStableHeightBound(natural12, 24, state, "regime");
+	assert.equal(padded.length, cap, "rendered height stays at the committed cap");
+	assert.deepEqual(padded.slice(0, 12), natural12, "content preserved");
+	assert.deepEqual(padded.slice(12), Array(cap - 12).fill(""), "blank filler rows");
+
+	// back above the cap: head slice again, still the same height
+	const natural20 = Array.from({ length: 20 }, (_, i) => `n${i}`);
+	assert.equal(applyStableHeightBound(natural20, 24, state, "regime").length, cap);
+	// exactly at the cap: unchanged, still the same height
+	assert.equal(applyStableHeightBound(Array.from({ length: cap }), 24, state, "regime").length, cap);
+});
+
+test("applyStableHeightBound: fits case is byte-identical and never latches", () => {
+	const state = freshStableState();
+	const natural = Array.from({ length: 13 }, (_, i) => `line ${i}`);
+	const out = applyStableHeightBound(natural, 30, state, "regime");
+	assert.deepEqual(out, natural, "returns the input unchanged");
+	assert.equal(state.stickyCap, undefined, "no latch when it fits");
+	assert.deepEqual(applyStableHeightBound(natural, 30, state, "regime"), natural, "deterministic");
+});
+
+test("applyStableHeightBound: terminal resize clears the latch and adapts to the new height", () => {
+	const state = freshStableState();
+	const natural22 = Array.from({ length: 22 }, (_, i) => `n${i}`);
+	const natural25 = Array.from({ length: 25 }, (_, i) => `n${i}`);
+	const cap24 = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE); // 18
+
+	applyStableHeightBound(natural25, 24, state, "regime"); // latch at 18
+	assert.equal(state.stickyCap, cap24);
+
+	// grow the terminal: more of the widget renders (min(natural, new cap))
+	const cap30 = Math.max(1, 30 - WIDGET_HEIGHT_RESERVE); // 24
+	const grown = applyStableHeightBound(natural22, 30, state, "regime");
+	assert.equal(grown.length, Math.min(natural22.length, cap30), "grow reveals more of the widget");
+	assert.equal(state.stickyCap, undefined, "latch cleared on resize");
+
+	// shrink back: re-latches at the new cap
+	const shrunk = applyStableHeightBound(natural25, 24, state, "regime");
+	assert.equal(shrunk.length, cap24, "re-latches at the 24-row cap");
+});
+
+test("applyStableHeightBound: regime change clears the latch so the new mode starts from natural", () => {
+	const state = freshStableState();
+	const big = Array.from({ length: 25 }, (_, i) => `n${i}`);
+	const small = Array.from({ length: 10 }, (_, i) => `n${i}`);
+	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+
+	applyStableHeightBound(big, 24, state, "expanded"); // latch
+	assert.equal(state.stickyCap, cap);
+
+	// regime change: fresh evaluation — fits -> natural, no pad
+	const out = applyStableHeightBound(small, 24, state, "compact");
+	assert.deepEqual(out, small, "compact starts from its own natural height");
+	assert.equal(state.stickyCap, undefined, "latch cleared on regime change");
+
+	// new regime over the cap latches independently
+	applyStableHeightBound(big, 24, state, "compact");
+	assert.equal(state.stickyCap, cap);
+	// back to the expanded regime: latch was dropped there, re-evaluates
+	const out2 = applyStableHeightBound(small, 24, state, "expanded");
+	assert.deepEqual(out2, small);
+});
+
+test("applyStableHeightBound: unbounded without a terminal (mock/harness/status)", () => {
+	const state = freshStableState();
+	const lines = Array.from({ length: 40 }, (_, i) => `n${i}`);
+	const out = applyStableHeightBound(lines, undefined, state, "regime");
+	assert.deepEqual(out, lines, "no terminal -> unbounded");
+	assert.equal(state.stickyCap, undefined);
+	assert.equal(state.stickyTerminalRows, undefined);
+});
+
+test("GoalWidgetComponent: rendered height is constant across goal-state changes once at the cap", () => {
+	const task = (id: string, status: string) => ({
+		id,
+		title: `Task ${id} with a reasonably long title for wrapping tests`,
+		status,
+		createdAt: "2026-08-10T00:00:00Z",
+		updatedAt: "2026-08-10T00:00:00Z",
+		completedAt: status === "complete" ? "2026-08-10T00:01:00Z" : undefined,
+	} as GoalTask);
+	let current: GoalWidgetRecord = { ...goal(), taskList: { tasks: [], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } };
+	let events: unknown[] = [];
+	const { tui } = createMockTUI({ terminalRows: 24 });
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+		getLedgerEvents: () => events as never,
+	});
+	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE); // 18
+
+	const heights: number[] = [];
+	const steps: Array<() => void> = [
+		() => { current = { ...current, taskList: { tasks: [task("t1", "pending")], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } }; },
+		() => { current = { ...current, taskList: { tasks: [task("t1", "complete"), task("t2", "pending")], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } }; events = [{ type: "task_complete", at: "2026-08-10T00:01:00Z", goalId: "g1", taskId: "t1" }]; },
+		() => { current = { ...current, taskList: { tasks: Array.from({ length: 12 }, (_, i) => task(`t${i}`, i < 5 ? "complete" : "pending")), blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } }; },
+		() => { current = { ...current, verificationContract: "Run npm test (0 failures) and re-read every requirement" }; },
+		() => { current = { ...current, tokenBudget: 200000 }; },
+		() => { current = { ...current, usage: { activeSeconds: 5000, tokensUsed: 9000 } }; },
+	];
+	for (const step of steps) {
+		step();
+		heights.push(component.render(100).length);
+	}
+	// the latch engages once natural exceeds the cap and holds from then on
+	const firstLatchIdx = heights.findIndex((h) => h === cap);
+	assert.ok(firstLatchIdx >= 0, `reached the cap: ${heights.join(",")}`);
+	for (let i = firstLatchIdx + 1; i < heights.length; i++) {
+		assert.equal(heights[i], cap, `constant after the latch at step ${i}: ${heights.join(",")}`);
+	}
+});
+
+test("GoalWidgetComponent: expanding the terminal reveals more of the widget, collapsing re-latches", () => {
+	let current: GoalWidgetRecord = { ...goal(), taskList: { tasks: Array.from({ length: 12 }, (_, i) => ({ id: `t${i}`, title: `Task ${i} long title for wrapping`, status: i < 5 ? "complete" : "pending", createdAt: "2026-08-10T00:00:00Z", updatedAt: "2026-08-10T00:00:00Z", completedAt: i < 5 ? "2026-08-10T00:01:00Z" : undefined })), blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } };
+	const { tui } = createMockTUI({ terminalRows: 24 });
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+	});
+	const cap24 = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	assert.equal(component.render(100).length, cap24, "latched at 18 on a 24-row terminal");
+
+	const grown = new GoalWidgetComponent({
+		tui: createMockTUI({ terminalRows: 30 }).tui,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+	}).render(100);
+	const cap30 = Math.max(1, 30 - WIDGET_HEIGHT_RESERVE);
+	assert.ok(grown.length > cap24, `growing the terminal reveals more (${grown.length} > ${cap24})`);
+	assert.ok(grown.length <= cap30, `still bounded by the new cap (${grown.length} <= ${cap30})`);
 });

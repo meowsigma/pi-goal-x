@@ -2,6 +2,29 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.27.1] — 2026-08-10
+
+### Fixed
+
+- **Questionnaire custom answers now accept typed input** — the shared
+  questionnaire dialog (used by `goal_question`, `goal_questionnaire`, and
+  the draft-confirm prompt) never anchored a text cursor: the dialog
+  container was not `Focusable`, so the embedded editor emitted no
+  `CURSOR_MARKER` and the hardware cursor stayed hidden for the whole dialog.
+  Per pi's TUI contract this breaks IME/composed input (e.g. CJK candidate
+  windows have no anchor) — reported as "the agent is not accepting my text
+  input". The container now implements `Focusable` and propagates focus to
+  the editor while typing; the hardware cursor is on during input mode and
+  released on exit.
+- **Every questionnaire option is immediately viewable** — the options list
+  is no longer an internal scrollport that clips options behind
+  arrow-key/Page scrolling at bounded terminal heights. All options (plus
+  the "Write your own answer..." row) render in the initial frame; on
+  overflow the question/context section yields first (it stays in the agent
+  transcript). The scroll viewport remains only as a last resort when an
+  option list alone exceeds the terminal height. The dialog never exceeds
+  the terminal-height bound (churn guard preserved).
+
 ## [0.27.0] — 2026-08-09
 
 ### Added

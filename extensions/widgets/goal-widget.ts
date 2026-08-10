@@ -134,6 +134,39 @@ function fit(value: string, width: number): string {
 	return visibleWidth(value) > width ? truncateToWidth(value, width, "…") : value;
 }
 
+// ── terminal-height bound (spec 2026-08-10-widget-height-bound-scrollback-fix) ──
+
+/**
+ * Minimum rows reserved below/around the widget so pi's frame stays usable
+ * when the widget is at its cap: status line (1) + editor minimum (3) +
+ * footer (1) + a chat row (1). With the widget capped at
+ * `terminalRows − WIDGET_HEIGHT_RESERVE`, the widget never fills the terminal:
+ * the chat row stays in the frame, the widget's top lines stay within the
+ * viewport (no pi-tui full-render scrollback wipe), and the editor/footer
+ * stay visible — the equal-height scroll-up failure is impossible. Kept at
+ * the minimum that still guarantees the chat row: a larger reserve would
+ * slice dashboards that genuinely fit (e.g. the expanded 24-line dashboard
+ * on a 30-row terminal renders unchanged at 24 + 5 chrome + 1 chat = 30).
+ */
+export const WIDGET_HEIGHT_RESERVE = 6;
+
+/**
+ * Deterministic height guard: cap rendered lines to the terminal height minus
+ * the reserved chrome. Head slice, because the dashboard's content priority
+ * is top-down (identity → status → progress → tasks → details → hints); the
+ * goal identity/status and the interactive task list stay in frame. Pure
+ * index function — stable across renders, so the widget never shrinks on its
+ * own and can never trigger pi-tui's clearOnShrink full-render
+ * (`\x1b[2J\x1b[H\x1b[3J` scrollback wipe). No-op (unbounded) when
+ * terminalRows is missing (mock TUI, headless contexts, /goal-status text).
+ */
+export function boundWidgetRenderLines(lines: string[], terminalRows: number | undefined): string[] {
+	if (!terminalRows || terminalRows <= 0) return lines;
+	const cap = Math.max(1, terminalRows - WIDGET_HEIGHT_RESERVE);
+	if (lines.length <= cap) return lines;
+	return lines.slice(0, cap);
+}
+
 function heading(theme: Theme, width: number, left: string, right = ""): string {
 	if (!right) return fit(left, width);
 	const rightPart = ` ${right}`;
@@ -190,18 +223,18 @@ export function renderAuditResultCardView(
 	return renderAuditResultCard(deriveAuditResultCard(view.verdict, view.report), theme, width);
 }
 
-export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean; ledgerEvents?: GoalLedgerEvent[]; expanded?: boolean; debug?: boolean; model?: GoalDashboardModel | null; compactScrollOffset?: number; expandedScrollOffset?: number; expandedTaskRows?: number; keybindings?: GoalDashboardKeybindings } = {}): string[] {
+export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean; ledgerEvents?: GoalLedgerEvent[]; expanded?: boolean; debug?: boolean; model?: GoalDashboardModel | null; compactScrollOffset?: number; expandedScrollOffset?: number; expandedTaskRows?: number; keybindings?: GoalDashboardKeybindings; /** Terminal-height bound (see boundWidgetRenderLines); undefined = unbounded. */ terminalRows?: number } = {}): string[] {
 	// When auditor progress is active, show the structured audit dashboard
 	// instead of the normal goal widget (§15.3).
 	if (options.auditorProgress) {
-		return renderAuditorWidgetLines(options.auditorProgress, theme, width, {
+		return boundWidgetRenderLines(renderAuditorWidgetLines(options.auditorProgress, theme, width, {
 			showToolDetails: options.expanded === true || options.debug === true,
-		});
+		}), options.terminalRows);
 	}
 	const openGoalCount = options.openGoalCount ?? 0;
 	if (!goal) {
 		// Unfocused panel when open goals exist; nothing when the pool is empty.
-		return openGoalCount > 0 ? renderUnfocusedDashboard(openGoalCount, theme, width) : [];
+		return boundWidgetRenderLines(openGoalCount > 0 ? renderUnfocusedDashboard(openGoalCount, theme, width) : [], options.terminalRows);
 	}
 	const safeWidth = Math.max(1, width);
 	const otherCount = Math.max(0, openGoalCount - 1);
@@ -215,7 +248,7 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const lines = options.expanded
 		? renderExpandedDashboard(model, theme, safeWidth, { scrollOffset: options.expandedScrollOffset, rows: options.expandedTaskRows, keybindings: options.keybindings })
 		: renderCompactDashboard(model, theme, safeWidth, { scrollOffset: options.compactScrollOffset, keybindings: options.keybindings });
-	return clampLinesToWidth(lines, width);
+	return boundWidgetRenderLines(clampLinesToWidth(lines, width), options.terminalRows);
 }
 
 export class GoalWidgetComponent implements Component {
@@ -318,10 +351,17 @@ export class GoalWidgetComponent implements Component {
 	render(width: number): string[] {
 		const settings = this.getSettings();
 		this.lastRenderWidth = Math.max(1, width);
+		// Terminal-height bound (spec 2026-08-10): read pi's terminal rows at
+		// render time so the widget never fills the terminal — the chat/editor
+		// stay visible and scrollable and the widget can never trigger pi-tui's
+		// shrink full-render (\x1b[2J\x1b[H\x1b[3J) scrollback wipe. Same cast
+		// pattern as the questionnaire churn guard; mock TUIs without a
+		// `terminal` render unbounded.
+		const terminalRows = (this.tui as unknown as { terminal?: { rows?: number } }).terminal?.rows;
 		// §15.4: a finished audit shows its result card until cleared.
 		const auditResult = this.getAuditResult();
 		if (auditResult) {
-			return clampLinesToWidth(renderAuditResultCardView(auditResult, this.theme, width), width);
+			return boundWidgetRenderLines(clampLinesToWidth(renderAuditResultCardView(auditResult, this.theme, width), width), terminalRows);
 		}
 		const goal = this.getGoal();
 		const otherCount = Math.max(0, this.getOpenGoalCount() - 1);
@@ -345,11 +385,12 @@ export class GoalWidgetComponent implements Component {
 			expandedScrollOffset: this.expandedScrollOffset,
 			expandedTaskRows: expandedTaskViewportRows(this.lastRenderWidth),
 			keybindings: settings.keybindings?.dashboard,
+			terminalRows,
 		});
 		if (this.getDebugMode()) {
 			lines.push(...this.renderDebugPanel(width));
 		}
-		return clampLinesToWidth(lines, width);
+		return boundWidgetRenderLines(clampLinesToWidth(lines, width), terminalRows);
 	}
 
 	/**

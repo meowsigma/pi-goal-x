@@ -26,7 +26,7 @@ export interface MockTUIState {
 	requestRenderCalls: number;
 }
 
-export function createMockTUI(): { tui: TUI; state: MockTUIState } {
+export function createMockTUI(options: { terminalRows?: number } = {}): { tui: TUI; state: MockTUIState } {
 	const state: MockTUIState = {
 		getShowHardwareCursor: false,
 		setShowHardwareCursorCalls: [],
@@ -43,6 +43,11 @@ export function createMockTUI(): { tui: TUI; state: MockTUIState } {
 		},
 		render: (_width: number) => [] as string[],
 		invalidate: () => {},
+		// Real pi TUIs expose `terminal.rows`; the widget's terminal-height
+		// bound (spec 2026-08-10) reads it at render time. Absent by default so
+		// existing tests keep rendering unbounded; pass `terminalRows` to
+		// exercise the bound.
+		...(options.terminalRows !== undefined ? { terminal: { rows: options.terminalRows } } : {}),
 	} as unknown as TUI;
 
 	return { tui, state };

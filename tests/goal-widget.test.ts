@@ -876,3 +876,160 @@ test("a new completion re-anchors the viewport to the latest completed task", ()
 	assert.match(text, /↑ 4 more tasks/, "re-anchored window shows the new completion (offset 4)");
 	assert.match(text, /Task number 9/, "the newest completion is visible at the bottom of the window");
 });
+
+// ── terminal-height bound (spec 2026-08-10-widget-height-bound-scrollback-fix) ──
+
+import { boundWidgetRenderLines, WIDGET_HEIGHT_RESERVE } from "../extensions/widgets/goal-widget.ts";
+
+test("boundWidgetRenderLines is a no-op when terminal rows are unknown", () => {
+	const lines = ["a", "b", "c", "d", "e"];
+	assert.deepEqual(boundWidgetRenderLines(lines, undefined), lines);
+	assert.deepEqual(boundWidgetRenderLines(lines, 0), lines);
+	assert.deepEqual(boundWidgetRenderLines(lines, -3), lines);
+});
+
+test("boundWidgetRenderLines leaves content that fits unchanged", () => {
+	const lines = Array.from({ length: 8 }, (_, i) => `line ${i}`);
+	assert.deepEqual(boundWidgetRenderLines(lines, 30), lines);
+	assert.deepEqual(boundWidgetRenderLines(lines, 14), lines); // 8 <= 30-6
+});
+
+test("boundWidgetRenderLines head-slices content over the cap deterministically", () => {
+	const lines = Array.from({ length: 13 }, (_, i) => `line ${i}`);
+	const rows = 13; // terminal == natural widget height (equal-height case)
+	const cap = Math.max(1, rows - WIDGET_HEIGHT_RESERVE); // 7
+	const out = boundWidgetRenderLines(lines, rows);
+	assert.equal(out.length, cap);
+	assert.deepEqual(out, lines.slice(0, cap), "keeps the head (identity/status/tasks)");
+	// deterministic: same input + rows -> same output, no oscillation
+	assert.deepEqual(boundWidgetRenderLines(lines, rows), out);
+});
+
+test("boundWidgetRenderLines floors at 1 line for tiny terminals", () => {
+	const lines = ["a", "b", "c", "d", "e"];
+	assert.equal(boundWidgetRenderLines(lines, 3).length, 1);
+	assert.deepEqual(boundWidgetRenderLines(lines, 3), ["a"]);
+});
+
+test("renderGoalWidgetLines accepts an optional terminalRows bound (pure path)", () => {
+	const withGoal = goal({ taskList: undefined });
+	const unbounded = renderGoalWidgetLines(withGoal, theme, 100, { openGoalCount: 1 });
+	const rows = Math.max(1, unbounded.length - 1); // force the bound to engage
+	const bounded = renderGoalWidgetLines(withGoal, theme, 100, { openGoalCount: 1, terminalRows: rows });
+	const cap = Math.max(1, rows - WIDGET_HEIGHT_RESERVE);
+	assert.ok(bounded.length <= cap, `bounded to ${cap}, got ${bounded.length}`);
+	assert.match(bounded[0]!, /^╭─ pi-goal-x/, "header survives the slice");
+});
+
+test("GoalWidgetComponent with terminalRows caps the compact dashboard at equal terminal height", () => {
+	const { tui } = createMockTUI({ terminalRows: 13 }); // terminal == compact natural height
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+	const lines = component.render(100);
+	const cap = Math.max(1, 13 - WIDGET_HEIGHT_RESERVE);
+	assert.ok(lines.length <= cap, `rendered ${lines.length} lines, cap ${cap}`);
+	assert.match(lines[0]!, /^╭─ pi-goal-x/, "header preserved");
+	assert.match(lines[1]!, /goal: sisyphus running/, "status line preserved");
+});
+
+test("GoalWidgetComponent caps the expanded dashboard at equal terminal height", () => {
+	const { tui } = createMockTUI({ terminalRows: 24 }); // terminal == expanded natural height
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+	});
+	const lines = component.render(100);
+	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	assert.ok(lines.length <= cap, `rendered ${lines.length} lines, cap ${cap}`);
+	assert.match(lines[0]!, /^╭─ pi-goal-x/, "header preserved");
+});
+
+test("GoalWidgetComponent leaves the expanded dashboard unchanged when it fits", () => {
+	const { tui } = createMockTUI({ terminalRows: 30 }); // 24 natural + 6 chrome = 30
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+	});
+	const lines = component.render(100);
+	const natural = new GoalWidgetComponent({
+		tui: createMockTUI().tui, // no terminal rows -> unbounded
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+	}).render(100);
+	assert.equal(lines.length, natural.length, "fits -> byte-identical to the unbounded render");
+});
+
+test("GoalWidgetComponent bounds the audit dashboard, result card, debug panel, and unfocused panel", () => {
+	const mk = (opts: { rows: number; extra?: Partial<ConstructorParameters<typeof GoalWidgetComponent>[0]> }) =>
+		new GoalWidgetComponent({
+			tui: createMockTUI({ terminalRows: opts.rows }).tui,
+			theme: createMockTheme(),
+			getGoal: () => goal(),
+			getOpenGoalCount: () => 1,
+			getSettings: () => ({}),
+			...opts.extra,
+		});
+
+	// Audit dashboard at its natural height (8 lines) on an 8-row terminal.
+	const audit = mk({
+		rows: 8,
+		extra: { getAuditorProgress: () => auditorProgress() },
+	}).render(100);
+	assert.ok(audit.length <= Math.max(1, 8 - WIDGET_HEIGHT_RESERVE), `audit rendered ${audit.length}`);
+	assert.match(audit[0]!, /^╭─ Independent completion audit/, "audit header preserved");
+
+	// Audit result card on a 6-row terminal.
+	const card = mk({
+		rows: 6,
+		extra: { getAuditResult: () => ({ verdict: "approved" as const, report: "Everything checks out." }) },
+	}).render(100);
+	assert.ok(card.length <= Math.max(1, 6 - WIDGET_HEIGHT_RESERVE), `card rendered ${card.length}`);
+	assert.match(card[0]!, /^╭─ Audit result/, "card header preserved");
+
+	// Debug panel at its natural height (36) on a 36-row terminal.
+	const debug = mk({ rows: 36, extra: { getDebugMode: () => true } }).render(100);
+	assert.ok(debug.length <= Math.max(1, 36 - WIDGET_HEIGHT_RESERVE), `debug rendered ${debug.length}`);
+	assert.match(debug[0]!, /^╭─ pi-goal-x/, "dashboard header preserved");
+
+	// Unfocused panel on a 4-row terminal.
+	const unfocused = new GoalWidgetComponent({
+		tui: createMockTUI({ terminalRows: 4 }).tui,
+		theme: createMockTheme(),
+		getGoal: () => null,
+		getOpenGoalCount: () => 2,
+		getSettings: () => ({}),
+	}).render(100);
+	assert.ok(unfocused.length <= Math.max(1, 4 - WIDGET_HEIGHT_RESERVE), `unfocused rendered ${unfocused.length}`);
+});
+
+test("GoalWidgetComponent render height is deterministic across repeated renders", () => {
+	const { tui } = createMockTUI({ terminalRows: 13 });
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => goal(),
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+	});
+	const first = component.render(100).length;
+	const second = component.render(100).length;
+	const third = component.render(100).length;
+	assert.equal(first, second);
+	assert.equal(second, third);
+});

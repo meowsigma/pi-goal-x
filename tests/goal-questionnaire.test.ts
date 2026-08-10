@@ -628,10 +628,11 @@ function openQuestionnaireComponent(
 	};
 }
 
-test("bounded agent question: every option is reachable via PgUp/PgDn, nothing truncated (ANSI-styled)", () => {
+test("bounded agent question: every option is in the initial frame; question stays, scroll indicator gone", () => {
 	// The reported repro shape: a long question + several options at a tight
-	// bound. Before the fix, fitDialogLines kept only the TOP options and
-	// silently dropped the rest.
+	// bound. Options always render in full — the scroll viewport only remains
+	// as a last resort for option blocks that alone exceed the terminal.
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
 	const component = openQuestionnaireComponent({
 		rows: 24,
 		baseFrameLines: 19,
@@ -645,43 +646,16 @@ test("bounded agent question: every option is reachable via PgUp/PgDn, nothing t
 			recommended: 0,
 		}],
 	});
-	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
 	const top = component.render(100).map(strip);
 	assert.ok(top.length <= 10, "dialog stays within the terminal-height bound");
-	assert.ok(top.join("\n").includes("Which definition of parity should the release goal adopt?"), "question fully visible at the top");
-	assert.ok(top.join("\n").includes("1. Preserve the no-execute product definition"), "recommended option visible");
-	assert.ok(top.join("\n").includes("more · PgUp/PgDn scroll"), "bottom edge advertises the clipped content and the scroll affordance");
-
-	component.handleInput!(PAGE_DOWN);
-	const scrolled = component.render(100).map(strip);
-	assert.ok(scrolled.length <= 10, "still within the bound after scrolling");
-	assert.ok(scrolled.join("\n").includes("2. Full vendor parity"), "option 2 is reachable after PageDown");
-	assert.ok(scrolled.join("\n").includes("▲ "), "▲ indicator shows when scrolled down");
-
-	component.handleInput!(PAGE_UP);
-	const back = component.render(100).map(strip).join("\n");
-	assert.ok(back.includes("1. Preserve the no-execute product definition"), "PageUp returns to the recommended option");
-	assert.ok(back.includes("Which definition of parity should the release goal adopt?"), "question still fully readable at the top");
-
-	// Every option label is reachable across the scroll range: the union of
-	// all viewports covers the full content — nothing is permanently hidden.
-	const seen = new Set<string>();
-	for (let i = 0; i < 12; i++) {
-		for (const l of component.render(100).map(strip)) seen.add(l);
-		component.handleInput!(PAGE_DOWN);
-	}
-	const all = [...seen].join("\n");
-	for (const label of ["1. Preserve the no-execute", "2. Full vendor parity"]) {
-		assert.ok(all.includes(label), `reachable across the scroll range: ${label}`);
-	}
-
-	// Ctrl+↑/↓ line-scroll moves the viewport a single line at a time.
-	component.handleInput!(CTRL_DOWN);
-	const ctrl = component.render(100);
-	assert.ok(ctrl.length <= 10, "bound preserved under line-scroll");
+	assert.ok(top.join("\n").includes("Which definition of parity should the release goal adopt?"), "question visible");
+	assert.ok(top.join("\n").includes("1. Preserve the no-execute product definition"), "option 1 in the initial frame");
+	assert.ok(top.join("\n").includes("2. Full vendor parity"), "option 2 in the initial frame");
+	assert.ok(!top.join("\n").includes("PgUp/PgDn"), "no scroll affordance advertised");
+	assert.ok(!top.join("\n").includes("more ·"), "no clipped-content indicator");
 });
 
-test("multi-question tabs: each tab's options reachable and the viewport resets per tab", () => {
+test("multi-question tabs: every option of each tab is in the initial frame", () => {
 	const component = openQuestionnaireComponent({
 		rows: 24,
 		baseFrameLines: 19,
@@ -707,31 +681,72 @@ test("multi-question tabs: each tab's options reachable and the viewport resets 
 			},
 		],
 	});
-	// Scroll question 1 down so its later options are visible.
-	component.handleInput!(PAGE_DOWN);
-	const q1Scrolled = component.render(100).join("\n");
-	assert.ok(q1Scrolled.includes("Scope option B"), "question 1 options reachable after scroll");
+	// Question 1: all three options + the custom row in the first view.
+	const q1 = component.render(100).join("\n");
+	assert.ok(q1.includes("Scope option A"), "question 1 option A in the initial frame");
+	assert.ok(q1.includes("Scope option B"), "question 1 option B in the initial frame");
+	assert.ok(q1.includes("Scope option C"), "question 1 option C in the initial frame");
+	assert.ok(q1.includes("Write your own answer"), "custom row in the initial frame");
+	assert.ok(!q1.includes("PgUp/PgDn"), "no scroll affordance on question 1");
 
-	// Switch to question 2: the viewport resets to the top.
+	// Switch to question 2: fresh tab, all options visible.
 	component.handleInput!(TAB_KEY);
-	const q2Top = component.render(100).join("\n");
-	assert.ok(q2Top.includes("Second question, also long."), "question 2 opens from the top");
-	assert.ok(q2Top.includes("Span option 1"), "question 2 first option visible");
-	assert.ok(!q2Top.includes("▲ "), "no stale scroll position on the new tab");
-
-	component.handleInput!(PAGE_DOWN);
-	const q2Scrolled = component.render(100).join("\n");
-	assert.ok(q2Scrolled.includes("Span option 2"), "question 2 options reachable via scroll");
+	const q2 = component.render(100).join("\n");
+	assert.ok(q2.includes("Second question, also long."), "question 2 opens from the top");
+	assert.ok(q2.includes("Span option 1"), "question 2 option 1 in the initial frame");
+	assert.ok(q2.includes("Span option 2"), "question 2 option 2 in the initial frame");
+	assert.ok(!q2.includes("▲ "), "no stale scroll position on the new tab");
 });
 
-test("selection auto-follow: ↓ on an off-screen option scrolls it into view (ANSI-styled)", () => {
+test("overflow: question/context yields before options; dialog never exceeds the bound", () => {
 	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
 	const component = openQuestionnaireComponent({
 		rows: 24,
 		baseFrameLines: 19,
 		questions: [{
 			id: "q",
-			question: "Pick one — the later options are below the fold.",
+			question: "This question is deliberately long and wraps across several lines to simulate a verbose prompt.",
+			context: "Context one.\nContext two.\nContext three.\nContext four.\nContext five.",
+			options: ["Alpha", "Beta", "Gamma"],
+		}],
+	});
+	const view = component.render(100).map(strip).join("\n");
+	assert.ok(component.render(100).length <= 10, "dialog never exceeds the bound");
+	for (const opt of ["1. Alpha", "2. Beta", "3. Gamma", "Write your own answer"]) {
+		assert.ok(view.includes(opt), `${opt} stays in frame on overflow`);
+	}
+	assert.ok(view.includes("This question is deliberately long"), "question kept while context yields");
+	assert.ok(!view.includes("Context five"), "context gives way first (later context lines drop before any option)");
+	assert.ok(!view.includes("PgUp/PgDn"), "no scroll affordance for realistic overflow");
+});
+
+test("pathological: an option block that alone exceeds the bound falls back to the scroll viewport", () => {
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [{
+			id: "q",
+			question: "Many options.",
+			options: Array.from({ length: 12 }, (_, i) => `Option number ${i + 1}`),
+		}],
+	});
+	const top = component.render(100).map(strip);
+	assert.ok(top.length <= 10, "bound preserved under the viewport fallback");
+	assert.ok(top.join("\n").includes("PgUp/PgDn"), "fallback advertises the scroll affordance");
+	component.handleInput!(PAGE_DOWN);
+	const scrolled = component.render(100).map(strip).join("\n");
+	assert.match(scrolled, /Option number 1[0-2]/, "later options reachable via the fallback viewport");
+});
+
+test("selection stays visible with all options in frame: ↓ moves the marker, nothing scrolls", () => {
+	const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, ""); // eslint-disable-line no-control-regex -- ANSI SGR matching
+	const component = openQuestionnaireComponent({
+		rows: 24,
+		baseFrameLines: 19,
+		questions: [{
+			id: "q",
+			question: "Pick one — every option is immediately viewable.",
 			options: [
 				"Option one — short",
 				"Option two — short",
@@ -743,14 +758,20 @@ test("selection auto-follow: ↓ on an off-screen option scrolls it into view (A
 			recommended: 0,
 		}],
 	});
-	// Walk the selection down past the fold; each ↓ auto-follows the viewport.
+	const initial = component.render(100).map(strip).join("\n");
+	for (const label of ["1. Option one", "2. Option two", "3. Option three", "4. Option four", "5. Option five", "6. Option six", "Write your own answer"]) {
+		assert.ok(initial.includes(label), `${label} in the initial frame`);
+	}
+	assert.ok(!initial.includes("PgUp/PgDn"), "no scroll affordance");
+	// ↓ walks the selection; the marker moves but every option stays on screen.
 	component.handleInput!(ARROW_DOWN);
 	component.handleInput!(ARROW_DOWN);
 	component.handleInput!(ARROW_DOWN);
 	component.handleInput!(ARROW_DOWN);
 	const view = component.render(100).map(strip).join("\n");
-	assert.ok(view.includes("Option five"), "selection auto-follow keeps the selected option visible");
-	assert.ok(view.includes("> 5. Option five"), "selection marker on the visible option");
+	assert.ok(view.includes("> 5. Option five"), "selection marker on the fifth option");
+	assert.ok(view.includes("Option six"), "later option still in frame");
+	assert.ok(component.render(100).length <= 10, "bound preserved");
 });
 
 test("input mode keeps the editor visible when bounded (tail-keep unchanged)", () => {

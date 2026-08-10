@@ -355,6 +355,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		let scrollTop = 0;
 		let needsFollow = false;
 		let optionRanges: Array<[number, number]> = [];
+		let questionBlockEnd = -1;
 		let auditorEnabled = auditorToggleInit?.defaultEnabled ?? true;
 		const answers = new Map<string, GoalQuestionnaireAnswer>();
 		const drafts = new Map<string, string>();
@@ -453,7 +454,67 @@ function advanceAfterAnswer() {
 		 * Activate the answer editor for a question: position the hardware
 		 * cursor and mark the Editor focused (emits CURSOR_MARKER for IME).
 		 */
-		function enterInputMode(qId: string) {
+		/**
+	 * §options-first fit: every option line always stays in frame. When the
+	 * question + context + options exceed the bound, the question/context
+	 * section yields first (it remains in the agent transcript): middle lines
+	 * (blanks, auditor, "Current:", context) drop before the question block
+	 * and the footer hint, and the tail slack (blank/footer) gives way before
+	 * the question. Returns null when even the option block + borders cannot
+	 * fit (pathological) so the caller falls back to the scroll viewport.
+	 */
+	function fitOptionsInFrame(
+		lines: string[],
+		maxDialogLines: number,
+		questionBlockEnd: number,
+		optionsStart: number,
+		lastOptionLine: number,
+	): string[] | null {
+		if (maxDialogLines <= 0 || lines.length <= maxDialogLines) return lines;
+		if (optionsStart < 0 || lastOptionLine < optionsStart) return null;
+		const head = lines.slice(0, Math.max(questionBlockEnd, 1));
+		const middle = lines.slice(Math.max(questionBlockEnd, 1), optionsStart);
+		const tail = lines.slice(optionsStart);
+		const optionsBlockLen = lastOptionLine - optionsStart + 1;
+		// The option block + bottom border must fit on their own; otherwise the
+		// scroll viewport is the last resort (nothing is ever hidden).
+		if (optionsBlockLen + 1 > maxDialogLines) return null;
+		// Shrink the middle from its end: blanks first, then auditor/Current/
+		// context lines — the question block is untouched.
+		const mid = middle.slice();
+		while (head.length + mid.length + tail.length > maxDialogLines && mid.length > 0) {
+			let blankIdx = -1;
+			for (let i = mid.length - 1; i >= 0; i--) {
+				if (mid[i]!.trim() === "") { blankIdx = i; break; }
+			}
+			if (blankIdx >= 0) mid.splice(blankIdx, 1);
+			else mid.pop();
+		}
+		// Still over: the tail gives its slack (blank between options and
+		// footer, then the footer hint) before the question block does. Never
+		// drop the option block or the bottom border.
+		const tailKept = tail.slice();
+		while (head.length + mid.length + tailKept.length > maxDialogLines && tailKept.length > optionsBlockLen + 1) {
+			// Prefer removing a blank line (never the options or the border),
+			// then the line just above the bottom border (the footer hint).
+			let tailBlank = -1;
+			for (let i = tailKept.length - 2; i >= 1; i--) {
+				if (tailKept[i]!.trim() === "") { tailBlank = i; break; }
+			}
+			if (tailBlank >= 1) tailKept.splice(tailBlank, 1);
+			else tailKept.splice(tailKept.length - 2, 1);
+		}
+		// Still over: give the question block's trailing wrap lines (then the
+		// question itself) before giving up — options + borders always stay.
+		const headKept = head.slice();
+		while (head.length + mid.length + tailKept.length > maxDialogLines && headKept.length > 1) {
+			headKept.pop();
+		}
+		if (headKept.length + mid.length + tailKept.length > maxDialogLines) return null;
+		return [...headKept, ...mid, ...tailKept];
+	}
+
+	function enterInputMode(qId: string) {
 			inputMode = true;
 			inputQuestionId = qId;
 			const draft = drafts.get(qId);
@@ -791,6 +852,7 @@ function advanceAfterAnswer() {
 				add(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
 			} else if (q) {
 				addWrapped(theme.fg("text", ` ${q.question}`));
+				questionBlockEnd = lines.length;
 				protectedCount = lines.length;
 				if (q.context) renderContextLines(q.context);
 				// Auditor toggle line between context and options
@@ -834,17 +896,35 @@ function advanceAfterAnswer() {
 				const proposalSegments = !inputMode && currentTab !== questions.length && !!q && q.context
 					? findProposalPresentationSegments(lines, optionsStartIndex)
 					: null;
-				// §options-scroll: select-mode question tabs and the submit summary
-				// are a viewport over the full content (never truncated); input
-				// mode keeps the legacy tail-keep so the editor stays the priority.
-				let scrollState: DialogScrollState | null = null;
-				if (!inputMode) {
-					scrollState = { scrollTop, needsFollow, optionRanges, followIndex: optionIndex };
-				}
-				lines = fitDialogLines(lines, maxDialogLines, protectedCount, proposalSegments, scrollState, (s) => theme.fg("dim", s));
-				if (scrollState) {
-					scrollTop = scrollState.scrollTop;
-					needsFollow = scrollState.needsFollow;
+				if (proposalSegments) {
+					// Proposal confirmations keep their segment protection (tasks +
+					// auditor + options within the bound; the objective-box middle
+					// stays in the scrollback presentation).
+					lines = fitDialogLines(lines, maxDialogLines, protectedCount, proposalSegments);
+				} else if (!inputMode && currentTab !== questions.length && questionBlockEnd >= 0) {
+					// Plain select-mode question tab: all options in frame;
+					// question/context yields first (it stays in the transcript).
+					const fitted = fitOptionsInFrame(lines, maxDialogLines, questionBlockEnd, optionsStartIndex, optionRanges[optionRanges.length - 1]?.[1] ?? -1);
+					if (fitted) {
+						lines = fitted;
+						scrollTop = 0;
+						needsFollow = false;
+					} else {
+						// Pathological: options alone overflow the bound — scroll
+						// viewport is the last resort (nothing ever hidden).
+						const scrollState = { scrollTop, needsFollow, optionRanges, followIndex: optionIndex };
+						lines = fitDialogLines(lines, maxDialogLines, protectedCount, null, scrollState, (s) => theme.fg("dim", s));
+						scrollTop = scrollState.scrollTop;
+						needsFollow = scrollState.needsFollow;
+					}
+				} else {
+					// Input mode, submit tab: legacy tail-keep / viewport behavior.
+					const scrollState = !inputMode ? { scrollTop, needsFollow, optionRanges, followIndex: optionIndex } : null;
+					lines = fitDialogLines(lines, maxDialogLines, protectedCount, null, scrollState, (s) => theme.fg("dim", s));
+					if (scrollState) {
+						scrollTop = scrollState.scrollTop;
+						needsFollow = scrollState.needsFollow;
+					}
 				}
 			}
 			cachedLines = lines;

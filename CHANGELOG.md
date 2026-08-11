@@ -2,6 +2,28 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.27.4] — 2026-08-11
+
+### Fixed
+
+- **Agent writes no longer wipe the terminal scrollback when the widget +
+  chrome overflow the terminal** — with the expanded widget plus the dock
+  chrome (pending "Working…" line, status, editor, footer) taller than the
+  terminal, pi's renderer treated every chat append and status/spinner tick
+  as a change above its viewport top and full-rendered (`\x1b[2J\x1b[H\x1b[3J`),
+  clearing the scrollback and forcing the viewport to the bottom every time
+  the agent wrote. The widget now **sizes itself against the measured dock
+  chrome**: it renders the sibling dock containers (pending + status + editor
+  + footer) at the current width and caps itself at
+  `terminalRows − (measuredChrome + 1)`, so the widget's block plus the
+  chrome never exceeds the terminal — chat appends and status/spinner ticks
+  become in-place diffs, never wipes, and scrolling up to read the chat
+  holds while the agent works. The latch re-evaluates when the measured
+  chrome changes (e.g. typing in the editor, the "Working…" status
+  appearing); mock TUIs keep the static 6-row fallback.
+
+Spec: specs/2026-08-11-stable-widget-height/
+
 ## [0.27.3] — 2026-08-11
 
 ### Fixed

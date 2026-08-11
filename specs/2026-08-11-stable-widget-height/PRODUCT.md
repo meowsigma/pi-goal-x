@@ -60,6 +60,59 @@ VStack dock + real `GoalWidgetComponent` feeding `@xterm/headless`,
 So the cap-only latch fixes the at-cap regime but not the fits regime: the
 rendered height must be **constant in every case**, not just at the cap.
 
+## Full-stack identification: the user's "0/XXXX" indicator
+
+Inside zellij, the pane frame title shows `SCROLL: 0/N` (zellij's own pane
+scrollback indicator; `0` = viewport at the bottom, `N` = pane scrollback
+line count). This is the number the user sees changing "non stop": zellij
+follows the pane bottom whenever the pane's buffer line count changes, and
+`N` grows whenever the pane **appends** lines.
+
+Verified in a real full-stack capture (`experiments/scroll-repro/
+zellij-driver.py`, PTY-driving real zellij → real pi):
+
+- `SCROLL: 0/29 → 0/36` after a resize to 12 rows, `12/36` when scrolled up
+  12 — then **constant** over seconds of idle: zellij's pane scrollback only
+  changes when pi appends lines or when a height change rewrites the frame.
+- pi's "Working…" spinner and the widget's in-place updates (usage ticks)
+  never grow the pane buffer — verified against the real byte stream.
+- pi's own resize full-render emits `2J+3J`, but zellij does **not** clear its
+  pane scrollback from the pane's `3J` (the pane `SCROLL` count survived the
+  resize wipe) — zellij-internal behavior, out of scope.
+
+## Full-stack mock: a RUNNING goal under the bug conditions (the goal's key verification)
+
+The user's environment is a goal that is actually **running** — not a paused
+one. To replicate it exactly, `experiments/scroll-repro/seed-mock-goal.py`
+seeds a mock goal with `status: "active"` (12 tasks, verification contracts,
+subtasks, token budget, 48K used tokens, `autoContinue: false` to keep the
+agent quiet) into a throwaway cwd, and `zellij-mock-driver.py` drives the
+full stack (real zellij 0.44 → real pi → goal extension) through the bug
+scenario: `/goal-focus` the active goal, expand the widget, resize the
+terminal 24→12 (below the widget), scroll up, then trigger the debug
+mock-audit animation repeatedly for continuous goal-state churn.
+
+Results (PTY-captured, analyzed by replaying into `@xterm/headless`):
+
+- The goal runs for real: the widget shows `goal: active [elapsed tokens]`
+  with the elapsed counter ticking on every render (`30m17s → 30m31s` in the
+  capture) via `liveDisplayGoal`.
+- **The pane buffer line count is constant**: `zellij action dump-screen`
+  returned exactly 30 lines from 32.6s to 57.3s — 25s of continuous audit
+  churn (3 re-triggers) with zero appended lines and zero `2J/3J/1049`.
+- **The on-screen indicator is constant**: `SCROLL: 0/22` across the entire
+  churn window while the goal's elapsed counter kept ticking.
+- **Scrolled-up holds**: with the pane scrolled up 3 lines, the position
+  (`3/22`) held for seconds while the goal ticked (in-place rewrites only).
+- The widget box stayed at its latched 6 lines the whole time; the audit
+  dashboard replaced the expanded dashboard at the same latched height.
+- **The only scrollback growth source is the agent itself**: in the
+  `autoContinue: true` variant, the goal run resumed and the agent made a
+  real model call (~13K tokens streamed into the chat) — the pane scrollback
+  grew 22 → 65 only during that stream, then stopped. The widget contributed
+  zero lines. Agent streaming is inherent pi behavior (out of scope); the
+  user reads the chat between updates, and the widget no longer fights that.
+
 ## Goal
 
 Make the widget's **rendered height invariant to goal-state changes in every
@@ -108,7 +161,10 @@ at all when no terminal exists — mock TUIs, headless contexts).
   (pi/emulator-owned).
 - pi's own status/spinner line and pending-messages container.
 - Chat growth from agent output (inherent streaming — the user reads between
-  updates).
+  updates; verified in the full-stack mock as the ONLY pane-scrollback growth
+  source — the widget adds zero).
+- zellij/ghostty internals, incl. zellij's pane scrollback not being cleared
+  by pi's `3J` and zellij's own `SCROLL: 0/N` indicator (zellij-owned).
 - The questionnaire/task-confirmation dialogs (already guarded by their own
   churn guard).
 - Alternate screen (banned, unchanged).

@@ -171,6 +171,47 @@ progress → tasks) is rendered at first render and stays visible.
 - **Padding before the box footer / continuation markers**: re-flowing the box
   is complex; `…`/`↑ N more` markers would falsely imply hidden content.
 
+## Full-stack verification (real zellij + real pi + a mocked RUNNING goal)
+
+`experiments/scroll-repro/seed-mock-goal.py` seeds a mock goal with
+`status: "active"` (12 tasks, verification contracts, subtasks, token
+budget; `autoContinue: false` to keep the agent quiet) into a throwaway cwd.
+`experiments/scroll-repro/zellij-mock-driver.py` PTY-drives real zellij
+0.44 (session `mockrepro`) with pi in a pane from that cwd, using
+`zellij action` for precise control (`write-chars`/`write` keystrokes,
+`switch-mode`, `scroll-up`, `dump-screen`), capturing zellij's rendered UI
+bytes + a timeline. `experiments/scroll-repro/zellij-dump.mjs` /
+`zj-scroll-timeline.mjs` replay the capture into `@xterm/headless` and
+sample the pane screens and the `SCROLL: 0/N` frame indicator over time.
+
+Sequence: start pi (2s) → `/goal-focus` (14s) → select the goal (17s) →
+expand the widget (20s) → resize the PTY 24→12, below the widget (24s) →
+scroll up 3 (28s) → enable debug mode + start the debug mock-audit
+animation (32s) → re-trigger the audit every ~7s and sample the pane dump
+until the run ends (~58s).
+
+Measured results (capture `/tmp/zj-mock3.bin`):
+
+- **Goal runs for real**: `goal: active [30m17s 107.1K]` →
+  `[30m31s]` across screens 14s apart — `liveDisplayGoal` ticks
+  `activeSeconds` on every render (status `active`), so the widget's content
+  genuinely changes the whole time.
+- **Pane dump constant**: `zellij action dump-screen --full` returned
+  exactly **30 lines from 32.6s to 57.3s** (25s, 3 audit re-triggers) —
+  zero appended lines.
+- **Indicator constant**: `SCROLL: 0/22` from 33s to 57s, unchanged across
+  the churn.
+- **Zero wipes from the widget**: the only `2J` in the entire capture is
+  pi-tui's own at the resize (24s, `2J=1 3J=0` in zellij's output; zellij's
+  pane scrollback survived it — zellij-internal). No `3J`, no 1049.
+- **Scrolled-up hold** (capture `/tmp/zj-mock2.bin`, autoContinue variant):
+  `SCROLL: 3/22` held while the goal ticked; the widget box stayed at its
+  latched 6 lines.
+- **Streaming is the only growth**: in the autoContinue variant the goal run
+  resumed and the agent streamed a real model call (~13K tokens) — the pane
+  scrollback grew 22 → 65 only during that stream, then stayed constant
+  through further audit re-triggers. The widget added zero lines.
+
 ## Validation
 
 - `experiments/scroll-repro/widget-height-variability.mjs` — natural-height
@@ -188,6 +229,12 @@ progress → tasks) is rendered at first render and stays visible.
 - `experiments/scroll-repro/resize-repro.mjs` — resize scenarios (expanded
   40→24, unexpanded 30→14, spinner ticks post-resize); counts `2J`/`3J`/crlf
   and frame churn.
+- `experiments/scroll-repro/seed-mock-goal.py` + `zellij-mock-driver.py` +
+  `zellij-dump.mjs` / `zj-scroll-timeline.mjs` — full-stack mock of a
+  RUNNING goal (real zellij → real pi → goal extension): pane dump line
+  count constant ≥20s of audit churn with the terminal below the widget and
+  the goal's elapsed ticking; `SCROLL: 0/N` unchanged across the churn; 0
+  `2J/3J/1049` from the widget.
 - `tests/goal-widget.test.ts` — unit tests for `applyStableHeightBound`
   (first-render latch in fits and capped cases, growth head-slice, shrink
   padding, resize reset, regime reset incl. task presence, unbounded-without-

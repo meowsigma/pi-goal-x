@@ -147,3 +147,45 @@
 - User validation of the scroll-up experience in zellij/ghostty: reading the
   chat holds across goal updates at any terminal height where the frame
   overflows (the goal's final success criterion).
+
+## 2026-08-11 — Full-stack mock: a RUNNING goal under the bug conditions (user demanded "mock a running goal and it works fully")
+
+- The user reported the symptom persists with a **running** goal ("the
+  0/XXXX number keeps changing non stop") and demanded the repro replicate
+  the exact bug environment. Prior harnesses used a paused/static goal.
+- **The indicator identified**: zellij's pane frame title shows
+  `SCROLL: 0/N` (0 = position at bottom, N = pane scrollback line count) —
+  this IS the user's "0/XXXX". It changes when the pane appends lines.
+- Built `experiments/scroll-repro/seed-mock-goal.py` (seeds a mock goal with
+  `status: "active"`, 12 tasks, verification contracts, subtasks, token
+  budget, `autoContinue: false` — the pool only loads
+  `active_goal_*.md`, which also bit us first: a wrong filename silently
+  produced an empty pool and no widget) and `zellij-mock-driver.py`
+  (full-stack: real zellij → real pi → goal extension, `zellij action`
+  control, `dump-screen` sampling, byte + timeline capture). Analyzers:
+  `zellij-dump.mjs` (screen snapshots at timestamps) and
+  `zj-scroll-timeline.mjs` (per-second `SCROLL: 0/N` + 2J/3J correlation).
+- First mock run failed silently (goal file name didn't match the pool
+  pattern → no goal, no widget). Fixed the filename; the widget then
+  appeared and focused correctly.
+- **Run 1 (autoContinue: true, `/tmp/zj-mock2.bin`)** — the active goal's
+  run resumed and the agent made a REAL model call: "Working…" spinner,
+  tokens 48.2K → 61K, chat streamed. The pane scrollback grew 22 → 65
+  **only during the stream** (33-40s), then held constant at 65 through
+  further audit re-triggers (41-54s). The widget box stayed at its latched
+  6 lines throughout (in-place updates). Scrolled-up `3/22` held while the
+  goal ticked (29-31s).
+- **Run 2 (autoContinue: false, `/tmp/zj-mock3.bin`)** — no agent stream;
+  the churn is purely the widget's: elapsed ticked live
+  (`goal: active [30m17s 107.1K]` → `[30m31s]`), the debug mock audit
+  re-triggered 3×. Result: `zellij action dump-screen --full` = **exactly
+  30 lines from 32.6s to 57.3s** (25s constant); `SCROLL: 0/22` unchanged
+  across the churn; zero `2J/3J/1049` from the widget (the only `2J` is
+  pi-tui's at the resize; zellij kept its pane scrollback through it —
+  zellij-internal).
+- **Conclusion**: the widget adds zero scrollback under a running goal with
+  churn; the only pane-scrollback growth in the user's environment is the
+  agent's own streaming (inherent pi behavior, out of scope) — the user
+  reads between updates, and the widget no longer fights that.
+- PRODUCT.md now records the indicator identification + the streaming
+  boundary; TECH.md gained the full-stack verification section.

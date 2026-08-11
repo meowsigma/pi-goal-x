@@ -73,3 +73,77 @@
 
 - User validation of the terminal scroll-up experience in a real terminal
   (the goal's final success criterion).
+
+## 2026-08-11 — New finding: the fits case still snaps back; design revised to latch at regime start
+
+- User report (superseding 0.27.3 validation): "it is getting scrolled to the
+  bottom even when the height is bigger than the widget now!" and "when the
+  window is tall enough it does not snap back" — i.e. the snap-back persists
+  whenever the frame overflows the terminal, including when the widget itself
+  fits. Also: "we're still unable to scroll up when the current terminal size
+  is smaller than the widget … it just keeps scrolling to the bottom of the
+  terminal, so something is being updated". Reference environment: **zellij
+  inside ghostty** (multiplexer follows the pane bottom when the pane's
+  buffer line count changes).
+- Emulator-level reproduction demanded by the user ("PLEASE reproduce in
+  full — emulate a terminal in some way"), built with `@xterm/headless`
+  6.0.0 (devDependency; same VT engine as xterm.js-class emulators):
+  `experiments/scroll-repro/emulator-repro.mjs` drives the real
+  `TuiMainScreen` + ScrollView transcript + VStack dock + real
+  `GoalWidgetComponent` writing into a real xterm emulator.
+  - Scenario A (fits, 40-row terminal): rendered height varies
+    22 → 24 → 26 → 23 → 25 across goal updates → buffer `baseY` churns
+    (2 yank triggers) → the pane-bottom-following emulator/multiplexer
+    re-pins. Root cause of the new finding: the 0.27.3 latch only engages
+    when natural > cap, so the fits case keeps rendering the *varying*
+    natural height.
+  - Scenarios B/C (resize below the widget, expanded 40→24 and unexpanded
+    30→14): stable after the resize (constant 18/8, buffer constant, 0
+    wipes). The resize write itself carries one `2J+3J` — pi-tui's own
+    height-change full render, pi-owned and out of scope.
+  - Scenario D (user scrolled up 10 lines, fits): goal updates grow the
+    buffer 57 → 59 → 61 (Δ4) → the multiplexer would re-pin.
+- Design revision (goal 2026-08-11 session, recorded in PRODUCT.md/TECH.md):
+  the rendered height latches at the **first render of each regime**
+  (`min(natural, cap)`) in every case — fits and capped — so the buffer line
+  count never changes; growth is head-sliced, shrink blank-padded. The regime
+  key gains **task presence** (0→1 task re-latches a structurally empty
+  goal). The old "fits case byte-identical" contract is replaced by
+  "first-render byte-identical, then latched" (the varying-natural fits
+  render WAS the bug). `/goal-status`, golden renders, and mock TUIs without
+  a terminal stay unbounded.
+
+## 2026-08-11 — Revised implementation (latch at regime start)
+
+- `applyStableHeightBound` rewritten: on the first render of a regime
+  `stickyCap = min(natural.length, cap)`; every later render in that regime
+  renders exactly `stickyCap` lines (head slice when natural grows, blank
+  padding when it shrinks). Resizes and regime changes clear the latch as
+  before. Capped-case behavior unchanged; the fits case is now constant.
+- `stableHeightRegime()` adds `hasTasks` (taskList length > 0) to the regime
+  key.
+- Doc comments updated from "sticky-cap" to the stable-height-per-regime
+  wording.
+- No new timers; no 2J/3J/1049 from pi-goal-x.
+
+## 2026-08-11 — Revised validation
+
+- Emulator repro: all four scenarios now pass in `--expect` mode — A (fits)
+  constant at 22 with buffer b57/y17 locked across all goal updates, 0
+  churn, 0 wipes; B/C constant 18/8; D scrolled-up viewport holds (no buffer
+  growth).
+- `widget-height-bound.mjs`: steady-state scenario now asserts constancy
+  from the first render (heights 13→13→…→13); fits-case scenario extended
+  with a growth step that must keep the latched height.
+- `resize-repro.mjs` (built this session): resize scenarios count
+  `2J`/`3J`/crlf and frame churn; all pass.
+- Unit tests updated to the new semantics (first-render latch fits+capped,
+  fits-case growth head-slice / shrink padding, regime re-latch incl. task
+  presence, resize re-latch) — 782/782 pass; `tsc --noEmit` clean; eslint
+  clean; all three harnesses pass `--expect`.
+
+## Open items (revised)
+
+- User validation of the scroll-up experience in zellij/ghostty: reading the
+  chat holds across goal updates at any terminal height where the frame
+  overflows (the goal's final success criterion).

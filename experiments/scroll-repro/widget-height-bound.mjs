@@ -198,12 +198,11 @@ function runStickySteadyState() {
 
 	const seq = goalStateSequence();
 	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
-	let latchSeen = false;
 	let prevHeight = undefined;
 	let prevFrameLen = undefined;
 	let heights = [];
 	let frameLens = [];
-	let stableAfterLatch = true;
+	let stable = true;
 	for (const step of seq) {
 		step.mutate(currentRef.current);
 		eventsRef.current = step.events;
@@ -219,12 +218,11 @@ function runStickySteadyState() {
 			console.log(`  ✗ FAIL: widget rendered ${h} lines > cap ${cap} at "${step.label}"`);
 			failures++;
 		}
-		// Stability applies only once the latch has already engaged (the latch
-		// step itself legitimately grows the frame to the cap).
-		const latchEngaged = latchSeen;
-		if (h === cap) latchSeen = true;
-		if (latchEngaged && h !== prevHeight) stableAfterLatch = false;
-		if (latchEngaged && frame.length !== prevFrameLen) stableAfterLatch = false;
+		// The latch engages at the FIRST render of the regime: the widget
+		// rendered height and the buffer line count are constant across every
+		// goal-state change (fits or capped).
+		if (prevHeight !== undefined && h !== prevHeight) stable = false;
+		if (prevFrameLen !== undefined && frame.length !== prevFrameLen) stable = false;
 		prevHeight = h;
 		prevFrameLen = frame.length;
 		const upd = analyzeForWipes(writes.join(""));
@@ -233,16 +231,15 @@ function runStickySteadyState() {
 			failures++;
 		}
 	}
-	check(latchSeen, `widget reached the cap ${cap} during the sequence`, `heights=${heights.join(",")}`);
-	check(stableAfterLatch, `widget rendered height + buffer line count CONSTANT after the latch`, `heights=${heights.join(",")}`); console.log(`  frame lengths: ${frameLens.join(",")}`);
+	check(stable, `widget rendered height + buffer line count CONSTANT across all goal-state changes`, `heights=${heights.join(",")}`);
 	check(heights.every((h) => h <= cap), `every rendered height <= cap ${cap}`);
 	console.log(`  heights per state: ${heights.join(" → ")}`);
 }
 
-// ── Scenario: fits case byte-identical (no latch) ───────────────────────────
+// ── Scenario: fits case — first render byte-identical, then latched ────────
 
 function runFitsByteIdentical() {
-	console.log(`\n── fits case: widget never exceeds the cap renders byte-identical (30-row terminal, expanded, 3 tasks) ──`);
+	console.log(`\n── fits case: widget never exceeds the cap; first render byte-identical, then the height latches (30-row terminal, expanded, 3 tasks) ──`);
 	const { terminal, writes, tui } = setup(30);
 	const currentRef = { current: {
 		...structuredClone(baseGoal),
@@ -272,6 +269,19 @@ function runFitsByteIdentical() {
 	const frame2 = frameLines(tui);
 	const h2 = widgetSpan(frame2, widgetStart);
 	check(h2 === natural.length, `fits-case height unchanged after update (${h2} == ${natural.length})`);
+
+	// growth (activity feed + progress) must NOT change the rendered height —
+	// the fits case is latched at the first-render natural (spec revision)
+	eventsRef.current = [{ type: "task_complete", at: "2026-08-10T00:01:00Z", goalId: baseGoal.id, taskId: "t1" }];
+	currentRef.current = { ...currentRef.current, taskList: { tasks: [task("t1", "complete"), task("t2", "pending"), task("t3", "pending")] } };
+	component.invalidate();
+	tui.doRender();
+	const upd2 = analyzeForWipes(writes.join(""));
+	writes.length = 0;
+	const frame3 = frameLines(tui);
+	const h3 = widgetSpan(frame3, widgetStart);
+	check(upd2.clear2J === 0 && upd2.clear3J === 0, `fits-case growth update emits no 2J/3J (2J=${upd2.clear2J}, 3J=${upd2.clear3J})`);
+	check(h3 === natural.length, `fits-case growth keeps the latched height (${h3} == ${natural.length})`);
 }
 
 // ── Scenario: resize adaptation ─────────────────────────────────────────────

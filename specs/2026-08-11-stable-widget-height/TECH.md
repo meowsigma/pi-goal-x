@@ -48,7 +48,30 @@ Rendered height changes on 4 of 8 transitions. Compact natural spans 4..14
 (over a 7-line cap on 13-row terminals). Audit dashboard natural: 8 → 11 →
 13 → 8 while the animation runs.
 
-## Design: sticky cap (per-mode latch)
+### Emulator-level root cause (experiments/scroll-repro/emulator-repro.mjs)
+
+Real `TuiMainScreen` + ScrollView transcript + VStack dock + real
+`GoalWidgetComponent` writing into a real VT emulator (`@xterm/headless`
+6.0.0, the same VT engine as xterm.js-class emulators):
+
+| scenario | widget height across updates | buffer churn | result |
+|---|---|---|---|
+| A fits (40-row term, cap 34, expanded) | 22, 24, 26, 23, 25 | baseY 17→19→21 (2 yanks) | **FAIL — churns** |
+| B resize below (expanded 40→24) | constant 18 | 0 | pass (stable) |
+| C resize below (unexpanded 30→14) | constant 8 | 0 | pass (stable) |
+| D scrolled-up + updates (fits) | — | buffer 57→59→61 (Δ4) | **FAIL — re-pins** |
+
+The yank in A/D is pure line-count churn (0 `2J`/`3J`/1049 emitted): the
+widget renders the varying natural height in the fits case (no latch), so the
+buffer line count changes and any pane-bottom-following multiplexer (zellij)
+or emulator re-pins the viewport. The at-cap regimes (B/C) are already stable
+— the cap-only latch works there — but the fits regime is the reported bug.
+
+The resize write in B/C contains one `2J+3J`: pi-tui's own height-change full
+render (`heightChanged → fullRender(true)`), pi-owned and out of scope; the
+widget adds no further wipes (0 after the resize).
+
+## Design: stable height per regime (latch at regime start)
 
 ### Component state (`GoalWidgetComponent`)
 
@@ -58,8 +81,12 @@ private stickyRegime: string | undefined;         // regime key when latched
 private stickyTerminalRows: number | undefined;   // terminal rows when latched
 ```
 
-Regime key: `goalId | goalStatus | stateKind | expanded | debug | disableTasks`
-where `stateKind ∈ { focused, audit, result, unfocused, none }`.
+Regime key: `goalId | goalStatus | stateKind | expanded | debug | disableTasks
+| hasTasks` where `stateKind ∈ { focused, audit, result, unfocused, none }`
+and `hasTasks = taskList.length > 0`. Task presence is part of the regime so
+that a structurally empty goal (0 tasks → tiny dashboard) re-latches when its
+first task appears — a big structural jump, not steady-state churn, and rare
+(goals are usually proposed with tasks).
 
 ### Algorithm (`applyStableHeightBound`)
 
@@ -71,28 +98,42 @@ cap = max(1, terminalRows - WIDGET_HEIGHT_RESERVE)
 if stickyTerminalRows != terminalRows: reset sticky   // resize: adapt to new height
 if stickyRegime != regime:             reset sticky   // mode/state change
 
-if natural.length > cap:
-    stickyCap = cap; return natural.slice(0, cap)     // at the cap: latch + head slice
-if stickyCap != undefined and natural.length < stickyCap:
-    return natural padded with "" to stickyCap        // committed height: pad, never churn
-return natural                                         // fits case: byte-identical
+if stickyCap == undefined:
+    stickyCap = min(natural.length, cap)              // FIRST RENDER: latch, fits or capped
+if natural.length > stickyCap:
+    return natural.slice(0, stickyCap)                // growth: head slice, height never changes
+if natural.length < stickyCap:
+    return natural padded with "" to stickyCap        // shrink: pad, height never changes
+return natural                                        // exactly the latch: unchanged
 ```
 
 Properties:
 
-- **Latch**: once natural exceeds the cap, every later render in the same
-  regime and terminal size renders exactly `cap` lines (head slice when
-  natural > cap, blank-padded when natural ≤ cap). The buffer line count is
-  constant → the terminal never scrolls on widget updates.
+- **Latch at regime start**: the first render of each regime commits the
+  height (`min(natural, cap)`), and every later render of that regime renders
+  exactly that many lines — fits case *and* capped case. Growth (activity
+  feed, contract/evidence, budget, verification) is head-sliced; shrink is
+  blank-padded. The buffer line count is constant in every case → the
+  terminal never scrolls on widget updates.
 - **Adapt**: on resize the latch is cleared and `min(natural, newCap)` rules
-  again — growing the terminal reveals more of the widget; once it fits,
-  everything renders. Re-latches whenever natural exceeds the new cap.
+  again — growing the terminal reveals more of the widget; shrinking re-caps.
 - **Determinism**: the latch is a pure function of (natural height, regime,
   terminal rows) — no timers, no Date, no randomness; the same goal state on
   the same terminal renders the same lines every time.
 - **Padding**: blank lines (empty strings) after the box footer; the diff
   writes them once and never again (they never change). Honest filler — the
   dashboard's `… +N more` markers are only used for real hidden content.
+
+### UX tradeoff (accepted)
+
+In the fits case the widget's height is now constant at the first-render
+natural height, so later content growth is head-sliced even though the
+terminal has room. This is the same top-down priority tradeoff already
+accepted at the cap in 0.27.3 — the alternative (varying natural height in
+the fits case) is exactly the yank bug being fixed. The slice only affects
+content that arrives *after* the mode's first render (activity feed entries,
+new contract/evidence text); the dashboard's core (identity → status →
+progress → tasks) is rendered at first render and stays visible.
 
 ### Integration
 
@@ -116,11 +157,17 @@ Properties:
 
 - **Fixed-structure dashboard** (constant natural height by construction, e.g.
   fixed row budgets for every section): changes the visual design (truncation
-  instead of wrapping) and is a much larger renderer change; the sticky cap
-  preserves today's visuals and only intervenes when the widget is taller than
-  the terminal.
+  instead of wrapping) and is a much larger renderer change; the per-regime
+  latch preserves today's visuals and only intervenes to keep the height
+  constant.
 - **Never re-render the widget at the cap** (freeze content): hides real goal
   state changes (task completions, usage) — misleading.
+- **Ratchet (grow-only latch)**: every growth moment re-pins the viewport
+  (yanks while the activity feed fills) — the user's complaint is continuous
+  re-pinning, so a ratchet only delays it.
+- **Latch only when the frame overflows** (widget sensing chat length): the
+  widget cannot know the transcript length; a universal constant height is
+  simpler and harmless when everything fits.
 - **Padding before the box footer / continuation markers**: re-flowing the box
   is complex; `…`/`↑ N more` markers would falsely imply hidden content.
 
@@ -128,13 +175,21 @@ Properties:
 
 - `experiments/scroll-repro/widget-height-variability.mjs` — natural-height
   measurement (root-cause evidence, above).
-- `experiments/scroll-repro/widget-height-bound.mjs` — extended to drive the
-  real `TuiMainScreen` frame (ScrollView transcript + VStack dock + real
-  `GoalWidgetComponent`) through the goal-state sequence at fixed rows,
-  asserting: widget rendered height constant (after latch), buffer line count
-  constant, 0 `\x1b[2J`/`\x1b[3J`/1049; the fits case byte-identical; resize
-  adaptation; regime reset.
+- `experiments/scroll-repro/emulator-repro.mjs` — real TuiMainScreen + real
+  frame + real widget into `@xterm/headless`; scenarios A (fits — must be
+  constant after the fix), B/C (resize below the widget), D (scrolled-up
+  viewport must hold); asserts 0 yank triggers (buffer length/baseY) and 0
+  `2J`/`3J`/1049 on goal updates.
+- `experiments/scroll-repro/widget-height-bound.mjs` — drives the real
+  `TuiMainScreen` frame through the goal-state sequence at fixed rows,
+  asserting: widget rendered height constant (after first-render latch),
+  buffer line count constant, 0 `\x1b[2J`/`\x1b[3J`/1049; fits case constant;
+  resize adaptation; regime reset.
+- `experiments/scroll-repro/resize-repro.mjs` — resize scenarios (expanded
+  40→24, unexpanded 30→14, spinner ticks post-resize); counts `2J`/`3J`/crlf
+  and frame churn.
 - `tests/goal-widget.test.ts` — unit tests for `applyStableHeightBound`
-  (latch, cap crossing, resize reset, regime reset, fits byte-identical,
-  unbounded-without-terminal determinism).
+  (first-render latch in fits and capped cases, growth head-slice, shrink
+  padding, resize reset, regime reset incl. task presence, unbounded-without-
+  terminal determinism).
 - `npm test` (0 failures), `npm run check` + eslint clean.

@@ -161,9 +161,9 @@ export const WIDGET_HEIGHT_RESERVE = 6;
  * terminalRows is missing (mock TUI, headless contexts, /goal-status text).
  *
  * This pure head-slice is the terminal bound for direct callers. The live
- * component additionally applies the sticky-cap bound
+ * component additionally applies the stable-height bound
  * (spec 2026-08-11-stable-widget-height) so the rendered height stays
- * constant once the widget reaches the cap — see applyStableHeightBound.
+ * constant within each regime — see applyStableHeightBound.
  */
 export function boundWidgetRenderLines(lines: string[], terminalRows: number | undefined): string[] {
 	if (!terminalRows || terminalRows <= 0) return lines;
@@ -173,26 +173,26 @@ export function boundWidgetRenderLines(lines: string[], terminalRows: number | u
 }
 
 /**
- * Sticky-cap rendered height (spec 2026-08-11-stable-widget-height).
+ * Stable rendered height per regime (spec 2026-08-11-stable-widget-height).
  *
  * The widget's natural (unbounded) height varies with goal state — activity
  * feed growth, current-task contract/evidence wrapping, verification text,
- * budget, task growth (measured 4..31 lines on a 24-row terminal). When the
- * widget is taller than the terminal, every natural-height change alters the
- * dock height → the terminal buffer's line count changes → the terminal
- * scrolls to the bottom and the user cannot hold a scroll position to read
- * the chat. The sticky cap makes the rendered height invariant to goal-state
- * changes while the widget is at the cap:
+ * budget, task growth (measured 4..31 lines on a 24-row terminal). Every
+ * natural-height change alters the dock height → the terminal buffer's line
+ * count changes → the terminal scrolls to the bottom and the user cannot hold
+ * a scroll position to read the chat. The latch makes the rendered height
+ * invariant to goal-state changes in EVERY case (fits and capped):
  *
- * - once natural > cap in the current regime, render exactly `cap` lines on
- *   every later render of that regime (head slice when natural > cap, blank
- *   padding when natural dips below — the height never changes);
+ * - the first render of each regime commits the rendered height
+ *   (min(natural, cap)) and every later render of that regime renders exactly
+ *   that many lines — growth is head-sliced, shrink is blank-padded, the
+ *   height never changes;
  * - resizing the terminal clears the latch and re-evaluates
- *   min(natural, newCap): growing the terminal reveals more of the widget;
- *   once it fits, everything renders (the fits case stays byte-identical);
+ *   min(natural, newCap): growing the terminal reveals more of the widget,
+ *   shrinking re-caps;
  * - a regime change (goal id/status, widget state kind, compact↔expanded,
- *   debug mode, tasks disabled) clears the latch so the new mode starts from
- *   its own natural height.
+ *   debug mode, tasks disabled, first task appearing) clears the latch so the
+ *   new mode starts from its own natural height.
  *
  * Pure given the persisted latch state: deterministic, no timers, no
  * randomness — the same goal state on the same terminal renders the same
@@ -216,13 +216,18 @@ export function applyStableHeightBound(
 		state.stickyCap = undefined;
 		state.stickyRegime = regime;
 	}
-	if (lines.length > cap) {
-		// At the cap: latch the rendered height and head-slice (the dashboard's
-		// content priority is top-down).
-		state.stickyCap = cap;
-		return lines.slice(0, cap);
+	if (state.stickyCap === undefined) {
+		// First render of the regime: latch the height — the natural height
+		// when it fits, else the cap. Constant from here on, fits AND capped.
+		state.stickyCap = Math.min(lines.length, cap);
 	}
-	if (state.stickyCap !== undefined && lines.length < state.stickyCap) {
+	if (lines.length > state.stickyCap) {
+		// Growth past the committed height: head-slice (the dashboard's
+		// content priority is top-down), so the buffer line count never
+		// changes.
+		return lines.slice(0, state.stickyCap);
+	}
+	if (lines.length < state.stickyCap) {
 		// Natural dipped below the committed height: pad deterministically so
 		// the buffer line count never changes. Blank rows after the box footer
 		// — honest filler (the …/↑ N more markers are only for hidden content).
@@ -230,7 +235,7 @@ export function applyStableHeightBound(
 		while (padded.length < state.stickyCap) padded.push("");
 		return padded;
 	}
-	// Fits case (natural ≤ cap, no latch): byte-identical to today.
+	// Exactly the committed height: unchanged.
 	return lines;
 }
 
@@ -340,10 +345,11 @@ export class GoalWidgetComponent implements Component {
 	private lastSeenGoalId: string | undefined;
 	private lastSeenLatestCompletedAt: string | undefined;
 
-	// Sticky-cap latch (spec 2026-08-11-stable-widget-height): once the widget
-	// reaches the terminal cap in a regime, its rendered height stays constant
-	// (cap lines) until the regime or the terminal size changes, so the buffer
-	// line count never changes and the terminal stops jumping to the bottom.
+	// Stable-height latch (spec 2026-08-11-stable-widget-height): the first
+	// render of each regime commits the rendered height (natural when it fits,
+	// else the cap); the height stays constant (head-slice growth, pad shrink)
+	// until the regime or the terminal size changes, so the buffer line count
+	// never changes and the terminal stops jumping to the bottom.
 	private stableHeightState: { stickyCap: number | undefined; stickyRegime: string | undefined; stickyTerminalRows: number | undefined } = {
 		stickyCap: undefined,
 		stickyRegime: undefined,
@@ -436,9 +442,10 @@ export class GoalWidgetComponent implements Component {
 		// `terminal` render unbounded.
 		const terminalRows = (this.tui as unknown as { terminal?: { rows?: number } }).terminal?.rows;
 		// Render the current branch unbounded (natural), then apply the
-		// stable-height bound (spec 2026-08-11): the rendered height is constant
-		// while the widget is at the cap, so the dock height / buffer line count
-		// stop changing and the terminal stops jumping to the bottom.
+		// stable-height bound (spec 2026-08-11): the rendered height latches at
+		// the first render of each regime and stays constant (fits and capped),
+		// so the dock height / buffer line count stop changing and the
+		// terminal stops jumping to the bottom.
 		const natural = this.renderNatural(width);
 		const regime = this.stableHeightRegime();
 		return applyStableHeightBound(natural, terminalRows, this.stableHeightState, regime);
@@ -483,10 +490,13 @@ export class GoalWidgetComponent implements Component {
 	}
 
 	/**
-	 * Sticky-cap regime key: the latch belongs to one goal, goal status,
+	 * Stable-height regime key: the latch belongs to one goal, goal status,
 	 * widget state kind (focused / audit / result / unfocused / none),
-	 * expansion mode, debug mode, and task setting — a change clears the latch
-	 * so the new mode starts from its own natural height.
+	 * expansion mode, debug mode, task setting, and task presence — a change
+	 * clears the latch so the new mode starts from its own natural height.
+	 * Task presence re-latches a structurally empty goal (0 tasks → tiny
+	 * dashboard) when its first task appears — a rare structural jump, not
+	 * steady-state churn.
 	 */
 	private stableHeightRegime(): string {
 		const settings = this.getSettings();
@@ -496,7 +506,8 @@ export class GoalWidgetComponent implements Component {
 		else if (this.getAuditorProgress()) stateKind = "audit";
 		else if (goal) stateKind = "focused";
 		else stateKind = this.getOpenGoalCount() > 0 ? "unfocused" : "none";
-		return [goal?.id ?? "∅", goal?.status ?? "∅", stateKind, String(this.getExpanded()), String(this.getDebugMode()), String(settings.disableTasks === true)].join("|");
+		const hasTasks = (goal?.taskList?.tasks?.length ?? 0) > 0;
+		return [goal?.id ?? "∅", goal?.status ?? "∅", stateKind, String(this.getExpanded()), String(this.getDebugMode()), String(settings.disableTasks === true), String(hasTasks)].join("|");
 	}
 
 	/**

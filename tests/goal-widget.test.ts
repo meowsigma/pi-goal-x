@@ -1034,22 +1034,18 @@ test("GoalWidgetComponent render height is deterministic across repeated renders
 	assert.equal(second, third);
 });
 
-// ── sticky-cap stable height (spec 2026-08-11-stable-widget-height) ────────
+// ── stable height per regime (spec 2026-08-11-stable-widget-height) ────────
 
 const freshStableState = () => ({ stickyCap: undefined as number | undefined, stickyRegime: undefined as string | undefined, stickyTerminalRows: undefined as number | undefined });
 
-test("applyStableHeightBound: latches at the cap once natural exceeds it (cap crossing up)", () => {
+test("applyStableHeightBound: latches at the first render and holds (fits or capped)", () => {
 	const state = freshStableState();
 	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE); // 18
 	const natural10 = Array.from({ length: 10 }, (_, i) => `n${i}`);
 	const natural25 = Array.from({ length: 25 }, (_, i) => `n${i}`);
 	const natural30 = Array.from({ length: 30 }, (_, i) => `n${i}`);
 
-	// fits first: untouched, no latch
-	assert.deepEqual(applyStableHeightBound(natural10, 24, state, "regime"), natural10);
-	assert.equal(state.stickyCap, undefined);
-
-	// crosses the cap: latches at the cap, head slice
+	// first render above the cap: latches at the cap, head slice
 	const out = applyStableHeightBound(natural25, 24, state, "regime");
 	assert.equal(out.length, cap);
 	assert.deepEqual(out, natural25.slice(0, cap));
@@ -1058,6 +1054,34 @@ test("applyStableHeightBound: latches at the cap once natural exceeds it (cap cr
 	// still above: constant
 	assert.equal(applyStableHeightBound(natural30, 24, state, "regime").length, cap);
 	assert.equal(applyStableHeightBound(natural25, 24, state, "regime").length, cap);
+
+	// first render fits: byte-identical, but the height is now committed
+	assert.deepEqual(applyStableHeightBound(natural10, 24, freshStableState(), "regime"), natural10);
+});
+
+test("applyStableHeightBound: fits case latches at the first-render natural and stays constant", () => {
+	const state = freshStableState();
+	const natural13 = Array.from({ length: 13 }, (_, i) => `line ${i}`);
+	const natural16 = Array.from({ length: 16 }, (_, i) => `line ${i}`);
+	const natural10 = Array.from({ length: 10 }, (_, i) => `line ${i}`);
+
+	// first render fits: byte-identical, but the height is now committed
+	assert.deepEqual(applyStableHeightBound(natural13, 30, state, "regime"), natural13);
+	assert.equal(state.stickyCap, 13, "fits case latches at the natural height");
+
+	// growth past the committed height: head slice, height never changes
+	const grown = applyStableHeightBound(natural16, 30, state, "regime");
+	assert.equal(grown.length, 13, "growth is head-sliced to the committed height");
+	assert.deepEqual(grown, natural16.slice(0, 13));
+
+	// shrink: blank padding, height never changes
+	const shrunk = applyStableHeightBound(natural10, 30, state, "regime");
+	assert.equal(shrunk.length, 13, "shrink is padded to the committed height");
+	assert.deepEqual(shrunk.slice(0, 10), natural10);
+	assert.deepEqual(shrunk.slice(10), Array(3).fill(""));
+
+	// back to the committed height: unchanged
+	assert.deepEqual(applyStableHeightBound(natural13, 30, state, "regime"), natural13);
 });
 
 test("applyStableHeightBound: pads deterministically when natural dips below the cap (cap crossing down)", () => {
@@ -1078,15 +1102,6 @@ test("applyStableHeightBound: pads deterministically when natural dips below the
 	assert.equal(applyStableHeightBound(Array.from({ length: cap }), 24, state, "regime").length, cap);
 });
 
-test("applyStableHeightBound: fits case is byte-identical and never latches", () => {
-	const state = freshStableState();
-	const natural = Array.from({ length: 13 }, (_, i) => `line ${i}`);
-	const out = applyStableHeightBound(natural, 30, state, "regime");
-	assert.deepEqual(out, natural, "returns the input unchanged");
-	assert.equal(state.stickyCap, undefined, "no latch when it fits");
-	assert.deepEqual(applyStableHeightBound(natural, 30, state, "regime"), natural, "deterministic");
-});
-
 test("applyStableHeightBound: terminal resize clears the latch and adapts to the new height", () => {
 	const state = freshStableState();
 	const natural22 = Array.from({ length: 22 }, (_, i) => `n${i}`);
@@ -1100,33 +1115,31 @@ test("applyStableHeightBound: terminal resize clears the latch and adapts to the
 	const cap30 = Math.max(1, 30 - WIDGET_HEIGHT_RESERVE); // 24
 	const grown = applyStableHeightBound(natural22, 30, state, "regime");
 	assert.equal(grown.length, Math.min(natural22.length, cap30), "grow reveals more of the widget");
-	assert.equal(state.stickyCap, undefined, "latch cleared on resize");
+	assert.equal(state.stickyCap, Math.min(natural22.length, cap30), "latch re-engages at the first render after the resize");
 
 	// shrink back: re-latches at the new cap
 	const shrunk = applyStableHeightBound(natural25, 24, state, "regime");
 	assert.equal(shrunk.length, cap24, "re-latches at the 24-row cap");
 });
 
-test("applyStableHeightBound: regime change clears the latch so the new mode starts from natural", () => {
+test("applyStableHeightBound: regime change clears the latch so the new mode starts from its own height", () => {
 	const state = freshStableState();
 	const big = Array.from({ length: 25 }, (_, i) => `n${i}`);
 	const small = Array.from({ length: 10 }, (_, i) => `n${i}`);
 	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
 
-	applyStableHeightBound(big, 24, state, "expanded"); // latch
+	applyStableHeightBound(big, 24, state, "expanded"); // latch at 18
 	assert.equal(state.stickyCap, cap);
 
-	// regime change: fresh evaluation — fits -> natural, no pad
+	// regime change: fresh evaluation — compact starts from its own natural
+	// height (fits -> unchanged) and re-latches there
 	const out = applyStableHeightBound(small, 24, state, "compact");
 	assert.deepEqual(out, small, "compact starts from its own natural height");
-	assert.equal(state.stickyCap, undefined, "latch cleared on regime change");
+	assert.equal(state.stickyCap, small.length, "latch re-engages at the first render of the new regime");
 
-	// new regime over the cap latches independently
-	applyStableHeightBound(big, 24, state, "compact");
-	assert.equal(state.stickyCap, cap);
-	// back to the expanded regime: latch was dropped there, re-evaluates
-	const out2 = applyStableHeightBound(small, 24, state, "expanded");
-	assert.deepEqual(out2, small);
+	// the compact regime holds its committed height as natural grows
+	const out2 = applyStableHeightBound(big, 24, state, "compact");
+	assert.equal(out2.length, small.length, "compact holds its committed height");
 });
 
 test("applyStableHeightBound: unbounded without a terminal (mock/harness/status)", () => {
@@ -1138,7 +1151,7 @@ test("applyStableHeightBound: unbounded without a terminal (mock/harness/status)
 	assert.equal(state.stickyTerminalRows, undefined);
 });
 
-test("GoalWidgetComponent: rendered height is constant across goal-state changes once at the cap", () => {
+test("GoalWidgetComponent: rendered height is constant across goal-state changes (fits and capped)", () => {
 	const task = (id: string, status: string) => ({
 		id,
 		title: `Task ${id} with a reasonably long title for wrapping tests`,
@@ -1147,7 +1160,7 @@ test("GoalWidgetComponent: rendered height is constant across goal-state changes
 		updatedAt: "2026-08-10T00:00:00Z",
 		completedAt: status === "complete" ? "2026-08-10T00:01:00Z" : undefined,
 	} as GoalTask);
-	let current: GoalWidgetRecord = { ...goal(), taskList: { tasks: [], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } };
+	let current: GoalWidgetRecord = { ...goal(), taskList: { tasks: [task("t1", "pending")], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } };
 	let events: unknown[] = [];
 	const { tui } = createMockTUI({ terminalRows: 24 });
 	const component = new GoalWidgetComponent({
@@ -1163,7 +1176,6 @@ test("GoalWidgetComponent: rendered height is constant across goal-state changes
 
 	const heights: number[] = [];
 	const steps: Array<() => void> = [
-		() => { current = { ...current, taskList: { tasks: [task("t1", "pending")], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } }; },
 		() => { current = { ...current, taskList: { tasks: [task("t1", "complete"), task("t2", "pending")], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } }; events = [{ type: "task_complete", at: "2026-08-10T00:01:00Z", goalId: "g1", taskId: "t1" }]; },
 		() => { current = { ...current, taskList: { tasks: Array.from({ length: 12 }, (_, i) => task(`t${i}`, i < 5 ? "complete" : "pending")), blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } }; },
 		() => { current = { ...current, verificationContract: "Run npm test (0 failures) and re-read every requirement" }; },
@@ -1174,12 +1186,30 @@ test("GoalWidgetComponent: rendered height is constant across goal-state changes
 		step();
 		heights.push(component.render(100).length);
 	}
-	// the latch engages once natural exceeds the cap and holds from then on
-	const firstLatchIdx = heights.findIndex((h) => h === cap);
-	assert.ok(firstLatchIdx >= 0, `reached the cap: ${heights.join(",")}`);
-	for (let i = firstLatchIdx + 1; i < heights.length; i++) {
-		assert.equal(heights[i], cap, `constant after the latch at step ${i}: ${heights.join(",")}`);
-	}
+	// the first render latches the height and every later goal-state change
+	// (task completions, feed growth, verification, budget, usage) keeps it
+	// constant — the buffer line count never changes
+	assert.ok(heights.every((h) => h <= cap), `bounded by the cap: ${heights.join(",")}`);
+	assert.equal(new Set(heights).size, 1, `constant across all goal-state changes: ${heights.join(",")}`);
+});
+
+test("GoalWidgetComponent: the first task appearing re-latches (task presence is part of the regime)", () => {
+	let current: GoalWidgetRecord = { ...goal(), taskList: { tasks: [], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } };
+	const { tui } = createMockTUI({ terminalRows: 40 });
+	const component = new GoalWidgetComponent({
+		tui,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+	});
+	const h0 = component.render(100).length; // 0 tasks: small dashboard, latched
+	current = { ...current, taskList: { tasks: [{ id: "t1", title: "Task one", status: "pending" }], blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } };
+	const h1 = component.render(100).length; // first task: regime change, re-latch
+	const h2 = component.render(100).length; // same regime: constant
+	assert.ok(h1 > h0, `first task grows the dashboard (${h0} -> ${h1})`);
+	assert.equal(h2, h1, "stable within the task-present regime");
 });
 
 test("GoalWidgetComponent: expanding the terminal reveals more of the widget, collapsing re-latches", () => {

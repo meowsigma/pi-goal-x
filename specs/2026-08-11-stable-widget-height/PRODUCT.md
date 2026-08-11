@@ -113,6 +113,48 @@ Results (PTY-captured, analyzed by replaying into `@xterm/headless`):
   zero lines. Agent streaming is inherent pi behavior (out of scope); the
   user reads the chat between updates, and the widget no longer fights that.
 
+## Second user finding: the widget block + chrome overflowing the terminal wipes the scrollback on every agent write
+
+The user reported the snap-back persists even with the fixed code:
+
+> "STILL it's forcing the window to the bottom when the agent is running text
+> above, and the N keeps changing."
+> "it's from any writing by the agent/COT in the window above working, not
+> just when a goal is active"
+> "the force back to bottom only happens when only the widget is viewable,
+> and no working/output/cot"
+
+Reproduced at emulator level (`experiments/scroll-repro/overflow-probe.mjs`,
+real TuiMainScreen + ScrollView transcript + VStack dock + real
+GoalWidgetComponent into @xterm/headless): **pi-tui full-renders
+(`\x1b[2J\x1b[H\x1b[3J` — clearing the terminal scrollback) whenever the
+first changed line sits above its tracked viewport top
+(`previousBufferLength − terminalRows`)**. When the widget's block plus the
+chrome below/around it (pending + status + editor + footer) exceeds the
+terminal, the chat's appended lines and the status line land above the
+viewport top — so with a typed message in the editor (which makes the chrome
+> 6 lines), EVERY agent write and EVERY status/spinner tick wipes the
+scrollback, forcing the viewport to the bottom and making N churn:
+
+| change | below-chrome ≤ 6 (empty editor) | below-chrome > 6 (typed editor) |
+|---|---|---|
+| widget content tick (latched) | 0 wipes | 0 wipes |
+| agent chat append | 0 wipes | **1 full 2J+3J wipe** |
+| status/spinner tick | 0 wipes | **1 full 2J+3J wipe** |
+
+**Fix: the widget sizes itself against the MEASURED dock chrome.** The
+reserve is no longer a static 6 — `measureDockReserve()` renders the sibling
+dock containers (pending + status + editor + footer) at the current width and
+caps the widget at `terminalRows − (measuredChrome + 1)`, so the widget's
+block plus the chrome NEVER exceeds the terminal. The chat's append point and
+the status line stay within the viewport → agent writes and spinner ticks
+become in-place diffs, never wipes. The latch re-evaluates when the measured
+chrome changes (editor grew/shrunk, working status appears); the static
+`WIDGET_HEIGHT_RESERVE` (6) remains the fallback for mock TUIs. Verified in
+the full-stack mock: with the agent working ("⠏ Working…" animating), a typed
+editor message, and a 14-row terminal, the pane total held constant and the
+scrolled-up position held across the churn.
+
 ## Goal
 
 Make the widget's **rendered height invariant to goal-state changes in every

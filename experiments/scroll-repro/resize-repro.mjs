@@ -19,7 +19,11 @@ import { ScrollView } from "../../node_modules/@earendil-works/pi-tui/dist/compo
 import { VStack } from "../../node_modules/@earendil-works/pi-tui/dist/components/v-stack.js";
 import { Container } from "../../node_modules/@earendil-works/pi-tui/dist/tui.js";
 import { TuiMainScreen } from "../../node_modules/@earendil-works/pi-tui/dist/index.js";
-import { GoalWidgetComponent, WIDGET_HEIGHT_RESERVE } from "../../extensions/widgets/goal-widget.ts";
+import { GoalWidgetComponent } from "../../extensions/widgets/goal-widget.ts";
+// The rig's dock chrome (status 1 + editor 2 + footer 1) + 1 slack: the widget
+// sizes itself against the MEASURED chrome (spec 2026-08-11), so the expected
+// cap is terminalRows - (measuredChrome + 1).
+const DOCK_RESERVE = 4 + 1;
 
 const COLS = 120;
 const expectMode = process.argv.includes("--expect");
@@ -130,7 +134,7 @@ function goalStateSequence(expanded) {
 
 function runExpandedResize() {
 	console.log(`\n── EXPANDED: terminal 40 -> 24 rows (below the widget's natural height), then goal updates ──`);
-	const cap24 = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	const cap24 = Math.max(1, 24 - DOCK_RESERVE);
 	const { terminal, writes, tui } = makeTerminal(40);
 	const currentRef = { current: { ...structuredClone(baseGoal), taskList: { tasks: Array.from({ length: 12 }, (_, i) => task(`t${i}`, i < 5 ? "complete" : "pending")) } } };
 	const eventsRef = { current: [] };
@@ -151,7 +155,7 @@ function runExpandedResize() {
 	let frame = frameLines(tui);
 	const start = 1 + 10 + 1;
 	const naturalAt40 = widgetSpan(frame, start);
-	console.log(`  at 40 rows: widget rendered ${naturalAt40} lines (cap ${Math.max(1, 40 - WIDGET_HEIGHT_RESERVE)}), frame ${frame.length} lines`);
+	console.log(`  at 40 rows: widget rendered ${naturalAt40} lines (cap ${Math.max(1, 40 - DOCK_RESERVE)}), frame ${frame.length} lines`);
 
 	// RESIZE to 24 rows.
 	terminal.rows = 24;
@@ -213,7 +217,7 @@ function runExpandedResize() {
 
 function runCompactResize() {
 	console.log(`\n── UNEXPANDED: terminal 30 -> 14 rows (below the widget's natural height), then goal updates ──`);
-	const cap14 = Math.max(1, 14 - WIDGET_HEIGHT_RESERVE); // 8
+	const cap14 = Math.max(1, 14 - DOCK_RESERVE); // 8
 	const { terminal, writes, tui } = makeTerminal(30);
 	const currentRef = { current: { ...structuredClone(baseGoal), taskList: { tasks: Array.from({ length: 6 }, (_, i) => task(`t${i}`, i < 3 ? "complete" : "pending")) } } };
 	const eventsRef = { current: [] };
@@ -233,7 +237,7 @@ function runCompactResize() {
 	let frame = frameLines(tui);
 	const start = 1 + 6 + 1;
 	const naturalAt30 = widgetSpan(frame, start);
-	console.log(`  at 30 rows: widget rendered ${naturalAt30} lines (cap ${Math.max(1, 30 - WIDGET_HEIGHT_RESERVE)})`);
+	console.log(`  at 30 rows: widget rendered ${naturalAt30} lines (cap ${Math.max(1, 30 - DOCK_RESERVE)})`);
 
 	terminal.rows = 14;
 	tui.doRender();
@@ -271,7 +275,7 @@ function runCompactResize() {
 
 function runSpinnerAfterResize() {
 	console.log(`\n── EXPANDED: spinner-style periodic re-renders (status line + usage tick) after resize to 24 ──`);
-	const cap24 = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	const cap24 = Math.max(1, 24 - DOCK_RESERVE);
 	const { terminal, writes, tui } = makeTerminal(40);
 	const currentRef = { current: { ...structuredClone(baseGoal), taskList: { tasks: Array.from({ length: 12 }, (_, i) => task(`t${i}`, i < 5 ? "complete" : "pending")) } } };
 	const eventsRef = { current: [] };

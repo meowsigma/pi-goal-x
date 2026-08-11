@@ -28,7 +28,11 @@ import { ScrollView } from "../../node_modules/@earendil-works/pi-tui/dist/compo
 import { VStack } from "../../node_modules/@earendil-works/pi-tui/dist/components/v-stack.js";
 import { Container } from "../../node_modules/@earendil-works/pi-tui/dist/tui.js";
 import { TuiMainScreen } from "../../node_modules/@earendil-works/pi-tui/dist/index.js";
-import { GoalWidgetComponent, WIDGET_HEIGHT_RESERVE } from "../../extensions/widgets/goal-widget.ts";
+import { GoalWidgetComponent } from "../../extensions/widgets/goal-widget.ts";
+// The rig's dock chrome (status 1 + editor 2 + footer 1) + 1 slack: the widget
+// sizes itself against the MEASURED chrome (spec 2026-08-11), so the expected
+// cap is terminalRows - (measuredChrome + 1).
+const DOCK_RESERVE = 4 + 1;
 
 const COLS = 120;
 const expectMode = process.argv.includes("--expect");
@@ -194,7 +198,7 @@ async function scenarioAFits() {
 	const expanded = { current: true };
 	const tasks = Array.from({ length: 12 }, (_, i) => task(`t${i}`, i < 5 ? "complete" : "pending"));
 	const rig = makeRig(40, 30, expanded, tasks);
-	const cap = Math.max(1, 40 - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, 40 - DOCK_RESERVE);
 	const steps = goalStateSequence();
 	const widgetStart = 1 + 30 + 1;
 	await runScenario("A: fits case", rig, { steps, cap, widgetStart, expectStable: true });
@@ -214,7 +218,7 @@ async function scenarioBResizeExpanded() {
 	const resizeStream = await rig.flush();
 	const w = countWipes(resizeStream);
 	console.log(`  resize write: bytes=${resizeStream.length} 2J=${w.c2} 3J=${w.c3}`);
-	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, 24 - DOCK_RESERVE);
 	const widgetStart = 1 + 30 + 1;
 	await runScenario("B: post-resize", rig, { steps: goalStateSequence(), cap, widgetStart, expectStable: true });
 }
@@ -233,7 +237,7 @@ async function scenarioCResizeCompact() {
 	const resizeStream = await rig.flush();
 	const w = countWipes(resizeStream);
 	console.log(`  resize write: bytes=${resizeStream.length} 2J=${w.c2} 3J=${w.c3}`);
-	const cap = Math.max(1, 14 - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, 14 - DOCK_RESERVE);
 	const widgetStart = 1 + 20 + 1;
 	await runScenario("C: post-resize", rig, { steps: goalStateSequence().slice(0, 5), cap, widgetStart, expectStable: true });
 }

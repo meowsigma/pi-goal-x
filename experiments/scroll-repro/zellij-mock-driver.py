@@ -53,6 +53,7 @@ def zcmd(*argv):
 
 pid, fd = pty.fork()
 if pid == 0:
+    os.environ["PI_GOAL_DEBUG"] = "1"
     os.chdir(args.cwd)
     os.execvp("zellij", ["zellij", "-s", SESSION])
     os._exit(1)
@@ -139,6 +140,12 @@ while time.time() - t0 < args.seconds:
         mark("resize-%d" % args.resize_to)
         stage = 5
     elif stage == 5 and now > 28:
+        # type a message into the editor (like the user's typed message) to
+        # make the below-widget content tall (editor wraps to 2-3 lines)
+        zcmd("switch-mode", "normal")
+        time.sleep(0.3)
+        zcmd("write-chars", "STILL it's forcing the window to the bottom when the agent is running text above, and the N keeps changing")
+        mark("typed-editor")
         zcmd("switch-mode", "scroll")
         time.sleep(0.3)
         zcmd("scroll-up")
@@ -147,11 +154,13 @@ while time.time() - t0 < args.seconds:
         mark("scrolled-up-3")
         stage = 6
     elif stage == 6 and not churn_started and now > 32:
-        # enable debug mode + start the mock audit animation (continuous churn)
+        # debug mode on (ctrl+shift+x), then start the mock audit
+        # (ctrl+shift+r) via kitty sequences; the audit animation changes the
+        # widget's top content lines continuously
         zcmd("switch-mode", "normal")
-        zcmd("write", "24")   # ctrl+shift+x -> debug mode on
+        zcmd("write", "\x1b[120;6u")   # ctrl+shift+x -> debug mode on
         time.sleep(0.5)
-        zcmd("write", "18")   # ctrl+shift+r -> mock audit
+        zcmd("write", "\x1b[114;6u")   # ctrl+shift+r -> mock audit
         mark("mock-audit-start")
         churn_started = True
         stage = 7
@@ -165,7 +174,7 @@ while time.time() - t0 < args.seconds:
             zcmd("scroll-up")
             zcmd("scroll-up")
             zcmd("switch-mode", "normal")
-            zcmd("write", "18")  # restart the mock audit
+            zcmd("write", "\x1b[114;6u")  # restart the mock audit
             mark("mock-audit-restart")
             prev_stage_time = now
         # sample zellij's pane scrollback state every ~1s

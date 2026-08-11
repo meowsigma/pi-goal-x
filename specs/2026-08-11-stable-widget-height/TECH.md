@@ -212,6 +212,64 @@ Measured results (capture `/tmp/zj-mock3.bin`):
   scrollback grew 22 → 65 only during that stream, then stayed constant
   through further audit re-triggers. The widget added zero lines.
 
+## Second finding: the widget block + chrome overflowing the terminal wipes on every agent write (and the fix)
+
+pi-tui's diff renderer full-renders (`\x1b[2J\x1b[H\x1b[3J`, scrollback
+wipe) whenever the **first changed line is above its tracked viewport top**
+(`tui-main-screen.js`: `if (firstChanged < prevViewportTop) → fullRender(true)`, where
+`prevViewportTop = previousBufferLength − height` when the frame overflows).
+With the widget's block plus the dock chrome below/around it — pending +
+status + editor + footer — exceeding the terminal rows, the chat's appended
+lines and the status line are above the viewport top, so **every agent write
+and every status/spinner tick wipes the scrollback**: the terminal clears and
+redraws, the user is forced to the bottom, and N churns. The widget's own
+latched tick stays safe (its changing line is the 2nd line of the block),
+which is why the earlier harnesses (empty editor, chrome ≤ 6) missed it —
+the user's typed message in the editor pushed the chrome past 6.
+
+`experiments/scroll-repro/overflow-probe.mjs` measures it against the real
+renderer (real TuiMainScreen + real GoalWidgetComponent into
+@xterm/headless): with below-chrome = 7 (status 1 + 5-line editor + footer 2
+minus the widget), a chat append emits a full 2J+3J every time, and a status
+tick emits one too; the widget's own latched tick emits none.
+
+### Fix: adaptive reserve from the measured dock chrome
+
+`GoalWidgetComponent.render()` now measures the dock chrome at the current
+width before bounding:
+
+```ts
+const reserve = this.measureDockReserve(width) ?? WIDGET_HEIGHT_RESERVE;
+return applyStableHeightBound(natural, terminalRows, this.stableHeightState, regime, reserve);
+```
+
+`measureDockReserve(width)` finds the widget's container in `this.tui.children`
+(regular mode: `[document, pending, status, widgetContainerAbove, editor,
+widgetContainerBelow, footer]`; fullscreen mode: the dock VStack nested under
+`[transcript, dock]`), renders the sibling dock containers at the current
+width, sums their line counts (pending + status + editor + widgetBelow +
+footer — the document container is skipped: its height cancels out of the
+viewport math), and returns that + 1 slack. Any failure (mock TUIs, sibling
+render errors) falls back to the static `WIDGET_HEIGHT_RESERVE` (6) — mock
+TUIs, /goal-status, and unbounded contexts are unchanged.
+
+`applyStableHeightBound` gains an optional `reserve` parameter (default
+`WIDGET_HEIGHT_RESERVE`) and a `stickyReserve` latch key: when the measured
+chrome changes (editor grew while typing, the "Working…" status appears, the
+footer changes), the latch clears and re-evaluates at the new cap — so the
+widget's block plus the chrome never exceeds the terminal, and the chat's
+append point and the status line always stay within the viewport. Agent
+writes and spinner ticks become in-place diffs; the scrollback is never
+wiped by the widget's presence.
+
+Verified: `overflow-probe.mjs` — chat-append and status-tick wipes 1 → 0 in
+every geometry (rows 11-20, empty and 5-line editors); the widget renders its
+natural height when the chrome is small and shrinks when the editor/status
+grow; full-stack mock at 14 rows with a typed editor and the agent working
+showed a constant pane total and a held scrolled-up position across the
+churn. Unit tests cover the adaptive cap and the reserve-change re-latch;
+the harnesses assert the new cap (`rows − (measuredChrome + 1)`).
+
 ## Validation
 
 - `experiments/scroll-repro/widget-height-variability.mjs` — natural-height

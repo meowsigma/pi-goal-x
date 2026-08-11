@@ -201,15 +201,25 @@ export function boundWidgetRenderLines(lines: string[], terminalRows: number | u
 export function applyStableHeightBound(
 	lines: string[],
 	terminalRows: number | undefined,
-	state: { stickyCap: number | undefined; stickyRegime: string | undefined; stickyTerminalRows: number | undefined },
+	state: { stickyCap: number | undefined; stickyRegime: string | undefined; stickyTerminalRows: number | undefined; stickyReserve?: number },
 	regime: string,
+	reserve: number = WIDGET_HEIGHT_RESERVE,
 ): string[] {
 	if (!terminalRows || terminalRows <= 0) return lines;
-	const cap = Math.max(1, terminalRows - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, terminalRows - reserve);
 	if (state.stickyTerminalRows !== terminalRows) {
 		// Terminal resized: adapt to the new height (grow/shrink to fit).
 		state.stickyCap = undefined;
 		state.stickyTerminalRows = terminalRows;
+	}
+	if (state.stickyReserve !== reserve) {
+		// The chrome below the widget changed (editor grew/shrunk, status,
+		// footer, pending): re-evaluate so the widget's block plus the chrome
+		// never exceeds the terminal — otherwise the chat's appended lines
+		// and the status line land above pi-tui's viewport top and every
+		// agent write triggers a 2J+3J scrollback wipe (spec 2026-08-11).
+		state.stickyCap = undefined;
+		state.stickyReserve = reserve;
 	}
 	if (state.stickyRegime !== regime) {
 		// Mode/state changed: the latch belongs to one regime.
@@ -348,12 +358,14 @@ export class GoalWidgetComponent implements Component {
 	// Stable-height latch (spec 2026-08-11-stable-widget-height): the first
 	// render of each regime commits the rendered height (natural when it fits,
 	// else the cap); the height stays constant (head-slice growth, pad shrink)
-	// until the regime or the terminal size changes, so the buffer line count
-	// never changes and the terminal stops jumping to the bottom.
-	private stableHeightState: { stickyCap: number | undefined; stickyRegime: string | undefined; stickyTerminalRows: number | undefined } = {
+	// until the regime, the terminal size, or the measured dock chrome changes,
+	// so the buffer line count never changes and the terminal stops jumping to
+	// the bottom.
+	private stableHeightState: { stickyCap: number | undefined; stickyRegime: string | undefined; stickyTerminalRows: number | undefined; stickyReserve?: number } = {
 		stickyCap: undefined,
 		stickyRegime: undefined,
 		stickyTerminalRows: undefined,
+		stickyReserve: undefined,
 	};
 
 	constructor(options: GoalWidgetOptions) {
@@ -448,7 +460,75 @@ export class GoalWidgetComponent implements Component {
 		// terminal stops jumping to the bottom.
 		const natural = this.renderNatural(width);
 		const regime = this.stableHeightRegime();
-		return applyStableHeightBound(natural, terminalRows, this.stableHeightState, regime);
+		// Reserve adapted to the actual dock chrome (status + editor + footer +
+		// pending): the widget's block plus the chrome must never exceed the
+		// terminal, or the chat's appended lines and the status line land above
+		// pi-tui's viewport top and every agent write wipes the scrollback.
+		const reserve = this.measureDockReserve(width) ?? WIDGET_HEIGHT_RESERVE;
+		return applyStableHeightBound(natural, terminalRows, this.stableHeightState, regime, reserve);
+	}
+
+	/**
+	 * Measure the rendered height of the dock chrome around the widget
+	 * (pending + status + editor + widgetBelow + footer) at the current width,
+	 * so the widget can size itself so its block plus the chrome never exceeds
+	 * the terminal (spec 2026-08-11): pi-tui full-renders (2J+3J, scrollback
+	 * wipe) whenever the first changed line is above its tracked viewport top
+	 * (`previousBufferLength − terminalRows`); when the widget's block pushes
+	 * the chat's append point and the status line above that, every agent
+	 * write wipes the terminal scrollback and the user is forced to the
+	 * bottom. Returns undefined (→ the static WIDGET_HEIGHT_RESERVE fallback)
+	 * when the TUI exposes no measurable dock (mock TUIs, headless).
+	 */
+	private measureDockReserve(width: number): number | undefined {
+		type DockChild = { children?: DockChild[]; render?: (w: number) => string[] };
+		const tui = this.tui as unknown as { children?: DockChild[] };
+		const top = tui.children;
+		if (!Array.isArray(top) || top.length < 2) return undefined;
+		// Locate the dock list and the widget's own container:
+		// regular mode — top-level [document, pending, status, widgetAbove,
+		//   editor, widgetBelow, footer] with the widget directly inside
+		//   widgetContainerAbove;
+		// fullscreen mode — top-level [transcript, dock] with the widget
+		//   inside widgetContainerAbove inside the dock VStack.
+		let dockList: typeof top | undefined;
+		let widgetContainer: (typeof top)[number] | undefined;
+		for (const c of top) {
+			const kids = Array.isArray(c.children) ? c.children : undefined;
+			if (kids?.includes(this)) {
+				dockList = top;
+				widgetContainer = c;
+				break;
+			}
+			const nested = kids?.find((cc) => Array.isArray(cc.children) && cc.children!.includes(this)) as (typeof top)[number] | undefined;
+			if (nested) {
+				dockList = kids!;
+				widgetContainer = nested;
+				break;
+			}
+		}
+		if (!dockList || !widgetContainer) return undefined;
+		let total = 0;
+		for (let i = 0; i < dockList.length; i++) {
+			const c = dockList[i]!;
+			// Skip the document container / transcript (its height cancels out
+			// of the viewport math: it sits above both the chat's append point
+			// and the viewport top) and the widget's own container.
+			if (dockList === top && i === 0) continue;
+			if (c === widgetContainer) continue;
+			if (typeof c?.render !== "function") continue;
+			try {
+				const lines = c.render(width);
+				if (Array.isArray(lines)) total += lines.length;
+			} catch {
+				// A sibling render failure must never break the widget; fall
+				// back to the static reserve.
+				return undefined;
+			}
+		}
+		// +1 slack so the strictest safety condition (chat append point below
+		// the viewport top) holds even at the boundary.
+		return total + 1;
 	}
 
 	/** The current widget branch rendered unbounded (no terminal-height bound). */

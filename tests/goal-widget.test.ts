@@ -1036,7 +1036,51 @@ test("GoalWidgetComponent render height is deterministic across repeated renders
 
 // ── stable height per regime (spec 2026-08-11-stable-widget-height) ────────
 
-const freshStableState = () => ({ stickyCap: undefined as number | undefined, stickyRegime: undefined as string | undefined, stickyTerminalRows: undefined as number | undefined });
+const freshStableState = () => ({ stickyCap: undefined as number | undefined, stickyRegime: undefined as string | undefined, stickyTerminalRows: undefined as number | undefined, stickyReserve: undefined as number | undefined });
+
+test("applyStableHeightBound: adaptive reserve caps the widget so the block + chrome fits the terminal", () => {
+	const state = freshStableState();
+	const natural14 = Array.from({ length: 14 }, (_, i) => `n${i}`);
+	const natural20 = Array.from({ length: 20 }, (_, i) => `n${i}`);
+
+	// A tall editor (measured chrome = 7) shrinks the cap: 15 - 7 = 8.
+	const out = applyStableHeightBound(natural14, 15, state, "regime", 7);
+	assert.equal(out.length, 8, "cap = terminalRows - measured reserve");
+	assert.equal(state.stickyCap, 8);
+
+	// Same render again: latch holds.
+	assert.equal(applyStableHeightBound(natural20, 15, state, "regime", 7).length, 8);
+});
+
+test("applyStableHeightBound: chrome change (editor grew) re-evaluates the latch", () => {
+	const state = freshStableState();
+	const natural14 = Array.from({ length: 14 }, (_, i) => `n${i}`);
+
+	// First render with small chrome: latches at 15 - 4 = 11.
+	const first = applyStableHeightBound(natural14, 15, state, "regime", 4);
+	assert.equal(first.length, 11);
+	assert.equal(state.stickyCap, 11);
+
+	// The editor grew (chrome 4 -> 8): the latch re-evaluates to 15 - 8 = 7
+	// so the widget's block plus the chrome never exceeds the terminal (else
+	// pi-tui full-renders on every agent write).
+	const second = applyStableHeightBound(natural14, 15, state, "regime", 8);
+	assert.equal(second.length, 7, "reserve change clears the latch and re-evaluates");
+	assert.equal(state.stickyCap, 7);
+	assert.equal(state.stickyReserve, 8);
+
+	// Back to small chrome: re-evaluates up again.
+	const third = applyStableHeightBound(natural14, 15, state, "regime", 4);
+	assert.equal(third.length, 11);
+});
+
+test("applyStableHeightBound: default reserve keeps the 6-row contract unchanged", () => {
+	const state = freshStableState();
+	const natural20 = Array.from({ length: 20 }, (_, i) => `n${i}`);
+	const out = applyStableHeightBound(natural20, 24, state, "regime");
+	assert.equal(out.length, 24 - WIDGET_HEIGHT_RESERVE, "default reserve = WIDGET_HEIGHT_RESERVE");
+	assert.equal(state.stickyReserve, WIDGET_HEIGHT_RESERVE);
+});
 
 test("applyStableHeightBound: latches at the first render and holds (fits or capped)", () => {
 	const state = freshStableState();
@@ -1237,4 +1281,55 @@ test("GoalWidgetComponent: expanding the terminal reveals more of the widget, co
 	const cap30 = Math.max(1, 30 - WIDGET_HEIGHT_RESERVE);
 	assert.ok(grown.length > cap24, `growing the terminal reveals more (${grown.length} > ${cap24})`);
 	assert.ok(grown.length <= cap30, `still bounded by the new cap (${grown.length} <= ${cap30})`);
+});
+
+test("GoalWidgetComponent: measured dock chrome shrinks the widget so the block + chrome fits the terminal", () => {
+	// A fake TUI with the regular-mode child structure:
+	// [document, status, widgetContainer(component), editor, footer].
+	// The widget must size itself so its block + the chrome (status + editor
+	// + footer) never exceeds the terminal — otherwise pi-tui full-renders
+	// (2J+3J wipe) whenever the agent writes and the chrome pushes the chat
+	// append point above the viewport top.
+	let current: GoalWidgetRecord = { ...goal(), taskList: { tasks: Array.from({ length: 12 }, (_, i) => ({ id: `t${i}`, title: `Task ${i} long title for wrapping`, status: i < 5 ? "complete" : "pending", createdAt: "2026-08-10T00:00:00Z", updatedAt: "2026-08-10T00:00:00Z", completedAt: i < 5 ? "2026-08-10T00:01:00Z" : undefined })), blockCompletion: false, proposedAt: "2026-08-10T00:00:00Z" } };
+	let editorLines: string[] = [""];
+	const tui = {
+		terminal: { rows: 15 },
+		requestRender: () => {},
+		children: [
+			{ render: () => ["chat 0", "chat 1", "chat 2"] }, // document
+			{ render: () => ["status"] },                     // status
+			{ children: [] as unknown[] },                    // widgetContainer (component added below)
+			{ render: () => ["❯", ...editorLines] },          // editor
+			{ render: () => ["footer a", "footer b"] },       // footer
+		],
+	};
+	const component = new GoalWidgetComponent({
+		tui: tui as unknown as import("@earendil-works/pi-tui").TUI,
+		theme: createMockTheme(),
+		getGoal: () => current,
+		getOpenGoalCount: () => 1,
+		getSettings: () => ({}),
+		getExpanded: () => true,
+	});
+	// Register the component inside its container so the measurement finds it.
+	tui.children[2]!.children!.push(component);
+
+	// Small editor: chrome = status(1) + editor(1) + footer(2) = 4 -> reserve 5
+	// -> cap = 15 - 5 = 10; the natural height (9) fits, so it renders natural.
+	const small = component.render(100);
+	assert.equal(small.length, 9, "with a small editor the widget renders its natural height (9 < cap 10)");
+
+	// Tall editor (user's typed message): chrome = status(1) + editor(4:
+	// "❯" + 3 wrapped lines) + footer(2) = 7 -> reserve 8 -> cap = 15 - 8 = 7.
+	// The widget must shrink so the block + chrome (7 + 7 = 14) still fits the
+	// 15-row terminal.
+	editorLines = ["l1", "l2", "l3"];
+	const tall = component.render(100);
+	assert.equal(tall.length, 7, "with a tall editor the widget shrinks to 15 - (7 + 1) = 7 lines");
+	assert.ok(tall.length < small.length, "taller chrome shrinks the widget");
+
+	// Editor back to small: the widget grows again.
+	editorLines = [""];
+	const back = component.render(100);
+	assert.equal(back.length, 9, "chrome shrinking re-evaluates the latch up");
 });

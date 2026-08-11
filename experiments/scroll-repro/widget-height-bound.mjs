@@ -10,7 +10,7 @@
 // UI's natural height.
 //
 // Reports per scenario:
-//   - widget rendered lines (post-fix must be <= terminalRows - WIDGET_HEIGHT_RESERVE)
+//   - widget rendered lines (post-fix must be <= terminalRows - DOCK_RESERVE)
 //   - frame length + viewportTop (lines above the viewport live in terminal
 //     scrollback and are reachable by scrolling up)
 //   - whether the chat and the editor/footer are on screen or reachable
@@ -29,7 +29,11 @@ import { ScrollView } from "../../node_modules/@earendil-works/pi-tui/dist/compo
 import { VStack } from "../../node_modules/@earendil-works/pi-tui/dist/components/v-stack.js";
 import { Container } from "../../node_modules/@earendil-works/pi-tui/dist/tui.js";
 import { TuiMainScreen } from "../../node_modules/@earendil-works/pi-tui/dist/index.js";
-import { GoalWidgetComponent, WIDGET_HEIGHT_RESERVE } from "../../extensions/widgets/goal-widget.ts";
+import { GoalWidgetComponent } from "../../extensions/widgets/goal-widget.ts";
+// The rig's dock chrome (status 1 + editor 2 + footer 1) + 1 slack: the widget
+// sizes itself against the MEASURED chrome (spec 2026-08-11), so the expected
+// cap is terminalRows - (measuredChrome + 1).
+const DOCK_RESERVE = 4 + 1;
 
 const COLS = 120;
 const ROWS = 24; // == expanded dashboard natural height (the primary repro)
@@ -197,7 +201,7 @@ function runStickySteadyState() {
 	writes.length = 0;
 
 	const seq = goalStateSequence();
-	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, 24 - DOCK_RESERVE);
 	let prevHeight = undefined;
 	let prevFrameLen = undefined;
 	let heights = [];
@@ -253,7 +257,7 @@ function runFitsByteIdentical() {
 	writes.length = 0;
 
 	const natural = component.render(COLS);
-	const cap = Math.max(1, 30 - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, 30 - DOCK_RESERVE);
 	check(natural.length <= cap, `natural height ${natural.length} fits (cap ${cap})`);
 	const frame = frameLines(tui);
 	const widgetStart = 1 + 4 + 1;
@@ -301,14 +305,14 @@ function runResizeAdaptation() {
 	writes.length = 0;
 
 	const widgetStart = 1 + 4 + 1;
-	const cap24 = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	const cap24 = Math.max(1, 24 - DOCK_RESERVE);
 	const h24 = widgetSpan(frameLines(tui), widgetStart);
 	check(h24 === cap24, `latched at cap ${cap24} on a 24-row terminal (rendered ${h24})`);
 
 	terminal.rows = 30;
 	tui.doRender();
 	writes.length = 0;
-	const cap30 = Math.max(1, 30 - WIDGET_HEIGHT_RESERVE);
+	const cap30 = Math.max(1, 30 - DOCK_RESERVE);
 	const natural30 = component.render(COLS).length;
 	const h30 = widgetSpan(frameLines(tui), widgetStart);
 	check(h30 === Math.min(natural30, cap30), `grow to 30 rows: rendered ${h30} == min(natural ${natural30}, new cap ${cap30}) (more widget revealed)`);
@@ -344,7 +348,7 @@ function runRegimeReset() {
 	tui.doRender();
 	writes.length = 0;
 	const widgetStart = 1 + 4 + 1;
-	const cap = Math.max(1, 24 - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, 24 - DOCK_RESERVE);
 	const hExpanded = widgetSpan(frameLines(tui), widgetStart);
 	check(hExpanded === cap, `expanded latched at cap ${cap} (rendered ${hExpanded})`);
 
@@ -367,7 +371,7 @@ function runRegimeReset() {
 // ── Scenario: audit dashboard at a small terminal ───────────────────────────
 
 function runAuditSticky() {
-	const cap = Math.max(1, 13 - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, 13 - DOCK_RESERVE);
 	console.log(`\n── sticky cap: audit dashboard (13-row terminal, cap ${cap}) ──`);
 	const { terminal, writes, tui } = setup(13);
 	const currentRef = { current: structuredClone(baseGoal) };
@@ -435,7 +439,7 @@ function runScenario({ label, chatLines, expanded, preFix, rows, demo }) {
 	const widgetNatural = component.render(COLS).length; // widget's own render (unbounded comparison)
 	const frameLen = frame.length;
 	const viewportTop = Math.max(0, frameLen - rows);
-	const cap = Math.max(1, rows - WIDGET_HEIGHT_RESERVE);
+	const cap = Math.max(1, rows - DOCK_RESERVE);
 	const renderedWidget = Math.min(widgetNatural, Math.max(0, frameLen - widgetStart));
 	const chatAboveViewport = chatLines > 0 ? frameLen > rows : false;
 	const footerIdx = frameLen - 1;

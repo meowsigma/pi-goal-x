@@ -55,7 +55,7 @@ goal = {
     "id": "mock-active-run-001",
     "objective": "Mock a running goal for the full-stack scroll reproduction. This goal exercises the live path: status active (live elapsed usage on every render), a tall expanded dashboard (12 tasks, subtasks, verification contracts, token budget), and continuous goal-state churn via the debug audit animation — while the terminal is smaller than the widget and the user is scrolled up.",
     "status": "active",
-    "autoContinue": False,
+    "autoContinue": True,
     "usage": {"tokensUsed": 48213, "activeSeconds": 1427},
     "sisyphus": False,
     "skipAuditor": False,

@@ -17,9 +17,10 @@ import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from ".
 import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings, invalidateGoalSettingsCache } from "./goal-settings.ts";
 import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
-import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
+import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord } from "./goal-record.ts";
 import { goalSelectorLabel } from "./goal-pool.ts";
-import { invalidateGoalPoolCache } from "./storage/goal-files.ts";import {
+import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
+import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";import {
 	goalPrompt,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
@@ -29,6 +30,56 @@ import { rehydrateDraft } from "./goal-drafting.ts";
 import { syncTerminalInputPause } from "./goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
+
+/**
+ * Issue #30: provider-context checkpoint compaction (pure helper).
+ *
+ * Every historical checkpoint message is redundant: its authoritative state is
+ * reconstructed from goal storage and injected once per turn by
+ * before_agent_start. Normal provider requests therefore retain at most ONE
+ * checkpoint marker — the latest — rewritten to the tiny bounded v2 trigger
+ * content. Keeping one user-role turn-start marker avoids provider edge cases
+ * where removing it would leave the request ending on an assistant or tool
+ * result. Audit events, user messages, assistant messages, and tool results
+ * pass through untouched.
+ */
+export function compactGoalCheckpointContext(
+	messages: readonly unknown[],
+	currentGoal: GoalRecord | null,
+): unknown[] | null {
+	let lastCheckpointIndex = -1;
+	for (let i = 0; i < messages.length; i += 1) {
+		if (goalEventMessageId(messages[i] as { customType?: string; details?: unknown; content?: unknown }) !== null) {
+			lastCheckpointIndex = i;
+		}
+	}
+	if (lastCheckpointIndex < 0) return null;
+
+	const output: unknown[] = [];
+	for (let i = 0; i < messages.length; i += 1) {
+		const message = messages[i] as { customType?: string; details?: unknown; content?: unknown };
+		const checkpointGoalId = goalEventMessageId(message);
+		if (checkpointGoalId === null) {
+			output.push(messages[i]);
+			continue;
+		}
+		// Every historical checkpoint is dropped entirely.
+		if (i !== lastCheckpointIndex) continue;
+		output.push({
+			...(message as Record<string, unknown>),
+			content: checkpointTriggerPrompt(checkpointGoalId),
+			display: false,
+			details: {
+				version: 2,
+				kind: currentGoal?.id === checkpointGoalId && currentGoal?.status === "active" ? "checkpoint" : "stale",
+				goalId: checkpointGoalId,
+				currentGoalId: currentGoal?.id ?? null,
+				currentStatus: currentGoal?.status ?? null,
+			},
+		});
+	}
+	return output;
+}
 
 /**
  * The goal extension's lifecycle event handlers (context, turn_start,
@@ -41,40 +92,10 @@ export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
 	let continuationAfterSettleFor: string | null = null;
 
-	pi.on("context", async (event): Promise<{ messages: typeof event.messages } | undefined> => {
-		let changed = false;
-		const latestGoalEventIndex = new Map<string, number>();
-		event.messages.forEach((message, index) => {
-			const queuedGoalId = goalEventMessageId(message as { customType?: string; details?: unknown; content?: unknown });
-			if (queuedGoalId) latestGoalEventIndex.set(queuedGoalId, index);
-		});
-
-		const messages = event.messages.map((message, index) => {
-			const candidate = message as { customType?: string; details?: unknown; content?: unknown };
-			const queuedGoalId = goalEventMessageId(candidate);
-			if (!queuedGoalId) return message;
-			if (
-				core.state.goal?.id === queuedGoalId
-				&& (core.state.goal.status === "active")
-				&& core.state.goal.autoContinue
-				&& latestGoalEventIndex.get(queuedGoalId) === index
-			) return message;
-			changed = true;
-			const details = asRecord(candidate.details) ?? {};
-			return {
-				...message,
-				content: staleContinuationPrompt(queuedGoalId, core.state.goal),
-				display: false,
-				details: {
-					...details,
-					kind: "stale",
-					goalId: queuedGoalId,
-					currentGoalId: core.state.goal?.id ?? null,
-					currentStatus: core.state.goal?.status ?? null,
-				},
-			} as typeof message;
-		});
-		return changed ? { messages } : undefined;
+	pi.on("context", async (event) => {
+		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
+		// Reference equality means no goal-event messages existed at all.
+		return messages === null ? undefined : { messages: messages as typeof event.messages };
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {

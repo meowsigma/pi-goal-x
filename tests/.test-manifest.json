@@ -55,6 +55,7 @@
     ".tests/goal-widget.test.ts",
     ".tests/no-status-refresh-timer.test.ts",
     ".tests/overflow-regression.test.ts",
+    ".tests/session-checkpoint-growth.test.ts",
     ".tests/session-state-growth.test.ts",
     ".tests/task-list-overlay.test.ts",
     ".tests/verification-contract.test.ts"

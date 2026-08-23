@@ -343,6 +343,38 @@ Completed and cleared goals are stored in:
 
 Each session can focus on one goal while the project keeps other goals open.
 
+## Session checkpoint recovery
+
+Auto-continue checkpoints are tiny structured markers (≤160 chars) that
+trigger the next turn; the full goal state is injected once per turn by the
+extension and is never persisted into checkpoints. Sessions created by older
+versions may still contain large "legacy" full-prompt checkpoints.
+
+Check `/goal-recovery` or `/goal-status health` for a read-only report:
+
+```text
+Session checkpoints:
+  total: 851
+  legacy full checkpoints: 851
+  checkpoint content: 5.4 MB
+  projected content after recovery: 92 KB
+```
+
+To repair an affected session file, close Pi first (the tool refuses to run
+while a live session could be open), then:
+
+```bash
+# Report only — writes nothing:
+pi-goal-x-recover --session <session.jsonl>
+
+# Repair (creates a timestamped backup, rewrites only checkpoint entries):
+pi-goal-x-recover --session <session.jsonl> --apply --confirm-pi-closed
+```
+
+Recovery preserves every entry id and parent link, keeps all non-goal lines
+byte-identical (including malformed lines), and is idempotent. Rollback is
+the timestamped `.backup-*` file created next to the session.
+
 ## Commands
 
 ```text

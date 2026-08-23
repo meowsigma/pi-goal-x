@@ -2,6 +2,34 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.27.5] — 2026-08-23
+
+### Fixed
+
+- **Issue #30 — continuation checkpoints no longer persist the full goal prompt**
+  Every auto-continue turn persisted a full continuation prompt (~6.4K chars:
+  objective, task list, verification contract, lifecycle policy) as a custom
+  session message; one reported session accumulated 851 byte-identical copies
+  (~5.4 MB). Checkpoints are now bounded v2 trigger markers (≤160 chars) with
+  structured metadata; the complete goal state is injected exactly once per
+  turn via the system prompt, so nothing about model-facing behavior changes.
+  Provider context retains at most one historical checkpoint marker; older
+  markers are filtered out and legacy full checkpoints remain parseable.
+
+### Added
+
+- **Checkpoint health report** — `/goal-recovery` and `/goal-status health`
+  now report persisted checkpoint counts, legacy/v2 classification, bytes
+  spent on checkpoint content, and projected post-recovery size (read-only).
+- **Offline session recovery CLI** — `pi-goal-x-recover` repairs existing
+  oversized session files: dry-run default, `--apply` gated behind
+  `--confirm-pi-closed`, timestamped backup, atomic rename, unchanged entry
+  ids/parent links/line count/header, non-goal and malformed lines preserved
+  byte-identically, idempotent. See README "Session checkpoint recovery".
+- **B10 checkpoint-growth benchmark** gating persisted growth, provider-visible
+  checkpoint count, recovery reduction, and composed-request duplication in
+  `bench:gate:naf`.
+
 ## [0.27.4] — 2026-08-11
 
 ### Fixed

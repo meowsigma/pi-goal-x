@@ -59,7 +59,9 @@
     "test:e2e": "node scripts/run-unit-tests.mjs e2e",
     "test:checkpoint-recovery": "node --experimental-strip-types --test tests/session-checkpoint-growth.test.ts tests/session-checkpoint-recovery.test.ts tests/goal-session-health.test.ts",
     "test:settings-race": "node --experimental-strip-types --test tests/goal-settings-race.test.ts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "context:measure": "node experiments/context/run-measure.mjs",
+    "context:gate": "node experiments/context/run-gate.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.83.0 <0.85.0",

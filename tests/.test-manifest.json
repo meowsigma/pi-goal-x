@@ -31,6 +31,7 @@
     ".tests/goal-modal-escape.test.ts",
     ".tests/goal-mutation-boundary.test.ts",
     ".tests/goal-notifications.test.ts",
+    ".tests/goal-oracle.test.ts",
     ".tests/goal-payload-separation.test.ts",
     ".tests/goal-policy.test.ts",
     ".tests/goal-pool-snapshot.test.ts",

@@ -20,7 +20,8 @@ import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
 import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord } from "./goal-record.ts";
 import { goalSelectorLabel } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
-import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";import {
+import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
+import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";import {
 	goalPrompt,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
@@ -136,6 +137,25 @@ export function registerGoalEvents(core: GoalCore): void {
 		// Track for #4 empty-turn gate.
 		if (isMeaningfulProgressToolCall(event.toolName, asRecord(event)?.args)) {
 			core.goalWorkToolCalledThisTurn = true;
+			// Issue #26: record a meaningful work attempt against armed Oracle
+			// advice. get_goal / echo-only reads are excluded upstream by
+			// isMeaningfulProgressToolCall.
+			const focusedId = core.focusedGoalId;
+			if (focusedId && hasPendingOracleAdviceForFocusedGoal(focusedId)) {
+				const armed = consumeOracleFollowupMarker(focusedId);
+				if (armed) {
+					try {
+						core.goalService.appendEvents(ctx, [{
+							type: "oracle_followup_attempted",
+							goalId: armed.goalId,
+							fingerprint: armed.fingerprint,
+							adviceId: armed.adviceId,
+							firstToolName: event.toolName,
+							at: nowIso(),
+						}]);
+					} catch { /* best-effort ledger append */ }
+				}
+			}
 		}
 		return;
 	});

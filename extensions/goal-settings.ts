@@ -106,6 +106,34 @@ export interface GoalSettingsResolvedShape {
 	keybindings?: GoalKeybindings;
 	/** PR #29: suppress the unfocused goal widget + status hint (default false). */
 	hideUnfocusedBanner?: boolean;
+	/** Issue #26: opt-in read-only blocker Oracle configuration (sparse). */
+	oracle?: GoalOracleSettingsLayer;
+}
+
+// Resolved Oracle settings are attached to the resolved runtime shape below
+// (see ResolvedGoalOracleSettings).
+
+/**
+ * Issue #26: sparse per-leaf Oracle settings. Every leaf inherits
+ * independently (project > global > default); enabled defaults false.
+ */
+export interface GoalOracleSettingsLayer {
+	enabled?: boolean;
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+	projectResources?: boolean;
+	maxFailedAttemptsPerBlocker?: number;
+}
+
+/** Resolved Oracle settings (concrete defaults). */
+export interface ResolvedGoalOracleSettings {
+	enabled: boolean;
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+	projectResources: boolean;
+	maxFailedAttemptsPerBlocker: number;
 }
 
 /**
@@ -120,7 +148,12 @@ export interface GoalSettingsLayer extends GoalSettingsResolvedShape {}
  * Fully resolved runtime settings (defaults filled). Exported as an alias for
  * compatibility: all existing consumers keep importing GoalSettings.
  */
-export type ResolvedGoalSettings = GoalSettingsResolvedShape;
+export interface ResolvedGoalSettingsShape extends GoalSettingsResolvedShape {
+	/** Issue #26: resolved opt-in blocker Oracle configuration. */
+	oracle?: ResolvedGoalOracleSettings;
+}
+
+export type ResolvedGoalSettings = ResolvedGoalSettingsShape;
 
 /** Compatibility alias: runtime code keeps importing GoalSettings. */
 export type GoalSettings = ResolvedGoalSettings;
@@ -272,6 +305,17 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"objectiveMaxChars",
 	"keybindings",
 	"hideUnfocusedBanner",
+	"oracle",
+]);
+
+const ALLOWED_ORACLE_KEYS = new Set([
+	"enabled",
+	"provider",
+	"model",
+	"thinkingLevel",
+	"thinking_level",
+	"projectResources",
+	"maxFailedAttemptsPerBlocker",
 ]);
 
 const ALLOWED_KEYBINDING_KEYS = new Set(["dashboard"]);
@@ -381,6 +425,54 @@ export function parseSettingsLayer(
 					sparse.dashboard = dash;
 				}
 				layer.keybindings = sparse as unknown as GoalKeybindings;
+				break;
+			}
+			case "oracle": {
+				if (!value || typeof value !== "object" || Array.isArray(value)) {
+					diagnostics.push(diagnostic("invalid_nested_key", "oracle must be an object", key));
+					break;
+				}
+				const oracleRecord = value as Record<string, unknown>;
+				const oracle: GoalOracleSettingsLayer = {};
+				for (const [oKey, oValue] of Object.entries(oracleRecord)) {
+					if (!ALLOWED_ORACLE_KEYS.has(oKey)) {
+						diagnostics.push(diagnostic("unknown_key", `unknown oracle key: ${oKey}`, `oracle.${oKey}`));
+						continue;
+					}
+					switch (oKey) {
+						case "enabled":
+						case "projectResources": {
+							const parsed = asBool(oValue);
+							if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `oracle.${oKey} must be true or false`, `oracle.${oKey}`));
+							else oracle[oKey] = parsed;
+							break;
+						}
+						case "provider":
+						case "model": {
+							const parsed = asNonEmptyString(oValue);
+							if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `oracle.${oKey} must be a non-empty string`, `oracle.${oKey}`));
+							else oracle[oKey] = parsed;
+							break;
+						}
+						case "thinkingLevel":
+						case "thinking_level": {
+							const parsed = asThinkingLevel(oValue);
+							if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `oracle.${oKey} must be one of: ${[...THINKING_LEVELS].join(", ")}`, `oracle.${oKey}`));
+							else oracle.thinkingLevel = parsed;
+							break;
+						}
+						case "maxFailedAttemptsPerBlocker": {
+							const parsed = asPositiveInt(oValue);
+							if (parsed === undefined || parsed > 3) {
+								diagnostics.push(diagnostic("invalid_value", "oracle.maxFailedAttemptsPerBlocker must be an integer between 1 and 3", `oracle.${oKey}`));
+							} else {
+								oracle.maxFailedAttemptsPerBlocker = parsed;
+							}
+							break;
+						}
+					}
+				}
+				layer.oracle = oracle;
 				break;
 			}
 			default:
@@ -598,6 +690,37 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		globalValue: global.layer.hideUnfocusedBanner,
 		defaultValue: false,
 	}));
+	// Issue #26: Oracle leaves resolve per leaf like every other setting.
+	const oracleEnabled = track("oracle.enabled", resolveLeaf<boolean>({
+		projectValue: project.layer.oracle?.enabled,
+		globalValue: global.layer.oracle?.enabled,
+		defaultValue: false,
+	}));
+	const oracleProvider = track("oracle.provider", resolveLeaf<string>({
+		projectValue: project.layer.oracle?.provider,
+		globalValue: global.layer.oracle?.provider,
+		defaultValue: undefined as unknown as string,
+	}));
+	const oracleModel = track("oracle.model", resolveLeaf<string>({
+		projectValue: project.layer.oracle?.model,
+		globalValue: global.layer.oracle?.model,
+		defaultValue: undefined as unknown as string,
+	}));
+	const oracleThinkingLevel = track("oracle.thinkingLevel", resolveLeaf<ThinkingLevel>({
+		projectValue: project.layer.oracle?.thinkingLevel,
+		globalValue: global.layer.oracle?.thinkingLevel,
+		defaultValue: undefined as unknown as ThinkingLevel,
+	}));
+	const oracleProjectResources = track("oracle.projectResources", resolveLeaf<boolean>({
+		projectValue: project.layer.oracle?.projectResources,
+		globalValue: global.layer.oracle?.projectResources,
+		defaultValue: false,
+	}));
+	const oracleMaxFailedAttemptsPerBlocker = track("oracle.maxFailedAttemptsPerBlocker", resolveLeaf<number>({
+		projectValue: project.layer.oracle?.maxFailedAttemptsPerBlocker,
+		globalValue: global.layer.oracle?.maxFailedAttemptsPerBlocker,
+		defaultValue: 2,
+	}));
 	const stallTimeoutMinutes = track("stallTimeoutMinutes", resolveLeaf<number>({
 		projectValue: project.layer.stallTimeoutMinutes,
 		globalValue: global.layer.stallTimeoutMinutes,
@@ -645,6 +768,14 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		stallTimeoutMinutes,
 		objectiveMaxChars,
 		keybindings,
+		oracle: {
+			enabled: oracleEnabled,
+			...(oracleProvider ? { provider: oracleProvider } : {}),
+			...(oracleModel ? { model: oracleModel } : {}),
+			...(oracleThinkingLevel ? { thinkingLevel: oracleThinkingLevel } : {}),
+			projectResources: oracleProjectResources,
+			maxFailedAttemptsPerBlocker: oracleMaxFailedAttemptsPerBlocker,
+		},
 	};
 
 	return {
@@ -945,6 +1076,17 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.autoSelectSingleGoal !== undefined) persisted.autoSelectSingleGoal = settings.autoSelectSingleGoal;
 	if (settings.auditorProjectResources !== undefined) persisted.auditorProjectResources = settings.auditorProjectResources;
 	if (settings.hideUnfocusedBanner !== undefined) persisted.hideUnfocusedBanner = settings.hideUnfocusedBanner;
+	if ((settings as { oracle?: ResolvedGoalOracleSettings }).oracle) {
+		const o: Record<string, unknown> = {};
+		const so = (settings as { oracle?: ResolvedGoalOracleSettings }).oracle!;
+		if (so.enabled !== undefined) o.enabled = so.enabled;
+		if (so.provider !== undefined) o.provider = so.provider;
+		if (so.model !== undefined) o.model = so.model;
+		if (so.thinkingLevel !== undefined) o.thinking_level = so.thinkingLevel;
+		if (so.projectResources !== undefined) o.projectResources = so.projectResources;
+		if (so.maxFailedAttemptsPerBlocker !== undefined) o.maxFailedAttemptsPerBlocker = so.maxFailedAttemptsPerBlocker;
+		if (Object.keys(o).length > 0) persisted.oracle = o;
+	}
 	if (settings.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	if (settings.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = settings.objectiveMaxChars;
 	if (settings.keybindings?.dashboard) {

@@ -386,7 +386,7 @@ test("update_goal(blocked) records a distinct agent-blocked state from active", 
 		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 		await start(h);
 		const update = h.tools.get("update_goal")!;
-		const result = await (update.execute as any)("update-3", { status: "blocked" }, undefined, undefined, h.ctx);
+		const result = await (update.execute as any)("update-3", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
 		assert.ok(result.terminate === true, "blocked terminates the turn");
 		const active = activeGoalFiles(f.cwd);
 		assert.equal(active.length, 1, "goal remains in the active dir");
@@ -410,7 +410,7 @@ test("update_goal(blocked) is rejected from a non-active goal", async () => {
 		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 		await start(h);
 		const update = h.tools.get("update_goal")!;
-		const result = await (update.execute as any)("update-4", { status: "blocked" }, undefined, undefined, h.ctx);
+		const result = await (update.execute as any)("update-4", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
 		const text = result.content?.[0]?.text ?? "";
 		assert.ok(text.includes("applies only to an active goal"), `blocked must be rejected from paused, got: ${text}`);
 		const active = activeGoalFiles(f.cwd);
@@ -433,7 +433,7 @@ test("update_goal(blocked) surfaces an apply failure instead of claiming success
 		service.apply = () => ({ ok: false, message: "simulated conflict: goal modified by another process" });
 		try {
 			const update = h.tools.get("update_goal")!;
-			const result = await (update.execute as any)("update-3", { status: "blocked" }, undefined, undefined, h.ctx);
+			const result = await (update.execute as any)("update-3", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
 			const text = result.content?.[0]?.text ?? "";
 			assert.ok(text.includes("simulated conflict"), `must surface the mutation message, got: ${text}`);
 			assert.ok(text.includes("NOT marked blocked"), `must not claim the goal is blocked, got: ${text}`);

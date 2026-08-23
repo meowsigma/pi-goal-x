@@ -90,7 +90,7 @@ export interface GoalCore {
 	stopAuditAnimation(): void;
 	abortAudit(ctx: ExtensionContext): void;
 	clearContinuationTimer(): void;
-	clearContinuationState(): void;
+	clearContinuationState(resetNetworkErrorBackoff?: boolean): void;
 	clearActiveAccounting(): void;
 	advanceTurnSeq(): void;
 	currentTurnStoppedGoalId(): string | null;
@@ -357,8 +357,8 @@ export function createGoalCore(
 		runtime.clearContinuationTimer();
 	}
 
-	function clearContinuationState(): void {
-		runtime.clearContinuationState();
+	function clearContinuationState(resetNetworkErrorBackoff = true): void {
+		runtime.clearContinuationState(resetNetworkErrorBackoff);
 	}
 
 	function clearActiveAccounting(): void {

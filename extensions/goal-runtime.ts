@@ -12,6 +12,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { GoalCheckpointDetailsV2, GoalRecord } from "./goal-record.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { POST_STOP_ALLOWED_TOOLS } from "./goal-tool-names.ts";
+import { networkErrorBackoffPlan, type NetworkErrorBackoffPlan } from "./network-error-backoff.ts";
 
 export const CONTINUATION_IDLE_RETRY_MS = 50;
 
@@ -31,6 +32,9 @@ export class GoalRuntime {
 	private continuationQueuedFor: string | null = null;
 	private continuationScheduledFor: string | null = null;
 	private continuationTimer: ReturnType<typeof setTimeout> | null = null;
+	private networkErrorRetryGoalId: string | null = null;
+	private networkErrorRetryAttempt = 0;
+	private networkErrorRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// ── turn-stop guard ──────────────────────────────────────────────────
 	private turnSeq = 0;
@@ -54,9 +58,10 @@ export class GoalRuntime {
 
 	// ── continuation scheduling ──────────────────────────────────────────
 
-	clearContinuationState(): void {
+	clearContinuationState(resetNetworkErrorBackoff = true): void {
 		this.clearContinuationTimer();
 		this.continuationQueuedFor = null;
+		if (resetNetworkErrorBackoff) this.clearNetworkErrorBackoff();
 	}
 
 	/** Clear the pending timer but keep the queued marker (used at session shutdown). */
@@ -98,6 +103,40 @@ export class GoalRuntime {
 	cancelContinuationFor(goalId: string): void {
 		if (this.continuationQueuedFor === goalId) this.continuationQueuedFor = null;
 		if (this.continuationScheduledFor === goalId) this.clearContinuationState();
+		if (this.networkErrorRetryGoalId === goalId) this.clearNetworkErrorBackoff();
+	}
+
+	/**
+	 * Schedule the next bounded recovery after Pi's built-in provider retries
+	 * have failed. The counter stays in memory and is cleared on a successful
+	 * turn or any user-owned cancellation path.
+	 */
+	scheduleNetworkErrorRetry(ctx: ExtensionContext, goal: GoalRecord): NetworkErrorBackoffPlan | null {
+		if (goal.status !== "active" || !goal.autoContinue || this.networkErrorRetryTimer) return null;
+		if (this.networkErrorRetryGoalId !== goal.id) {
+			this.networkErrorRetryGoalId = goal.id;
+			this.networkErrorRetryAttempt = 0;
+		}
+		const plan = networkErrorBackoffPlan(this.networkErrorRetryAttempt + 1);
+		if (!plan) return null;
+		this.networkErrorRetryAttempt = plan.attempt;
+		this.networkErrorRetryTimer = setTimeout(() => {
+			this.networkErrorRetryTimer = null;
+			if (!this.hooks.isActionable(goal.id)) return;
+			const currentGoal = this.hooks.getGoal();
+			if (!currentGoal || currentGoal.id !== goal.id) return;
+			this.queueContinuation(ctx, currentGoal, true);
+		}, plan.delayMs);
+		this.networkErrorRetryTimer.unref?.();
+		return plan;
+	}
+
+	/** Cancel and forget all goal-level network-error recovery state. */
+	clearNetworkErrorBackoff(): void {
+		if (this.networkErrorRetryTimer) clearTimeout(this.networkErrorRetryTimer);
+		this.networkErrorRetryTimer = null;
+		this.networkErrorRetryGoalId = null;
+		this.networkErrorRetryAttempt = 0;
 	}
 
 	/**

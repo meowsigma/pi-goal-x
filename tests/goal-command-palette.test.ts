@@ -189,7 +189,8 @@ test("goal-settings renders sectioned rows with clearer auditor wording", async 
 		assert.ok(opts.includes("─── Completion auditor ───"), "Completion auditor section header");
 		assert.ok(opts.some((l) => l.includes("auditor disabled:")), "clearer auditor wording row");
 		assert.ok(opts.some((l) => l.includes("provider:")) && opts.some((l) => l.includes("model:")), "provider/model rows");
-		assert.equal(opts.filter((l) => l.startsWith("───")).length, 4, "editing header + exactly three sections");
+		assert.equal(opts.filter((l) => l.startsWith("───")).length, 5, "editing header + exactly four sections (incl. Blocker Oracle)");
+		assert.ok(opts.includes("─── Blocker Oracle ───"), "Blocker Oracle section header");
 		assert.ok(opts.includes("Done"));
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });

@@ -380,10 +380,12 @@ export function registerGoalCommands(core: GoalCore): void {
 	 * eight persisted fields are present and operable.
 	 */
 	type SettingRow = {
-		key: keyof GoalSettings;
+		key: keyof GoalSettings | string;
 		label: string;
-		section: "Goal behavior" | "Task tracking" | "Completion auditor";
+		section: "Goal behavior" | "Task tracking" | "Completion auditor" | "Blocker Oracle";
 		kind: "boolean" | "modelSelector" | "thinking" | "positiveInteger";
+		/** Settings path for the mutation (defaults to [key]). */
+		path?: string[];
 	};
 
 	const SETTING_ROWS: readonly SettingRow[] = [
@@ -398,9 +400,16 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "provider", label: "provider", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "model", label: "model", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "thinkingLevel", label: "thinking_level", section: "Completion auditor", kind: "thinking" },
+		// Issue #26: opt-in blocker Oracle. Disabled by default; provider/model
+		// must BOTH be set explicitly — the executor model is never used silently.
+		{ key: "oracleEnabled", label: "oracle enabled", section: "Blocker Oracle", kind: "boolean", path: ["oracle", "enabled"] },
+		{ key: "oracleProviderModel", label: "oracle provider/model", section: "Blocker Oracle", kind: "modelSelector", path: ["oracle"] },
+		{ key: "oracleThinkingLevel", label: "oracle thinking_level", section: "Blocker Oracle", kind: "thinking", path: ["oracle", "thinkingLevel"] },
+		{ key: "oracleProjectResources", label: "oracle project resources", section: "Blocker Oracle", kind: "boolean", path: ["oracle", "projectResources"] },
+		{ key: "oracleMaxFailedAttemptsPerBlocker", label: "max failed attempts per blocker", section: "Blocker Oracle", kind: "positiveInteger", path: ["oracle", "maxFailedAttemptsPerBlocker"] },
 	];
 
-	function settingsValue(config: GoalSettings, key: keyof GoalSettings): string {
+	function settingsValue(config: GoalSettings, key: keyof GoalSettings | string): string {
 		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources" || key === "hideUnfocusedBanner") {
 			return config[key] === true ? "true" : "false";
 		}
@@ -408,7 +417,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
 		if (key === "keybindings") return config.keybindings ? `${config.keybindings.dashboard.toggleExpand}, ${config.keybindings.dashboard.scrollUp}, ${config.keybindings.dashboard.scrollDown}` : "(default)";
-		const value = config[key];
+		const value = (config as Record<string, unknown>)[key];
 		return typeof value === "string" ? value : "(default)";
 	}
 
@@ -465,24 +474,38 @@ export function registerGoalCommands(core: GoalCore): void {
 				const options: string[] = [];
 				options.push(`─── Editing: ${scope} (${scopePath(scope)}) ───`);
 				let lastSection: string | null = null;
+				const pathOf = (row: SettingRow): string[] => row.path ?? [String(row.key)];
+				const valueAtPath = (obj: unknown, path: string[]): unknown => {
+					let cursor: unknown = obj;
+					for (const segment of path) {
+						if (!cursor || typeof cursor !== "object") return undefined;
+						cursor = (cursor as Record<string, unknown>)[segment];
+					}
+					return cursor;
+				};
 				for (const row of SETTING_ROWS) {
 					if (row.section !== lastSection) {
 						options.push(`─── ${row.section} ───`);
 						lastSection = row.section;
 					}
-					const envVar = envOverrideFor(row.key);
+					const envVar = typeof row.key === "string" ? envOverrideFor(row.key as keyof GoalSettings) : null;
 					if (envVar) {
 						options.push(`  ${row.label}: ${settingsValue(snapshot.value, row.key)} (environment; read-only)`);
 						continue;
 					}
-					const provenance = snapshot.provenance.get(String(row.key));
+					const rowPath = pathOf(row);
+					const provenance = snapshot.provenance.get(rowPath.join("."));
 					let source: string;
 					if (provenance?.source === "global") source = scope === "project" ? "(inherited from global)" : "(global override)";
 					else if (provenance?.source === "project") source = scope === "project" ? "(project override)" : "(project; edit via project scope)";
 					else source = "(default)";
-					const hasLocalOverride = localLayer[row.key] !== undefined;
+					const hasLocalOverride = valueAtPath(localLayer, rowPath) !== undefined;
 					if (hasLocalOverride && provenance?.source === scope) source = `(${scope} override)`;
-					options.push(`  ${row.label}: ${settingsValue(snapshot.value, row.key)} ${source}`);
+					// Nested rows render their leaf value directly.
+					const displayValue = row.path
+						? String(valueAtPath(snapshot.value, rowPath) ?? "(default)")
+						: settingsValue(snapshot.value, row.key);
+					options.push(`  ${row.label}: ${displayValue} ${source}`);
 				}
 				options.push("Done");
 				const selected = await ctx.ui.select("Goal settings", options);
@@ -498,16 +521,29 @@ export function registerGoalCommands(core: GoalCore): void {
 				const label = trimmed.slice(0, colon).trim();
 				const row = SETTING_ROWS.find((r) => r.label === label);
 				if (!row) continue;
-				if (envOverrideFor(row.key)) {
-					ctx.ui.notify(`${row.label} is read-only: overridden by the ${envOverrideFor(row.key)} env var.`, "warning");
+				const envVarForRow2 = envOverrideFor(row.key as keyof GoalSettings);
+				if (envVarForRow2) {
+					ctx.ui.notify(`${row.label} is read-only: overridden by the ${envVarForRow2} env var.`, "warning");
 					continue;
 				}
+				// Per-row settings path (flat keys default to [key]; nested Blocker
+				// Oracle rows carry explicit paths).
+				const rowPath = row.path ?? [String(row.key)];
+				const pathKeyStr = rowPath.join(".");
+				const localValueAtPath = (() => {
+					let cursor: unknown = localLayer;
+					for (const segment of rowPath) {
+						if (!cursor || typeof cursor !== "object") return undefined;
+						cursor = (cursor as Record<string, unknown>)[segment];
+					}
+					return cursor;
+				})();
 
 				const inheritLabel = scope === "project" ? "Use inherited value" : "Use default (delete global override)";
-				const hasLocalOverride = localLayer[row.key] !== undefined;
+				const hasLocalOverride = localValueAtPath !== undefined;
 
 				if (row.kind === "boolean") {
-					const effective = snapshot.provenance.get(String(row.key))?.value === true;
+					const effective = snapshot.provenance.get(pathKeyStr)?.value === true;
 					const actions = [
 						`Set ${scope} override to true`,
 						`Set ${scope} override to false`,
@@ -517,28 +553,28 @@ export function registerGoalCommands(core: GoalCore): void {
 					const action = await ctx.ui.select(`${row.label} (${scope})`, actions);
 					if (!action || action === "Cancel") continue;
 					if (action === inheritLabel) {
-						applyMutation(scope, { op: "unset", path: [row.key] });
+						applyMutation(scope, { op: "unset", path: rowPath });
 						continue;
 					}
 					const value = action.endsWith("true");
 					if (value !== effective || !hasLocalOverride) {
-						applyMutation(scope, { op: "set", path: [row.key], value });
+						applyMutation(scope, { op: "set", path: rowPath, value });
 					}
 					continue;
 				}
 
 				if (row.kind === "positiveInteger") {
-					const min = (row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars") ? 0 : 1;
+					const min = row.path ? 1 : ((row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars") ? 0 : 1);
 					const actions = [`Set ${scope} override...`];
 					if (hasLocalOverride) actions.push(inheritLabel);
 					actions.push("Cancel");
 					const action = await ctx.ui.select(`${row.label} (${scope})`, actions);
 					if (!action || action === "Cancel") continue;
 					if (action === inheritLabel) {
-						applyMutation(scope, { op: "unset", path: [row.key] });
+						applyMutation(scope, { op: "unset", path: rowPath });
 						continue;
 					}
-					const input = await ctx.ui.input(`Set ${row.label}`, String(snapshot.provenance.get(String(row.key))?.value ?? min));
+					const input = await ctx.ui.input(`Set ${row.label}`, String(snapshot.provenance.get(pathKeyStr)?.value ?? min));
 					if (input === undefined) continue;
 					// Full-string decimal validation: rejects 1.5, 1x, negatives,
 					// infinity, and unsafe integers alike.
@@ -547,7 +583,12 @@ export function registerGoalCommands(core: GoalCore): void {
 						ctx.ui.notify(`${row.label} must be an integer >= ${min} (e.g. ${min}, ${min + 1}, ${min + 2})`, "warning");
 						continue;
 					}
-					applyMutation(scope, { op: "set", path: [row.key], value: Number(value) });
+					// Oracle attempt cap is bounded at 3 by the settings parser.
+					if (row.path?.[0] === "oracle" && Number(value) > 3) {
+						ctx.ui.notify(`${row.label} must be an integer between 1 and 3`, "warning");
+						continue;
+					}
+					applyMutation(scope, { op: "set", path: rowPath, value: Number(value) });
 					continue;
 				}
 
@@ -558,21 +599,26 @@ export function registerGoalCommands(core: GoalCore): void {
 					if (!picked) continue;
 					const choice = picked.trim().replace(/^\u2713\s+/, "");
 					if (choice === "(default)") {
-						if (hasLocalOverride) applyMutation(scope, { op: "unset", path: ["thinkingLevel"] });
+						if (hasLocalOverride) applyMutation(scope, { op: "unset", path: rowPath });
 						continue;
 					}
 					if (!(AUDITOR_THINKING_LEVELS as readonly string[]).includes(choice)) {
 						ctx.ui.notify(`thinking_level must be one of: ${AUDITOR_THINKING_LEVELS.join(", ")} (or "(default)")`, "warning");
 						continue;
 					}
-					applyMutation(scope, { op: "set", path: ["thinkingLevel"], value: choice });
+					applyMutation(scope, { op: "set", path: rowPath, value: choice });
 					continue;
 				}
 
-				// modelSelector rows (provider, model): searchable auditor model
-				// picker with explicit inherit/default handling. Either row applies
-				// the same provider+model pair.
-				const configured = configuredAuditorModelKey(snapshot.value as GoalSettings);
+				// modelSelector rows (provider, model): searchable model picker with
+				// explicit inherit/default handling. Auditor rows apply provider+model
+				// at the flat paths; the Oracle row writes oracle.provider/oracle.model.
+				const oraclePair = row.path?.[0] === "oracle";
+				const pairPrefix = oraclePair ? ["oracle"] : [];
+				const configuredBase = oraclePair
+					? [snapshot.value.oracle?.provider, snapshot.value.oracle?.model].filter(Boolean).join("/")
+					: configuredAuditorModelKey(snapshot.value as GoalSettings);
+				const configured = configuredBase || undefined;
 				const session = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 				const choices = buildAuditorModelChoices(ctx.modelRegistry.getAvailable(), configured, session);
 				const filter = await ctx.ui.input("Filter auditor models (provider/id/name; blank = all)", "");
@@ -584,7 +630,7 @@ export function registerGoalCommands(core: GoalCore): void {
 				if (!choice) continue;
 				if (choice.kind === "default") {
 					for (const key of ["provider", "model"] as const) {
-						if (localLayer[key] !== undefined) applyMutation(scope, { op: "unset", path: [key] });
+						if (localLayer[key] !== undefined) applyMutation(scope, { op: "unset", path: [...pairPrefix, key] });
 					}
 					continue;
 				}
@@ -604,8 +650,8 @@ export function registerGoalCommands(core: GoalCore): void {
 					providerValue = choice.provider;
 					modelValue = choice.model;
 				}
-				if (applyMutation(scope, { op: "set", path: ["provider"], value: providerValue })) {
-					applyMutation(scope, { op: "set", path: ["model"], value: modelValue });
+				if (applyMutation(scope, { op: "set", path: [...pairPrefix, "provider"], value: providerValue })) {
+					applyMutation(scope, { op: "set", path: [...pairPrefix, "model"], value: modelValue });
 				}
 			}
 		} finally {

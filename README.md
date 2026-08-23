@@ -433,6 +433,23 @@ Configure the task shortcuts in the same file when the terminal captures the def
 
 The default task bindings are `ctrl+shift+t`, `ctrl+shift+up`, and `ctrl+shift+down`. Use pi key names such as `ctrl+shift+up`.
 
+### Blocker Oracle (opt-in)
+
+When an active goal reports blocked, a stronger read-only model can be consulted once per distinct blocker before the goal is allowed to stop. Off by default; configure under `/goal-settings → Blocker Oracle`:
+
+```json
+{
+  "oracle": {
+    "enabled": true,
+    "provider": "anthropic",
+    "model": "<a stronger model>",
+    "maxFailedAttemptsPerBlocker": 2
+  }
+}
+```
+
+Both `provider` and `model` must be set explicitly — the executor model is never used as a silent fallback. The Oracle session can only read files (`read`, `grep`, `find`, `ls`) and returns structured advice. Actionable advice keeps the goal running until you attempt it; advice that needs human input lets the goal block immediately.
+
 ## License
 
 MIT

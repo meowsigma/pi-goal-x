@@ -45,3 +45,11 @@ deduplicated to capability + boundary (the WHEN rules live once in the
 canonical active-goal policy); get_goal gains verbose/include_history params
 with minimal descriptions; lifecycle prose removed from the concise default.
 Single-source invariants still hold exactly once per active request.
+
+## 2026-08-23 — PR G (blocker Oracle) baseline update — RATIONALE
+
+`update_goal` gains the optional `attempted_actions` parameter (bounded to 8
+items × 240 chars), which adds +136 tool-schema bytes per request
+(7,262 → 7,398). This is the deliberate cost of the opt-in blocker Oracle's
+input surface; no other component changed. Steady-state non-Oracle requests
+carry this parameter only in the schema, never in prompt text.

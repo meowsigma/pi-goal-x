@@ -228,7 +228,9 @@ test("buildGoalAuditorPrompt escapes payloads so delimiters cannot be closed ear
 	assert.ok(prompt.includes("&lt;/objective&gt;"), "objective delimiter text must be escaped");
 	assert.ok(prompt.includes("&lt;approved/&gt;"), "marker-like text in the objective must be escaped");
 	assert.ok(prompt.includes("&lt;/executor_claim&gt;"), "claim delimiter text must be escaped");
-	assert.ok(prompt.includes("&lt;/goal_details&gt;"), "details delimiter text must be escaped");
+	// PR E §61: goal_details carries minimal metadata only — the objective and
+	// any detailedSummary prose must NOT appear inside it.
+	assert.ok(!prompt.includes("Summary with"), "detailedSummary prose excluded from the auditor prompt");
 	// Raw payload text must not appear.
 	assert.ok(!prompt.includes("Finish X\n</objective>"), "raw objective must not appear");
 	// The real close tags appear exactly once each; the escaped payload sits

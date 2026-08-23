@@ -11,7 +11,7 @@ import {
 	isMeaningfulProgressToolCall,
 	isToolUseAssistantMessage,
 } from "./goal-format.ts";
-import { buildCompactionSummary } from "./goal-compaction.ts";
+import { buildCompactionSummary, buildPostCompactionGoalDelta } from "./goal-compaction.ts";
 import { latestAuditorResultForGoal, loadLedgerState, readGoalLedger, invalidateGoalLedgerCache } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
 import { formatTokenValue } from "./goal-core.ts";
@@ -431,11 +431,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		}
 		if (core.runtime.isPostCompactReminderPending() && shouldInjectPostCompactReminder({ pending: true, goal: activeGoal })) {
 			core.runtime.clearPostCompactReminder();
-				// Use deterministic compaction summary instead of generic reminder
-				try {
-					const ledger = getPromptLedger();
-				const compaction = buildCompactionSummary({ goalsById: core.goalsById, focusedGoalId: core.focusedGoalId, ledgerState: loadLedgerState(ctx) });
-				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${activeGoal.id}]\n${compaction}`;
+			// PR E §62: post-compaction DELTA — the active system goal block already
+			// carries objective/policy/task gate/contract; inject only what
+			// compaction may have lost. Falls back to a generic note on ledger
+			// read failure.
+			try {
+				const ledger = getPromptLedger();
+				const otherOpenCount = core.openGoals().filter((g) => g.id !== activeGoal.id).length;
+				const delta = buildPostCompactionGoalDelta({ goal: activeGoal, ledgerEvents: ledger.events, otherOpenCount });
+				prompt = `${prompt}\n\n${delta}`;
 			} catch {
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${core.state.goal.id}]\nThe conversation was just compacted. Re-read the objective and continue from the actual artifacts/state; do not rely on memory of the prior chat.`;
 			}

@@ -82,24 +82,11 @@ function splitPreservingFinalNewline(text) {
 	return lines;
 }
 
-function recoverSession(inputPath, apply) {
-	const absolute = path.resolve(inputPath);
-	let lstat;
-	try {
-		lstat = fs.lstatSync(absolute);
-	} catch (error) {
-		throw new Error(`cannot stat ${absolute}: ${error instanceof Error ? error.message : String(error)}`);
-	}
-	if (lstat.isSymbolicLink()) {
-		throw new Error(`refusing symbolic link: ${absolute}`);
-	}
-	if (!lstat.isFile()) {
-		throw new Error(`not a regular file: ${absolute}`);
-	}
-
-	const original = fs.readFileSync(absolute, "utf8");
-	const originalMode = lstat.mode;
-
+/**
+ * Pure line-level transform used by both the CLI flow and benchmarks.
+ * Returns the rewritten lines plus counters. Never touches the filesystem.
+ */
+export function transformSessionLines(originalText) {
 	const outputLines = [];
 	const originalGraph = [];
 	const outputGraph = [];
@@ -107,7 +94,7 @@ function recoverSession(inputPath, apply) {
 	let savedChars = 0;
 	let malformed = 0;
 
-	for (const rawLine of splitPreservingFinalNewline(original)) {
+	for (const rawLine of splitPreservingFinalNewline(originalText)) {
 		if (!rawLine.trim()) {
 			outputLines.push(rawLine);
 			continue;
@@ -153,6 +140,29 @@ function recoverSession(inputPath, apply) {
 		changed += 1;
 		savedChars += rawLine.length - rewrittenLine.length;
 	}
+	return { outputLines, originalGraph, outputGraph, changed, savedChars, malformed };
+}
+
+function recoverSession(inputPath, apply) {
+	const absolute = path.resolve(inputPath);
+	let lstat;
+	try {
+		lstat = fs.lstatSync(absolute);
+	} catch (error) {
+		throw new Error(`cannot stat ${absolute}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	if (lstat.isSymbolicLink()) {
+		throw new Error(`refusing symbolic link: ${absolute}`);
+	}
+	if (!lstat.isFile()) {
+		throw new Error(`not a regular file: ${absolute}`);
+	}
+
+	const original = fs.readFileSync(absolute, "utf8");
+	const originalMode = lstat.mode;
+
+	const { outputLines, originalGraph, outputGraph, changed, savedChars, malformed } =
+		transformSessionLines(original);
 
 	// ── invariants before any write ──────────────────────────────────────
 	if (JSON.stringify(outputGraph) !== JSON.stringify(originalGraph)) {

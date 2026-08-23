@@ -57,6 +57,7 @@
     "bench:naf": "node --import ./experiments/bench/bench-adapter-hooks.mjs --experimental-strip-types ./experiments/bench/run-bench.mjs",
     "bench:gate:naf": "node --experimental-strip-types ./experiments/bench/b6-gate.mjs naf",
     "test:e2e": "node scripts/run-unit-tests.mjs e2e",
+    "test:checkpoint-recovery": "node --experimental-strip-types --test tests/session-checkpoint-growth.test.ts tests/session-checkpoint-recovery.test.ts tests/goal-session-health.test.ts",
     "lint": "eslint ."
   },
   "peerDependencies": {

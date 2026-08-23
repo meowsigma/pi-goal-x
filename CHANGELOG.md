@@ -2,6 +2,27 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.28.0] — 2026-08-23
+
+### Added
+
+- **Layered global settings (clean rewrite of #27)** — settings now resolve per
+  leaf as `environment > project > global > defaults`. Global file:
+  `~/.pi/agent/pi-goal-x-settings.json` (honors `PI_CODING_AGENT_DIR` and
+  `PI_GOAL_GLOBAL_SETTINGS_FILE`); project file unchanged. Explicit `false`/`0`
+  in a lower layer override inherited values; nested keybindings inherit per
+  key; unknown keys are reported as diagnostics without erasing valid keys;
+  writes are atomic and lock-protected against concurrent processes.
+- **Scope-aware settings UI** — `/goal-settings` shows each row's effective
+  value and source, can edit the project or global layer, and can remove an
+  override to return to inheritance. Headless mode reports both paths.
+- **`hideUnfocusedBanner` setting (clean rewrite of #29)** — optionally
+  suppress the unfocused above-editor widget and status hint. Layered, with
+  live hide/restore on toggle. Focused dashboards, audit UI, and the
+  model-facing `[PI GOAL UNFOCUSED]` safety guidance are unchanged.
+- **`npm run test:settings-race`** — two-writer concurrency coverage for the
+  locked settings mutation path.
+
 ## [0.27.5] — 2026-08-23
 
 ### Fixed

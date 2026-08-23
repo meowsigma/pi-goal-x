@@ -28,6 +28,8 @@ interface Harness {
 	notifies: Array<{ msg: string; level: string }>;
 	activeToolsHistory: string[][];
 	terminalInputHandler: ((data: string) => unknown) | null;
+	statusCalls: Array<{ key: string; value?: string }>;
+	widgetCalls: Array<{ key: string; factory: unknown }>;
 }
 
 interface HarnessOptions {
@@ -47,6 +49,8 @@ function createHarness(options: HarnessOptions): Harness {
 	const commands = new Map<string, any>();
 	const notifies: Array<{ msg: string; level: string }> = [];
 	const activeToolsHistory: string[][] = [];
+	const statusCalls: Array<{ key: string; value?: string }> = [];
+	const widgetCalls: Array<{ key: string; factory: unknown }> = [];
 	let activeTools = ["read", "bash", "edit", "write"];
 	let terminalInputHandler: ((data: string) => unknown) | null = null;
 	const pi = {
@@ -72,7 +76,7 @@ function createHarness(options: HarnessOptions): Harness {
 			getRoot: () => options.cwd,
 		},
 		ui: {
-			notify: (msg: string, level: string) => { notifies.push({ msg, level }); }, setStatus: () => {}, setWidget: () => {},
+			notify: (msg: string, level: string) => { notifies.push({ msg, level }); }, setStatus: (key: string, value?: string) => { statusCalls.push({ key, value }); }, setWidget: (key: string, factory: unknown) => { widgetCalls.push({ key, factory }); },
 			onTerminalInput: (cb: (data: string) => unknown) => { terminalInputHandler = cb; return () => {}; },
 			select: options.select ?? (async () => undefined),
 			input: options.input ?? (async () => undefined),
@@ -87,6 +91,7 @@ function createHarness(options: HarnessOptions): Harness {
 	goalExtension(pi as any, options.runCompletionAuditor ? { runCompletionAuditor: options.runCompletionAuditor } : {});
 	return {
 		handlers, tools, commands, ctx, notifies, activeToolsHistory,
+		statusCalls, widgetCalls,
 		get terminalInputHandler() { return terminalInputHandler; },
 	};
 }
@@ -443,7 +448,7 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 10, `all ten rows rendered, got: ${lines.join(" | ")}`);
+				assert.equal(lines.length, 11, `all eleven rows rendered, got: ${lines.join(" | ")}`);
 				assert.ok(lines.some((l) => l === "  auditor disabled: true (project override)"));
 				assert.ok(lines.some((l) => l === "  provider: anthropic (project override)"));
 				assert.ok(lines.some((l) => l === "  model: (default) (default)"));
@@ -452,6 +457,7 @@ describe("five-tool handler integration", () => {
 				assert.ok(lines.some((l) => l === "  disableContracts: false (default)"));
 				assert.ok(lines.some((l) => l === "  subtaskDepth: 3 (project override)"));
 				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false (default)"));
+				assert.ok(lines.some((l) => l === "  hideUnfocusedBanner: false (default)"));
 				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0 (default)"));
 				assert.ok(lines.some((l) => l === "  max objective length (0 = none): 0 (default)"), "objective length row defaults to 0");
 			} finally {
@@ -628,6 +634,69 @@ describe("five-tool handler integration", () => {
 				assert.deepEqual(installed, ["three", "five", "three"], "profile alternates three/five/three, never skipping a toggle");
 				const saved = readSettings(f.cwd);
 				assert.equal(saved.disableTasks, true, "final file state has tasks disabled");
+			} finally {
+				f.cleanup();
+			}
+		});
+
+		it("hideUnfocusedBanner hides and restores the unfocused chrome live (PR #29)", async () => {
+			const f = fixture();
+			try {
+				// Two open goals, nothing focused: the unfocused banner renders.
+				writeActiveGoalFile({ cwd: f.cwd }, { ...f.goal, id: "second-open-goal", objective: "Second open goal for the banner test" } as never);
+				const entries = [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(null, "unfocused") }];
+				const h = createHarness({
+					cwd: f.cwd, sessionEntries: entries, hasUI: true,
+					select: async () => {
+						return "Done";
+					},
+				});
+				await start(h);
+				await Promise.resolve(); // flush the coalesced UI microtask
+				assert.ok(
+					h.statusCalls.some((c) => c.key === "goal" && typeof c.value === "string" && c.value.includes("goal: unfocused")),
+					`unfocused hint visible before the setting: ${JSON.stringify(h.statusCalls)}`,
+				);
+
+				// Turn the setting on through the menu; the hide must be visible in
+				// captured UI state before the handler resolves.
+				let queue = ["  hideUnfocusedBanner: false (default)", "Set project override to true", "Done"];
+				const h2 = createHarness({
+					cwd: f.cwd, sessionEntries: entries, hasUI: true,
+					select: async (_prompt: string, options: string[]) => {
+						const hit = queue.find((q) => options.includes(q));
+						if (hit === undefined) return "Done";
+						queue = queue.filter((q) => q !== hit);
+						return hit;
+					},
+				});
+				await start(h2);
+				await h2.commands.get("goal-settings").handler("", h2.ctx);
+				await Promise.resolve(); // coalesced flush is a single microtask
+				const cleared = h2.statusCalls.some((c) => c.key === "goal" && c.value === undefined)
+					&& h2.widgetCalls.some((w) => w.factory === undefined || w.factory === null);
+				assert.ok(cleared, `live hide clears status + widget: ${JSON.stringify(h2.statusCalls)} / ${h2.widgetCalls.length} widget calls`);
+				const saved = readSettings(f.cwd);
+				assert.equal(saved.hideUnfocusedBanner, true);
+
+				// Restore via the action menu's inherit choice.
+				queue = ["  hideUnfocusedBanner: true (project override)", "Use inherited value", "Done"];
+				const h3 = createHarness({
+					cwd: f.cwd, sessionEntries: entries, hasUI: true,
+					select: async (_prompt: string, options: string[]) => {
+						const hit = queue.find((q) => options.includes(q));
+						if (hit === undefined) return "Done";
+						queue = queue.filter((q) => q !== hit);
+						return hit;
+					},
+				});
+				await start(h3);
+				await h3.commands.get("goal-settings").handler("", h3.ctx);
+				await Promise.resolve();
+				assert.ok(
+					h3.statusCalls.some((c) => c.key === "goal" && typeof c.value === "string" && c.value.includes("goal: unfocused")),
+					"live restore re-renders the unfocused hint",
+					);
 			} finally {
 				f.cleanup();
 			}

@@ -705,7 +705,7 @@ export function acquirePathLock(
 	lockPath: string,
 	opts: { attempts?: number; retryMs?: number; staleTtlMs?: number } = {},
 ): PathLock {
-	const attempts = opts.attempts ?? 20;
+	const attempts = opts.attempts ?? 200;
 	const retryMs = opts.retryMs ?? 5;
 	const ttlMs = opts.staleTtlMs ?? 30_000;
 	fs.mkdirSync(path.dirname(lockPath), { recursive: true });
@@ -746,6 +746,9 @@ export function acquirePathLock(
 					continue;
 				}
 			} catch {
+				// Lock vanished between EEXIST and stat (holder released): brief
+				// backoff so we never busy-spin against the next holder.
+				sleepMs(retryMs);
 				continue;
 			}
 			sleepMs(retryMs);

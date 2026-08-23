@@ -400,11 +400,20 @@ the timestamped `.backup-*` file created next to the session.
 
 ## Configuration
 
-Settings are stored in:
+Settings resolve per setting in this order (highest wins):
 
 ```text
-.pi/pi-goal-x-settings.json
+environment > project layer > global layer > defaults
 ```
+
+Files:
+
+```text
+global:  ~/.pi/pi-goal-x-settings.json   (or $PI_CODING_AGENT_DIR, or $PI_GOAL_GLOBAL_SETTINGS_FILE)
+project: <cwd>/.pi/pi-goal-x-settings.json   (or $PI_GOAL_SETTINGS_FILE)
+```
+
+Define shared configuration once in the global file and override per project. Explicit `false`/`0` values in a lower layer override inherited values; nested `keybindings` inherit per key. `/goal-settings` shows each row's effective value and source, can switch the edited scope, and can remove a local override to return to inheritance.
 
 Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, and completion auditing. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
 

@@ -2,6 +2,31 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.29.0] — 2026-08-23
+
+### Added
+
+- **Complete model-context accounting (PR D)** — `npm run context:measure` /
+  `context:gate`: composed-request measurement over 22 deterministic fixtures
+  including active tool schemas; committed deterministic baseline.
+- **Single-source active-goal prompt (PR E)** — current task rendered once,
+  lifecycle rules stated once, concise `get_goal` default with optional
+  verbose mode, `PI_GOAL_PROMPT_PROFILE=legacy-v1` emergency fallback.
+  Composed requests reduced on every task fixture.
+- **UI/model payload separation (PR F)** — audit events display-only;
+  auditor progress derived from session events (progress tool removed);
+  auditor prompt single-source; post-compaction delta.
+- **Opt-in read-only blocker Oracle (PR G, #26)** — one stronger-model
+  consultation per distinct blocker before blocking. Default off; explicit
+  provider/model required; read-only session; follow-up gating; durable
+  ledger events.
+
+### Changed
+
+- `update_goal({status:"blocked"})` now requires a `reason` describing the
+  concrete blocker (feeds the blocker fingerprint and ledger record).
+- Tool schemas grew by +136 bytes/request (`attempted_actions` parameter).
+
 ## [0.28.0] — 2026-08-23
 
 ### Added

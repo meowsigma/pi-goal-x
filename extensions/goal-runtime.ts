@@ -9,9 +9,8 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GoalRecord } from "./goal-record.ts";
-import { loadGoalSettings } from "./goal-settings.ts";
-import { continuationPrompt } from "./prompts/goal-prompts.ts";
+import type { GoalCheckpointDetailsV2, GoalRecord } from "./goal-record.ts";
+import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { POST_STOP_ALLOWED_TOOLS } from "./goal-tool-names.ts";
 
 export const CONTINUATION_IDLE_RETRY_MS = 50;
@@ -39,6 +38,9 @@ export class GoalRuntime {
 
 	// ── stale checkpoint state ───────────────────────────────────────────
 	private checkpointGoalId: string | null = null;
+
+	/** Monotonic per-session counter persisted on v2 checkpoint details (issue #30). */
+	private checkpointSeq = 0;
 
 	// ── one-time steering reminders ──────────────────────────────────────
 	private postCompactReminderPending = false;
@@ -98,11 +100,17 @@ export class GoalRuntime {
 		if (this.continuationScheduledFor === goalId) this.clearContinuationState();
 	}
 
-	private sendQueuedContinuation(ctx: ExtensionContext, goalId: string): void {
+	/**
+	 * Issue #30: the delivered follow-up must trigger the turn, but it no longer
+	 * carries goal state. The persisted content is a tiny v2 marker and the
+	 * details are a bounded structured record; before_agent_start injects the
+	 * authoritative full prompt once per turn.
+	 */
+	private sendQueuedContinuation(ctx: ExtensionContext, scheduledGoalId: string): void {
 		this.continuationTimer = null;
 		this.continuationScheduledFor = null;
-		if (!this.hooks.isActionable(goalId)) {
-			if (this.continuationQueuedFor === goalId) this.continuationQueuedFor = null;
+		if (!this.hooks.isActionable(scheduledGoalId)) {
+			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
 			return;
 		}
 
@@ -110,27 +118,33 @@ export class GoalRuntime {
 		try {
 			ready = !ctx.hasPendingMessages() && ctx.isIdle();
 		} catch {
-			if (this.continuationQueuedFor === goalId) this.continuationQueuedFor = null;
+			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
 			return;
 		}
 
 		if (!ready) {
-			this.continuationScheduledFor = goalId;
-			this.continuationTimer = setTimeout(() => this.sendQueuedContinuation(ctx, goalId), CONTINUATION_IDLE_RETRY_MS);
+			this.continuationScheduledFor = scheduledGoalId;
+			this.continuationTimer = setTimeout(() => this.sendQueuedContinuation(ctx, scheduledGoalId), CONTINUATION_IDLE_RETRY_MS);
 			this.continuationTimer.unref?.();
 			return;
 		}
-		this.continuationQueuedFor = goalId;
-		const settings = loadGoalSettings(ctx.cwd);
 		const goal = this.hooks.getGoal();
-		if (!goal) return;
-		this.hooks.sendFollowUp(continuationPrompt(goal, settings), {
+		if (!goal || goal.id !== scheduledGoalId) {
+			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
+			return;
+		}
+		this.checkpointSeq += 1;
+		this.continuationQueuedFor = goal.id;
+		const details: GoalCheckpointDetailsV2 = {
+			version: 2,
 			kind: "checkpoint",
 			goalId: goal.id,
-			status: goal.status,
-			objective: goal.objective,
+			status: "active",
+			revision: goal.revision ?? 0,
+			checkpointSeq: this.checkpointSeq,
 			timestamp: Date.now(),
-		});
+		};
+		this.hooks.sendFollowUp(checkpointTriggerPrompt(goal.id), details as unknown as Record<string, unknown>);
 	}
 
 	// ── turn-stop guard ──────────────────────────────────────────────────

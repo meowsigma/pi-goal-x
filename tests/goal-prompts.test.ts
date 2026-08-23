@@ -5,6 +5,7 @@ import { createGoal, type GoalTaskList } from "../extensions/goal-record.ts";
 import {
 	CHECKPOINT_TRIGGER_MAX_CHARS,
 	checkpointTriggerPrompt,
+	promptProfile,
 	continuationPrompt,
 	goalPrompt,
 	objectiveEditedPrompt,
@@ -108,7 +109,9 @@ test("taskListBlock renders correctly with mixed statuses", () => {
 	assert.equal(block.includes("[~] t3"), false, "skipped tasks collapse to the header count");
 	assert.match(block, /\[ \] t2/);
 	assert.match(block, /TASK GATE/);
-	assert.match(block, /Next pending: t2/);
+	// PR E compact-v2: visible pending items make the separate "Next pending"
+	// line redundant (it would duplicate t2).
+	assert.equal(block.includes("Next pending: t2"), false, "next-pending duplicates a visible pending item");
 });
 
 test("taskListBlock shows TASK GATE when blockCompletion enabled and pending tasks exist", () => {
@@ -349,4 +352,69 @@ test("prompt cache key changes when currentTaskId changes", () => {
 	const after = goalPrompt(g);
 	assert.match(after, /Current: t1 · Task one/);
 	assert.doesNotMatch(before, /Current:/);
+});
+
+// ── PR E: single-source task block + prompt profiles ─────────────────────────
+
+test("compact-v2 renders the current task exactly once in the task block", () => {
+	const g = goal({ id: "dedupe-goal" });
+	g.currentTaskId = "t2";
+	g.taskList = {
+		tasks: [
+			{ id: "t1", title: "Task one", status: "complete" },
+			{ id: "t2", title: "Current task", status: "pending" },
+			{ id: "t3", title: "Later task", status: "pending" },
+		],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const block = taskListBlock(g);
+	assert.equal((block.match(/t2 · Current task/g) ?? []).length, 1, "current task rendered once");
+	assert.doesNotMatch(block, /\[ \] t2:/, "current task excluded from generic pending list");
+	assert.match(block, /\[ \] t3:/, "other pending items still render");
+});
+
+test("promptProfile defaults to compact-v2; legacy-v1 is opt-in via env", () => {
+	assert.equal(promptProfile({}), "compact-v2");
+	assert.equal(promptProfile({ PI_GOAL_PROMPT_PROFILE: "legacy-v1" }), "legacy-v1");
+	assert.equal(promptProfile({ PI_GOAL_PROMPT_PROFILE: "bogus" }), "compact-v2", "unknown values fall back to compact-v2");
+});
+
+test("legacy-v1 restores pre-PR-E wording but never full checkpoint persistence", async () => {
+	const prompts = await import("../extensions/prompts/goal-prompts.ts");
+	const g = goal({ id: "legacy-goal" });
+	g.currentTaskId = "t2";
+	g.taskList = {
+		tasks: [
+			{ id: "t2", title: "Current task", status: "pending" },
+			{ id: "t3", title: "Later task", status: "pending" },
+			{ id: "t4", title: "Hidden task", status: "pending" },
+			{ id: "t5", title: "Hidden too", status: "pending" },
+			{ id: "t6", title: "Also hidden", status: "pending" },
+			{ id: "t7", title: "More hidden", status: "pending" },
+			{ id: "t8", title: "Even more hidden", status: "pending" },
+			{ id: "t9", title: "Yet more hidden", status: "pending" },
+			{ id: "t10", title: "Still hidden", status: "pending" },
+			{ id: "t11", title: "Beyond cap", status: "pending" },
+			{ id: "t12", title: "Well beyond cap", status: "pending" },
+		],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const originalEnv = process.env.PI_GOAL_PROMPT_PROFILE;
+	process.env.PI_GOAL_PROMPT_PROFILE = "legacy-v1";
+	try {
+		const legacyBlock = prompts.taskListBlock(g);
+		assert.match(legacyBlock, /expand the dashboard with Ctrl\+Shift\+T/, "legacy wording restored");
+		assert.match(legacyBlock, /\[ \] t2:/, "legacy duplicates current as generic pending");
+		// Issue #30 stays fixed under BOTH profiles:
+		assert.equal(
+			prompts.continuationPrompt(g),
+			'<pi_goal_continuation goal_id="legacy-goal" kind="checkpoint" v="2"/>',
+			"continuation marker unchanged under legacy-v1",
+		);
+	} finally {
+		if (originalEnv === undefined) delete process.env.PI_GOAL_PROMPT_PROFILE;
+		else process.env.PI_GOAL_PROMPT_PROFILE = originalEnv;
+	}
 });

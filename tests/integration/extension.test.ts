@@ -911,7 +911,7 @@ describe("completion transaction hardening (follow-up Stage 3)", () => {
 			const get = h.tools.get("get_goal")!;
 			const snapshot = await (get.execute as any)("g-1", {}, new AbortController().signal, undefined, h.ctx);
 			const snapText = snapshot.content?.[0]?.text ?? "";
-			assert.ok(snapText.includes("Status: running"), `goal still open and active: ${snapText.slice(0, 100)}`);
+			assert.match(snapText, /Goal \S+: running/, `goal still open and active: ${snapText.slice(0, 100)}`);
 		} finally {
 			try { chmodSync(goalsDir, 0o755); } catch {}
 			f.cleanup();

@@ -58,8 +58,18 @@ function taskMarker(status: TaskStatus): string {
 /** Cap on pending tasks rendered inline in the prompt (P1-4 trim). */
 const MAX_PENDING_RENDERED = 10;
 
+/**
+ * PR E prompt profile: compact-v2 (default) removes duplicate renderings;
+ * legacy-v1 is the emergency A/B fallback for one minor release. It restores
+ * ONLY pre-optimization active-prompt wording — never full checkpoint
+ * persistence (issue #30 stays fixed in both profiles).
+ */
+export function promptProfile(env: NodeJS.ProcessEnv = process.env): "compact-v2" | "legacy-v1" {
+	return env.PI_GOAL_PROMPT_PROFILE === "legacy-v1" ? "legacy-v1" : "compact-v2";
+}
+
 /** Render only PENDING nodes (depth-aware); completed/skipped collapse to counts. */
-function renderPendingTasks(tasks: GoalTask[], indent: number, rendered: { count: number; stop: boolean }): string[] {
+function renderPendingTasks(tasks: GoalTask[], indent: number, rendered: { count: number; stop: boolean; skipId?: string }): string[] {
 	if (rendered.stop) return [];
 	const prefix = "  ".repeat(indent);
 	const lines: string[] = [];
@@ -71,6 +81,7 @@ function renderPendingTasks(tasks: GoalTask[], indent: number, rendered: { count
 			}
 			continue;
 		}
+		if (task.id !== undefined && task.id === rendered.skipId) continue;
 		if (rendered.count >= MAX_PENDING_RENDERED) {
 			rendered.stop = true;
 			return lines;
@@ -108,17 +119,33 @@ export function taskListBlock(goal: GoalRecord, settings?: GoalSettings): string
 			lines.push(`  Current: ${current.id} · ${current.title}${contract}`);
 		}
 	}
-	const rendered = { count: 0, stop: false };
-	lines.push(...renderPendingTasks(goal.taskList.tasks, 0, rendered));
-	const hiddenPending = (pending ?? 0) - rendered.count;
-	if (hiddenPending > 0) {
-		lines.push(`  (+${hiddenPending} more pending — expand the dashboard with Ctrl+Shift+T)`);
+	const legacy = promptProfile() === "legacy-v1";
+	if (legacy) {
+		// legacy-v1: pre-PR-E wording (current task also appears as a generic
+		// pending item; UI shortcut hint included).
+		const rendered = { count: 0, stop: false };
+		lines.push(...renderPendingTasks(goal.taskList.tasks, 0, rendered));
+		const hiddenPending = (pending ?? 0) - rendered.count;
+		if (hiddenPending > 0) {
+			lines.push(`  (+${hiddenPending} more pending — expand the dashboard with Ctrl+Shift+T)`);
+		}
+	} else {
+		// compact-v2: the current task appears ONCE (in the Current line above);
+		// visible pending items exclude it.
+		const rendered = { count: 0, stop: false, skipId: goal.currentTaskId };
+		lines.push(...renderPendingTasks(goal.taskList.tasks, 0, rendered));
+		const hiddenPending = (pending ?? 0) - rendered.count;
+		if (hiddenPending > 0 && rendered.count === 0) {
+			// Nothing visible at all: point at the next actionable task instead.
+			const next = pendingTasks?.find((t) => t.id !== goal.currentTaskId);
+			if (next) lines.push(`  Next pending: ${next.id} — ${next.title}`);
+		}
+		if (hiddenPending > 0) {
+			lines.push(`  ${hiddenPending} additional pending tasks are omitted from this bounded prompt.`);
+		}
 	}
 	if (goal.taskList.blockCompletion && pending! > 0) {
 		lines.push("  TASK GATE: do not request completion while tasks remain in [ ] pending state");
-	}
-	if (pendingTasks && pendingTasks.length > 0) {
-		lines.push(`  Next pending: ${pendingTasks[0]!.id} — ${pendingTasks[0]!.title}`);
 	}
 	return lines.join("\n");
 }

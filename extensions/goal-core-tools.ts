@@ -5,15 +5,31 @@ import { formatDuration, formatTokenValue, statusLabel, truncateText } from "./g
 import { extractVerificationContract } from "./goal-contract.ts";
 import { detailedSummary, goalDetails, renderGoalResult } from "./goal-format.ts";
 import { budgetLine } from "./goal-accounting.ts";
-import { buildGoalCreatedReport, buildTaskSummary, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
+import { buildGoalCreatedReport, buildTaskSummary, findTaskInTree, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
 import { readGoalLedger } from "./goal-ledger.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { buildGoalHistoryBlock, buildGoalTaskDetailBlock } from "./goal-format.ts";
 import { sisyphusStepProgress } from "./goal-policy.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
-import { nowIso, validateTokenBudgetInput } from "./goal-record.ts";
+import { nowIso, type GoalRecord, type GoalTask, validateTokenBudgetInput } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
+import { promptProfile } from "./prompts/goal-prompts.ts";
+
+/** Current + first-pending (excluding current) task pointers for concise get_goal. */
+function conciseTaskPointers(goal: GoalRecord): { findCurrentTask?: GoalTask; firstPendingTask?: GoalTask } {
+	if (!goal.taskList) return {};
+	let firstPendingTask: GoalTask | undefined;
+	const walk = (tasks: GoalTask[]): void => {
+		for (const t of tasks) {
+			if (!firstPendingTask && t.status === "pending" && t.id !== goal.currentTaskId) firstPendingTask = t;
+			if (t.subtasks) walk(t.subtasks);
+		}
+	};
+	walk(goal.taskList.tasks);
+	const findCurrentTask = goal.currentTaskId ? findTaskInTree(goal.taskList.tasks, goal.currentTaskId) : undefined;
+	return { findCurrentTask, firstPendingTask };
+}
 
 export function registerCoreTools(
 	core: GoalCore,
@@ -30,15 +46,21 @@ pi.registerTool(defineTool({
 	promptSnippet: "Read the active pi goal state for the current session.",
 	promptGuidelines: [
 		"Use get_goal when you need the current goal before deciding whether to continue or mark it complete.",
-		"Before marking a goal complete, compare every explicit requirement with concrete evidence from the workspace/session.",
-		"If the returned goal has sisyphus mode on, you must execute strictly step-by-step in the order written in the objective; do not skip, combine, or rush steps, and stop to ask the user when blocked or unclear.",
-		"If requirements change, ask the user to run /goal-tweak; never edit the objective yourself. Never archive or abandon a goal on your own — ask the user to run /goal-clear instead.",
 	],
-	parameters: Type.Object({}, { additionalProperties: false }),
+	parameters: Type.Object({
+		verbose: Type.Optional(Type.Boolean({ description: "Full detail mode." })),
+		include_history: Type.Optional(Type.Boolean()),
+	}, { additionalProperties: false }),
 	async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (core.state.goal) core.syncGoalPromptFromDisk(ctx);
 		const view = core.goalForDisplay() ?? core.state.goal;
+		const params = (_params ?? {}) as { verbose?: boolean; include_history?: boolean };
+		// PR E profile: legacy-v1 keeps pre-optimization verbose-by-default output;
+		// compact-v2 (default) returns a concise state line set because the full
+		// policy already lives in the injected active-goal system block.
+		const verbose = promptProfile() === "legacy-v1" || params.verbose === true;
+		const includeHistory = params.include_history === true || verbose;
 		const otherCount = otherOpenGoalCount(core.goalsById, core.focusedGoalId);
 		if (!view) {
 			const text = core.openGoals().length > 0
@@ -49,39 +71,73 @@ pi.registerTool(defineTool({
 				details: goalDetails(view),
 			};
 		}
-		const lines: string[] = [view.objective, ""];
-		lines.push(`Status: ${statusLabel(view)}`);
-		lines.push(`Mode: ${view.sisyphus ? "sisyphus" : "regular"}`);
-		if (view.sisyphus) {
-			// E6: sisyphus ordered-step progress.
-			const steps = sisyphusStepProgress(view);
-			if (steps) lines.push(`At step: ${steps.current} of ${steps.total}`);
+		if (verbose) {
+			const lines: string[] = [`Goal ${view.id}: ${statusLabel(view)}, ${view.sisyphus ? "sisyphus" : "regular"}`];
+			lines.push(`Objective: ${view.objective}`, "");
+			lines.push(`Status: ${statusLabel(view)}`);
+			lines.push(`Mode: ${view.sisyphus ? "sisyphus" : "regular"}`);
+			if (view.sisyphus) {
+				// E6: sisyphus ordered-step progress.
+				const steps = sisyphusStepProgress(view);
+				if (steps) lines.push(`At step: ${steps.current} of ${steps.total}`);
+			}
+			const usageBits: string[] = [];
+			if (view.usage.activeSeconds > 0) usageBits.push(formatDuration(view.usage.activeSeconds));
+			if (view.usage.tokensUsed > 0) usageBits.push(formatTokenValue(view.usage.tokensUsed));
+			lines.push(`Usage: ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
+			const budget = budgetLine(view);
+			if (budget) lines.push(`Budget: ${budget}`);
+			if (view.taskList) {
+				lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
+				// F1: task-detail block mirroring the widget.
+				const detail = buildGoalTaskDetailBlock(view);
+				if (detail) lines.push("", detail);
+			}
+			if (view.verificationContract?.trim()) lines.push(`Verification contract: ${view.verificationContract.trim()}`);
+			if (view.status === "paused" || view.status === "blocked") {
+				if (view.pauseReason) lines.push(`Blocker: ${view.pauseReason}`);
+				if (view.pauseSuggestedAction) lines.push(`Suggested action: ${view.pauseSuggestedAction}`);
+			}
+			if (view.activePath) lines.push(`Path: ${view.activePath}`);
+			if (view.archivedPath) lines.push(`Archive: ${view.archivedPath}`);
+			if (otherCount > 0) lines.push(`Other open goals: ${otherCount} (user can run /goal-list or /goal-focus)`);
+			lines.push("");
+			lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Call update_goal({status: \"blocked\"}) only after the same blocker recurs on three consecutive goal turns. User commands handle pause/resume/clear/focus.");
+			// E1: goal history (last audit verdict + recent lifecycle events).
+			if (includeHistory) {
+				const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
+				if (history) lines.push("", history);
+			}
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: goalDetails(view),
+			};
 		}
-		const usageBits: string[] = [];
-		if (view.usage.activeSeconds > 0) usageBits.push(formatDuration(view.usage.activeSeconds));
-		if (view.usage.tokensUsed > 0) usageBits.push(formatTokenValue(view.usage.tokensUsed));
-		lines.push(`Usage: ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
+
+		// compact-v2 default (PR E §53): concise state read. The full objective
+		// is kept — get_goal is an explicit state-read tool — but duplicated task
+		// headings and the lifecycle prose (already in the injected policy) are
+		// omitted.
+		const lines: string[] = [`Goal ${view.id}: ${statusLabel(view)}, ${view.sisyphus ? "sisyphus" : "regular"}`];
+		lines.push(`Objective: ${view.objective}`);
+		if (view.taskList) {
+			const { findCurrentTask, firstPendingTask } = conciseTaskPointers(view);
+			if (findCurrentTask) {
+				const contract = findCurrentTask.verificationContract ? ` — contract: ${findCurrentTask.verificationContract}` : "";
+				lines.push(`Current task: ${findCurrentTask.id} — ${findCurrentTask.title}${contract}`);
+			}
+			if (firstPendingTask) {
+				lines.push(`Next pending: ${firstPendingTask.id} — ${firstPendingTask.title}`);
+			}
+			lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
+		} else if (view.currentTaskId) {
+			lines.push(`Current task: ${view.currentTaskId}`);
+		}
 		const budget = budgetLine(view);
 		if (budget) lines.push(`Budget: ${budget}`);
-		if (view.taskList) {
-			lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
-			// F1: task-detail block mirroring the widget.
-			const detail = buildGoalTaskDetailBlock(view);
-			if (detail) lines.push("", detail);
+		if ((view.status === "paused" || view.status === "blocked") && view.pauseReason) {
+			lines.push(`Blocker: ${view.pauseReason}`);
 		}
-		if (view.verificationContract?.trim()) lines.push(`Verification contract: ${view.verificationContract.trim()}`);
-		if (view.status === "paused" || view.status === "blocked") {
-			if (view.pauseReason) lines.push(`Blocker: ${view.pauseReason}`);
-			if (view.pauseSuggestedAction) lines.push(`Suggested action: ${view.pauseSuggestedAction}`);
-		}
-		if (view.activePath) lines.push(`Path: ${view.activePath}`);
-		if (view.archivedPath) lines.push(`Archive: ${view.archivedPath}`);
-		if (otherCount > 0) lines.push(`Other open goals: ${otherCount} (user can run /goal-list or /goal-focus)`);
-		lines.push("");
-		lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Call update_goal({status: \"blocked\"}) only after the same blocker recurs on three consecutive goal turns. User commands handle pause/resume/clear/focus.");
-		// E1: goal history (last audit verdict + recent lifecycle events).
-		const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
-		if (history) lines.push("", history);
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details: goalDetails(view),
@@ -291,15 +347,14 @@ async function runGoalAgentPauseFlow(ctx: ExtensionContext, reason: string | und
 pi.registerTool(defineTool({
 	name: "update_goal",
 	label: "Update Goal",
-	description: "Report a terminal or pausing outcome for the current run: status \"complete\" (runs the independent completion auditor, which verifies from actual evidence — an optional completion_summary is an untrusted claim only), status \"blocked\" (records a distinct agent-blocked state and stops continuation; use only after the same blocker recurs on three consecutive goal turns), or status \"paused\" (immediate agent-initiated pause with a required reason). Never archive or abandon a goal yourself: if it should be discarded, ask the user to run /goal-clear.",
-	promptSnippet: "Report the current run as complete (audited), blocked (after three consecutive identical blockers), or paused (immediate, with a reason).",
+	description: "Report a terminal or pausing outcome for the current run: \"complete\" runs the independent completion auditor (completion_summary is an untrusted claim only); \"blocked\" records a distinct agent-blocked state and stops continuation per the active-goal policy; \"paused\" pauses immediately with a required reason. Never archive or abandon a goal yourself — ask the user to run /goal-clear.",
+	promptSnippet: "Report the current run as complete (audited) or blocked per the active-goal lifecycle policy; paused is immediate with a required reason.",
 	promptGuidelines: [
-		"Call update_goal({status: \"complete\"}) only when every requirement is satisfied. The independent auditor derives the requirements from the objective and any verification contract and inspects the actual workspace evidence. An optional completion_summary is passed to the auditor as an UNTRUSTED claim — it is never evidence and can never substitute for real artifacts or make a disapproved goal complete.",
-		"Call update_goal({status: \"blocked\"}) only after the SAME blocker has recurred on three consecutive goal turns. Do not block on the first or second occurrence — keep trying concrete next steps and ask for help when genuinely stuck.",
-		"Call update_goal({status: \"paused\"}) for an immediate pause with a required reason and optional suggested action. It records goal_paused with source agent and stops continuation.",
-		"Do not use update_goal as an escape hatch: if the objective is achieved, complete it; if it is not, do not complete it. The goal objective is immutable — if requirements change, ask the user to run /goal-tweak instead of editing the objective yourself.",
-		"Never archive or abandon a goal on your own. When a goal should be discarded, stop and ask the user to run /goal-clear (user-owned abandonment).",
-		"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
+		// PR E §54: capability + hard boundary here; the WHEN rules (evidence,
+		// third-identical-blocker, objective immutability) live once in the
+		// canonical active-goal policy block — do not restate them in all four
+		// schema surfaces.
+		"An optional completion_summary is passed to the auditor as an UNTRUSTED claim — it is never evidence and can never substitute for real artifacts.",
 	],
 	parameters: Type.Object({
 		status: StringEnum(["complete", "blocked", "paused"] as const, { description: "complete runs the independent auditor; blocked records a distinct agent-blocked state; paused is an immediate agent pause with a required reason." }),

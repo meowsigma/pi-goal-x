@@ -10,7 +10,7 @@ const MARKERS = {
 	objective: null, // per-fixture: the exact objective text
 	verificationContract: null, // per-fixture
 	currentTask: (fixture) => fixture.currentTaskLine,
-	lifecyclePolicyThirdBlocker: /third consecutive identical blocker|THIRD consecutive identical blocker/g,
+	lifecyclePolicyThirdBlocker: /SAME blocker recur(s)? on three consecutive goal turns|THIRD consecutive identical blocker/g,
 	independentAuditor: /independent (completion )?auditor/g,
 	neverEditObjective: /objective is immutable|never edit it yourself|never edit the objective/g,
 	blockerPolicyUpdateGoal: /update_goal\(\{status: "blocked"\}\)/g,

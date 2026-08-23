@@ -24,3 +24,24 @@ Key facts this baseline pins:
 Later optimization PRs (E/F) must show composed-request reductions against
 this table while keeping these single-source invariants. Update
 `baseline-main.json` only together with a rationale here.
+
+## 2026-08-23 — PR E (single-source prompt) baseline update — RATIONALE
+
+`baseline-main.json` regenerated after PR E's intentional prompt-composition
+changes. Per-fixture composed-request deltas on task fixtures (all reduced):
+
+| fixture | before | after | delta |
+|---|---|---|---|
+| active-regular-10-tasks | 9,655 | 9,476 | −179 |
+| active-regular-50-tasks | 9,945 | 9,848 | −97 |
+| current-contracted-task | 10,081 | 9,804 | −277 |
+| nested-tasks | 10,098 | 10,001 | −97 |
+| half-complete-tree | 9,565 | 9,386 | −179 |
+
+Composition changes: current task rendered once (not duplicated as a generic
+pending item); "Next pending" line only when nothing else is visible; UI
+shortcut hint replaced by bounded-prompt note; update_goal schema surfaces
+deduplicated to capability + boundary (the WHEN rules live once in the
+canonical active-goal policy); get_goal gains verbose/include_history params
+with minimal descriptions; lifecycle prose removed from the concise default.
+Single-source invariants still hold exactly once per active request.

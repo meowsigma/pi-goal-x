@@ -6,6 +6,7 @@ import {
 	goalEventMessageId,
 	hasAbortedAssistantMessage,
 	hasErrorAssistantMessage,
+	hasNetworkErrorAssistantMessage,
 	isAbortedAssistantMessage,
 	isErrorAssistantMessage,
 	isMeaningfulProgressToolCall,
@@ -92,6 +93,7 @@ export function compactGoalCheckpointContext(
 export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
 	let continuationAfterSettleFor: string | null = null;
+	let networkErrorRecoveryAfterSettleFor: string | null = null;
 
 	pi.on("context", async (event) => {
 		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
@@ -355,7 +357,10 @@ export function registerGoalEvents(core: GoalCore): void {
 			// evaluating whether the checkpoint is actionable.
 			core.reconcileFocusedGoalFromDisk(ctx);
 			core.runtime.setCheckpoint(incomingGoalId);
-			core.clearContinuationState();
+			// This can be the hidden checkpoint dispatched by the network-error
+			// timer. Clear ordinary continuation bookkeeping but retain the
+			// consecutive recovery count for a later failed retry.
+			core.clearContinuationState(false);
 			if (!core.isActionableContinuationGoal(incomingGoalId)) {
 				try {
 					ctx.abort?.();
@@ -372,6 +377,7 @@ export function registerGoalEvents(core: GoalCore): void {
 			// autoContinue nudge state so the user always gets a fresh chain.
 			core.runtime.setCheckpoint(null);
 			core.clearContinuationState();
+			networkErrorRecoveryAfterSettleFor = null;
 		}
 
 		if (!core.state.goal) {
@@ -471,6 +477,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		const endedGoalId = core.runningGoalId;
 		core.runningGoalId = null;
 		continuationAfterSettleFor = null;
+		networkErrorRecoveryAfterSettleFor = null;
 
 		// Account for any tokens from aborted in-flight assistant messages so
 		// they are not silently lost (but charge them to the original goal).
@@ -481,7 +488,9 @@ export function registerGoalEvents(core: GoalCore): void {
 			core.accountProgress(ctx, { completedTurnTokens: abortedTokens });
 		}
 
-		core.runtime.clearContinuationState();
+		// Keep any prior recovery attempt while Pi finishes its own automatic
+		// retries. A user-driven path resets it through the default argument.
+		core.runtime.clearContinuationState(false);
 		if (!core.state.goal || core.state.goal.status !== "active" || !core.state.goal.autoContinue) return;
 		if (endedGoalId && core.state.goal.id !== endedGoalId) return;
 		if (!core.reconcileFocusedGoalFromDisk(ctx)) return;
@@ -492,11 +501,18 @@ export function registerGoalEvents(core: GoalCore): void {
 		// Provider failures are not completed work: persist and refresh the
 		// display, but never queue a continuation for a run whose messages
 		// include an assistant error (danim47c pattern).
+		if (hasNetworkErrorAssistantMessage(event.messages)) {
+			core.persist(ctx);
+			core.updateUI(ctx);
+			networkErrorRecoveryAfterSettleFor = core.state.goal.id;
+			return;
+		}
 		if (hasErrorAssistantMessage(event.messages)) {
 			core.persist(ctx);
 			core.updateUI(ctx);
 			return;
 		}
+		core.runtime.clearNetworkErrorBackoff();
 		core.persist(ctx);
 		core.updateUI(ctx);
 		// agent_end runs before pi finishes retries, compaction, terminating-tool
@@ -510,14 +526,32 @@ export function registerGoalEvents(core: GoalCore): void {
 	pi.on("agent_settled", async (_event, ctx) => {
 		const goalId = continuationAfterSettleFor;
 		continuationAfterSettleFor = null;
-		if (!goalId || !core.isActionableContinuationGoal(goalId)) return;
-		core.queueContinuation(ctx, true);
+		const networkErrorGoalId = networkErrorRecoveryAfterSettleFor;
+		networkErrorRecoveryAfterSettleFor = null;
+		if (goalId && core.isActionableContinuationGoal(goalId)) {
+			core.queueContinuation(ctx, true);
+			return;
+		}
+		if (!networkErrorGoalId || !core.isActionableContinuationGoal(networkErrorGoalId)) return;
+		const plan = core.runtime.scheduleNetworkErrorRetry(ctx, core.state.goal!);
+		if (plan) {
+			ctx.ui.notify(
+				`Provider network error. Retrying the goal in ${Math.round(plan.delayMs / 1000)}s (recovery ${plan.attempt}/${plan.maxAttempts}).`,
+				"warning",
+			);
+			return;
+		}
+		ctx.ui.notify(
+			"Provider network errors persisted after all recovery attempts. The goal remains active; resume it when the provider is healthy.",
+			"warning",
+		);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		continuationAfterSettleFor = null;
+		networkErrorRecoveryAfterSettleFor = null;
 		core.accountProgress(ctx);
-		core.clearContinuationTimer();
+		core.clearContinuationState();
 		core.terminalInputUnsubscribe?.();
 		core.terminalInputUnsubscribe = null;
 		if (core.state.goal) core.persist(ctx);

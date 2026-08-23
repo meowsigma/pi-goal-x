@@ -5,6 +5,9 @@
   "license": "MIT",
   "author": "pi-goal-x contributors",
   "type": "module",
+  "bin": {
+    "pi-goal-x-recover": "scripts/recover-session-checkpoints.mjs"
+  },
   "keywords": [
     "pi-package",
     "pi",
@@ -25,6 +28,7 @@
   },
   "files": [
     "extensions",
+    "scripts/recover-session-checkpoints.mjs",
     "README.md",
     "LICENSE",
     "docs/agent-flow-design.md",

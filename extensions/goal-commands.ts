@@ -24,6 +24,7 @@ import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } 
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
 import { formatRecoveryReport, runRecoveryReport, runRecoveryRepair } from "./goal-recovery.ts";
+import { formatCheckpointHealthReport, readSessionCheckpointHealth } from "./goal-session-health.ts";
 
 export interface GoalRefreshState {
 	poolIds: Iterable<string>;
@@ -206,7 +207,18 @@ export function registerGoalCommands(core: GoalCore): void {
 			}
 			return;
 		}
-		ctx.ui.notify(formatRecoveryReport(report), report.healthy ? "info" : "warning");
+		// Issue #30: surface persisted-checkpoint health for this session file
+		// (read-only). Legacy full checkpoints are repairable offline with the
+		// shipped pi-goal-x-recover CLI; this command never writes.
+		const sessionFile = (ctx.sessionManager as { getSessionFile?: () => string | undefined } | undefined)?.getSessionFile?.();
+		const checkpointHealth = sessionFile ? readSessionCheckpointHealth(sessionFile) : null;
+		const checkpointSection = checkpointHealth && checkpointHealth.total > 0
+			? `\n\n${formatCheckpointHealthReport(checkpointHealth, sessionFile)}`
+			: "";
+		ctx.ui.notify(
+			formatRecoveryReport(report) + checkpointSection,
+			report.healthy && (checkpointHealth?.legacyFull ?? 0) === 0 ? "info" : "warning",
+		);
 	}
 
 	async function runGoalRefresh(ctx: ExtensionContext): Promise<void> {
@@ -271,6 +283,13 @@ export function registerGoalCommands(core: GoalCore): void {
 			activeFilePresent: health && view?.activePath
 				? existsSync(path.resolve(ctx.cwd, view.activePath))
 				: undefined,
+			// Issue #30: checkpoint growth report (health view only, read-only).
+			checkpointHealth: health
+				? readSessionCheckpointHealth(
+					(ctx.sessionManager as { getSessionFile?: () => string | undefined } | undefined)?.getSessionFile?.() ?? "",
+				)
+				: null,
+			checkpointSessionFile: (ctx.sessionManager as { getSessionFile?: () => string | undefined } | undefined)?.getSessionFile?.(),
 			// §13.2: effective settings with provenance appear only in verbose mode;
 			// the standard mode stays free of settings noise (§13.1).
 			settingsReport: verbose ? effectiveSettingsReport(ctx.cwd) : [],

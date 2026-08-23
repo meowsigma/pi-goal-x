@@ -104,6 +104,8 @@ export interface GoalSettingsResolvedShape {
 	objectiveMaxChars?: number;
 	/** Keyboard shortcuts for the compact task list and dashboard expansion. */
 	keybindings?: GoalKeybindings;
+	/** PR #29: suppress the unfocused goal widget + status hint (default false). */
+	hideUnfocusedBanner?: boolean;
 }
 
 /**
@@ -269,6 +271,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"stallTimeoutMinutes",
 	"objectiveMaxChars",
 	"keybindings",
+	"hideUnfocusedBanner",
 ]);
 
 const ALLOWED_KEYBINDING_KEYS = new Set(["dashboard"]);
@@ -305,7 +308,8 @@ export function parseSettingsLayer(
 			case "disableContracts":
 			case "disabled":
 			case "autoSelectSingleGoal":
-			case "auditorProjectResources": {
+			case "auditorProjectResources":
+			case "hideUnfocusedBanner": {
 				const parsed = asBool(value);
 				if (parsed === undefined) {
 					if (value !== undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be true or false`, key));
@@ -589,6 +593,11 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		globalValue: global.layer.auditorProjectResources,
 		defaultValue: false,
 	}));
+	const hideUnfocusedBanner = track("hideUnfocusedBanner", resolveLeaf<boolean>({
+		projectValue: project.layer.hideUnfocusedBanner,
+		globalValue: global.layer.hideUnfocusedBanner,
+		defaultValue: false,
+	}));
 	const stallTimeoutMinutes = track("stallTimeoutMinutes", resolveLeaf<number>({
 		projectValue: project.layer.stallTimeoutMinutes,
 		globalValue: global.layer.stallTimeoutMinutes,
@@ -632,6 +641,7 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		disabled,
 		autoSelectSingleGoal,
 		auditorProjectResources,
+		hideUnfocusedBanner,
 		stallTimeoutMinutes,
 		objectiveMaxChars,
 		keybindings,
@@ -934,6 +944,7 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.subtaskDepth !== undefined) persisted.subtaskDepth = settings.subtaskDepth;
 	if (settings.autoSelectSingleGoal !== undefined) persisted.autoSelectSingleGoal = settings.autoSelectSingleGoal;
 	if (settings.auditorProjectResources !== undefined) persisted.auditorProjectResources = settings.auditorProjectResources;
+	if (settings.hideUnfocusedBanner !== undefined) persisted.hideUnfocusedBanner = settings.hideUnfocusedBanner;
 	if (settings.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	if (settings.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = settings.objectiveMaxChars;
 	if (settings.keybindings?.dashboard) {
@@ -972,6 +983,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "model", label: "model", format: () => snapshot.value.model ?? "(default)" },
 		{ key: "thinkingLevel", label: "thinking_level", format: () => snapshot.value.thinkingLevel ?? "(default)" },
 		{ key: "auditorProjectResources", label: "auditor project resources", format: () => String(snapshot.value.auditorProjectResources) },
+		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },
 		{ key: "keybindings", label: "dashboard keybindings", format: () => `${snapshot.value.keybindings!.dashboard.toggleExpand}, ${snapshot.value.keybindings!.dashboard.scrollUp}, ${snapshot.value.keybindings!.dashboard.scrollDown}` },

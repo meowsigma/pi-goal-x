@@ -388,6 +388,7 @@ export function registerGoalCommands(core: GoalCore): void {
 
 	const SETTING_ROWS: readonly SettingRow[] = [
 		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", section: "Goal behavior", kind: "boolean" },
+		{ key: "hideUnfocusedBanner", label: "hideUnfocusedBanner", section: "Goal behavior", kind: "boolean" },
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", section: "Goal behavior", kind: "positiveInteger" },
@@ -400,7 +401,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	];
 
 	function settingsValue(config: GoalSettings, key: keyof GoalSettings): string {
-		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources") {
+		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources" || key === "hideUnfocusedBanner") {
 			return config[key] === true ? "true" : "false";
 		}
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
@@ -436,6 +437,9 @@ export function registerGoalCommands(core: GoalCore): void {
 			if (tasksEnabledNow !== core.tasksEnabled) {
 				core.installGoalToolProfile(tasksEnabledNow);
 			}
+			// PR #29: settings changes must be visible immediately — the banner
+			// hide/restore happens through this coalesced UI refresh.
+			core.updateUI(ctx);
 		};
 
 		const applyMutation = (scope: SettingsScope, mutation: SettingsMutation): boolean => {

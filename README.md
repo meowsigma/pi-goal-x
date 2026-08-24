@@ -2,82 +2,14 @@
   <img src="pi-goal-x.png" alt="pi-goal-x logo" width="560">
 </div>
 
-<div class="pgx-badge">
-  <a href="https://pi.dev/packages" target="_blank" rel="noopener noreferrer" class="pgx-badge__link">
-    <span class="pgx-badge__rank">TOP 1%</span>
-    <span class="pgx-badge__divider"></span>
-    <span class="pgx-badge__body">
-      <span class="pgx-badge__label">of Pi coding&nbsp;agent packages</span>
-      <span class="pgx-badge__meta">#45 of 5,380 by downloads · verified Aug 2026</span>
-    </span>
+<div align="center">
+  <a href="https://pi.dev/packages" target="_blank" rel="noopener noreferrer">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/badge-dark.svg">
+      <img src="assets/badge-light.svg" alt="TOP 1% of Pi coding agent packages: #45 of 5,380 by downloads, verified Aug 2026" width="420">
+    </picture>
   </a>
 </div>
-
-<style>
-  .pgx-badge {
-    display: inline-block;
-    font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-    --pgx-bg: #14181f;
-    --pgx-border: #2a3040;
-    --pgx-text: #e8e6df;
-    --pgx-accent: #d4a656;
-    --pgx-meta: #7d8494;
-  }
-  @media (prefers-color-scheme: light) {
-    .pgx-badge {
-      --pgx-bg: #f6f8fa;
-      --pgx-border: #d0d7de;
-      --pgx-text: #1f2328;
-      --pgx-accent: #9a6700;
-      --pgx-meta: #59636e;
-    }
-  }
-  .pgx-badge__link {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 12px 18px;
-    background: var(--pgx-bg);
-    border: 1px solid var(--pgx-border);
-    border-radius: 6px;
-    text-decoration: none;
-    color: var(--pgx-text);
-    transition: border-color 0.15s ease, transform 0.15s ease;
-  }
-  .pgx-badge__link:hover {
-    border-color: var(--pgx-accent);
-    transform: translateY(-1px);
-  }
-  .pgx-badge__link:focus-visible {
-    outline: 2px solid var(--pgx-accent);
-    outline-offset: 2px;
-  }
-  .pgx-badge__rank {
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    color: var(--pgx-accent);
-    white-space: nowrap;
-  }
-  .pgx-badge__divider {
-    width: 1px;
-    align-self: stretch;
-    background: var(--pgx-border);
-  }
-  .pgx-badge__body {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .pgx-badge__label {
-    font-size: 13px;
-    color: var(--pgx-text);
-  }
-  .pgx-badge__meta {
-    font-size: 11px;
-    color: var(--pgx-meta);
-  }
-</style>
 
 # pi-goal-x
 

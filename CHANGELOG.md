@@ -9,6 +9,17 @@ All notable changes to pi-goal-x are documented here.
 - **Project logo** — added `pi-goal-x.png` as the README logo and as the
   package gallery image for `pi.dev/packages`.
 
+## [0.30.0] — 2026-08-23
+
+### Fixed
+
+- **Network-error recovery for active goals (#36)** — after Pi exhausts its own
+  provider retries with `network_error`, an active auto-continue goal now
+  retries through a bounded 5/10/20/40/80-second backoff ladder. The fallback
+  begins only after Pi settles, cancels cleanly on user interaction or goal
+  lifecycle changes, and leaves the goal active with a clear warning after the
+  capped recovery budget is exhausted.
+
 ## [0.29.0] — 2026-08-23
 
 ### Added
@@ -33,19 +44,6 @@ All notable changes to pi-goal-x are documented here.
 - `update_goal({status:"blocked"})` now requires a `reason` describing the
   concrete blocker (feeds the blocker fingerprint and ledger record).
 - Tool schemas grew by +136 bytes/request (`attempted_actions` parameter).
-
-## [0.30.0] — 2026-08-23
-
-### Fixed
-
-- **Network-error recovery for active goals (#36)** — after Pi exhausts its own
-  provider retries with `network_error`, an active auto-continue goal now
-  retries through a bounded 5/10/20/40/80-second backoff ladder. The fallback
-  begins only after Pi settles, cancels cleanly on user interaction or goal
-  lifecycle changes, and leaves the goal active with a clear warning after the
-  capped recovery budget is exhausted.
-
-## [0.29.0] — 2026-08-23
 
 ## [0.28.0] — 2026-08-23
 

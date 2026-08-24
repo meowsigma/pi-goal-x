@@ -2,6 +2,15 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.2] — 2026-08-24
+
+### Added
+
+- **pi.dev ranking badge** — README badge linking to `pi.dev/packages`,
+  rendered as theme-aware SVG images (dark and light variants) so it displays
+  correctly on GitHub in either color scheme. Meta text now reads
+  "as of Aug 2026".
+
 ## [0.30.1] — 2026-08-24
 
 ### Added

@@ -2,6 +2,13 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.1] — 2026-08-24
+
+### Added
+
+- **Project logo** — added `pi-goal-x.png` as the README logo and as the
+  package gallery image for `pi.dev/packages`.
+
 ## [0.29.0] — 2026-08-23
 
 ### Added

@@ -6,7 +6,7 @@
   <a href="https://pi.dev/packages" target="_blank" rel="noopener noreferrer">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/badge-dark.svg">
-      <img src="assets/badge-light.svg" alt="TOP 1% of Pi coding agent packages: #45 of 5,380 by downloads, verified Aug 2026" width="420">
+      <img src="assets/badge-light.svg" alt="TOP 1% of Pi coding agent packages: #45 of 5,380 by downloads, as of Aug 2026" width="420">
     </picture>
   </a>
 </div>

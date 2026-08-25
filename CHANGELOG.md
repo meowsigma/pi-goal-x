@@ -2,6 +2,29 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.5] — 2026-08-25
+
+### Fixed
+
+- **Provider-side aborts no longer pause goals mid-outage** — an assistant
+  message with `stopReason:"aborted"` arriving without a user abort signal
+  (transport-level termination during a provider outage) now routes into the
+  bounded unbounded recovery instead of pausing the goal. All three lifecycle
+  handlers (`message_end`, `turn_end`, `agent_end`) are signal-aware: only a
+  genuine user Esc (`ctx.signal.aborted`) pauses.
+- **429 rate limits are recoverable** — HTTP 429 payloads ("Provider returned
+  error ... temporarily rate-limited upstream") were not classified as
+  transient, so recovery never scheduled. Classification now covers `\b429\b`
+  and rate-limit wording; quota/billing exhaustion (`insufficient_quota`,
+  `out of budget`, usage-limit errors) remains fail-fast via a new exclusion
+  list that wins over transient matches.
+
+### Added
+
+- Live-pi e2e scenario for sustained 429 outages and a full real event-ordering
+  regression test (`message_end → turn_end → agent_end → agent_settled`)
+  proving provider-side aborts engage recovery without pausing.
+
 ## [0.30.4] — 2026-08-25
 
 ### Added

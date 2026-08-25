@@ -2,6 +2,26 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.4] — 2026-08-25
+
+### Added
+
+- **Live-pi e2e regression guard for network-error recovery** —
+  `tests/e2e/network-recovery-rpc.test.ts` drives a real pi subprocess
+  against a mock provider returning the exact reported failure
+  (`503 server_error: Upstream request failed: Endpoint is unavailable.`)
+  and asserts the full unbounded backoff loop engages: escalating
+  "(recovery N, unbounded)" notifications, checkpoint continuation
+  delivery after settle. Skips automatically when the `pi` CLI is absent.
+
+### Verified
+
+- Field report of "unlimited retry not working" reproduced against real pi
+  on this tree: classification, scheduling, escalation, and checkpoint
+  delivery all work; the failing session predated 0.30.3 (extensions load
+  once per session). Restarting sessions loads the fixed behavior. See
+  `specs/2026-08-23-network-error-backoff/MILESTONES.md`.
+
 ## [0.30.3] — 2026-08-25
 
 ### Fixed

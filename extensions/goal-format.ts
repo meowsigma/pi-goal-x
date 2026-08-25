@@ -226,14 +226,36 @@ export function isErrorAssistantMessage(message: unknown): boolean {
 	return raw?.role === "assistant" && raw.stopReason === "error";
 }
 
-/** A provider-declared network failure is safe for the bounded goal backoff. */
+/**
+ * Transient provider failures are safe for goal-level recovery backoff:
+ * Pi-declared network errors plus HTTP 5xx-style outages surfaced by
+ * providers (503 server_error, "Endpoint is unavailable", overloaded,
+ * gateway failures). Deliberately excludes 4xx client errors such as auth
+ * and malformed-request failures, which retrying cannot fix.
+ */
+const TRANSIENT_PROVIDER_ERROR_RE = new RegExp(
+	[
+		"\\bnetwork[_\\s-]?error\\b",
+		"\\bserver[_\\s]?error\\b",
+		"\\b(?:502|503|504|529)\\b",
+		"\\bservice unavailable\\b",
+		"\\bbad gateway\\b",
+		"\\bgateway timeout\\b",
+		"\\bupstream request failed\\b",
+		"\\bendpoint is unavailable\\b",
+		"\\boverloaded[_\\s]?error\\b",
+	].join("|"),
+	"i",
+);
+
+/** A transient provider failure is safe for the bounded goal backoff. */
 export function isNetworkErrorAssistantMessage(message: unknown): boolean {
 	if (!isErrorAssistantMessage(message)) return false;
 	const raw = asRecord(message);
 	const details = [raw?.rawStopReason, raw?.errorMessage]
 		.filter((value): value is string => typeof value === "string")
 		.join(" ");
-	return /\bnetwork[_\s-]?error\b/i.test(details);
+	return TRANSIENT_PROVIDER_ERROR_RE.test(details);
 }
 
 export function isToolUseAssistantMessage(message: unknown): boolean {

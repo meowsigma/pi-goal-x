@@ -533,14 +533,20 @@ export function registerGoalEvents(core: GoalCore): void {
 			return;
 		}
 		if (!networkErrorGoalId || !core.isActionableContinuationGoal(networkErrorGoalId)) return;
-		const plan = core.runtime.scheduleNetworkErrorRetry(ctx, core.state.goal!);
+		const recovery = loadGoalSettings(ctx.cwd).networkRecovery;
+		const policy = recovery
+			? { maxAttempts: recovery.maxAttempts, maxDelayMs: recovery.maxDelayMs }
+			: undefined;
+		const plan = core.runtime.scheduleNetworkErrorRetry(ctx, core.state.goal!, policy);
 		if (plan) {
+			const cap = plan.maxAttempts > 0 ? `/${plan.maxAttempts}` : ", unbounded";
 			ctx.ui.notify(
-				`Provider network error. Retrying the goal in ${Math.round(plan.delayMs / 1000)}s (recovery ${plan.attempt}/${plan.maxAttempts}).`,
+				`Provider network error. Retrying the goal in ${Math.round(plan.delayMs / 1000)}s (recovery ${plan.attempt}${cap}).`,
 				"warning",
 			);
 			return;
 		}
+		// Only reachable under a configured bounded cap (maxAttempts > 0).
 		ctx.ui.notify(
 			"Provider network errors persisted after all recovery attempts. The goal remains active; resume it when the provider is healthy.",
 			"warning",

@@ -2,6 +2,35 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.3] — 2026-08-25
+
+### Fixed
+
+- **503 `server_error` outages now engage goal recovery** — regression fix:
+  transient provider failures such as `Error: 503: {"type":"server_error",
+  "message":"...Upstream request failed: Endpoint is unavailable."}` were not
+  classified as network errors (the old matcher required the literal text
+  "network error"), so the goal-level backoff never scheduled and active
+  auto-continue goals stranded after Pi's built-in retries exhausted.
+  Classification now covers HTTP 5xx-style outages (`server_error`,
+  502/503/504/529, service unavailable, bad gateway, gateway timeout,
+  upstream request failed, endpoint unavailable, overloaded); 4xx auth and
+  malformed-request errors remain non-retryable.
+
+### Changed
+
+- **Unbounded-by-default recovery** — after Pi settles with a transient
+  provider failure, an active auto-continue goal keeps retrying on the
+  escalating backoff ladder (5–80s), plateauing at the maximum delay until
+  the provider recovers, instead of giving up after five attempts. The cap
+  and delays are configurable via layered settings:
+  `networkRecovery.maxAttempts` (0/unset = unbounded) and
+  `networkRecovery.maxDelayMs` (default 80000), or the
+  `PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS` /
+  `PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS` environment overrides.
+- Recovery notifications distinguish bounded progress (`recovery 2/5`) from
+  unbounded (`recovery 2, unbounded`).
+
 ## [0.30.2] — 2026-08-24
 
 ### Added

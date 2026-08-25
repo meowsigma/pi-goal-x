@@ -43,25 +43,47 @@ interface Notify {
 	notifyType?: string;
 }
 
-test("e2e: real pi recovers from sustained 503 outages with escalating unbounded backoff", async (t) => {
-	if (!piOnPath()) {
-		t.skip("pi CLI not available on PATH");
-		return;
-	}
+interface OutageScenario {
+	status: number;
+	body: unknown;
+	label: string;
+}
 
-	// ── Mock provider: always 503 with the exact reported payload ──────────
-	const server = (await import("node:http")).createServer((req, res) => {
+const SCENARIO_503: OutageScenario = {
+	status: 503,
+	label: "503",
+	body: {
+		error: {
+			type: "server_error",
+			message:
+				"Error from provider (Console): Upstream request failed: Endpoint is unavailable.",
+		},
+	},
+};
+
+/** The exact second field-reported failure shape (OpenRouter-style 429). */
+const SCENARIO_429: OutageScenario = {
+	status: 429,
+	label: "429",
+	body: {
+		message: "Provider returned error",
+		code: 429,
+		metadata: {
+			raw: "stealth/ox-alpha is temporarily rate-limited upstream. Please retry shortly.",
+			provider_name: "Stealth",
+			is_byok: false,
+			limit_source: "upstream_provider_shared_pool",
+		},
+	},
+};
+
+async function runOutageScenario(t: import("node:test").TestContext, scenario: OutageScenario): Promise<Notify[]> {
+	// ── Mock provider: always fails with the scenario payload ──────────────
+	const http = await import("node:http");
+	const server = http.createServer((req, res) => {
 		req.resume();
-		res.writeHead(503, { "content-type": "application/json" });
-		res.end(
-			JSON.stringify({
-				error: {
-					type: "server_error",
-					message:
-						"Error from provider (Console): Upstream request failed: Endpoint is unavailable.",
-				},
-			}),
-		);
+		res.writeHead(scenario.status, { "content-type": "application/json" });
+		res.end(JSON.stringify(scenario.body));
 	});
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const port = (server.address() as { port: number }).port;
@@ -211,17 +233,39 @@ test("e2e: real pi recovers from sustained 503 outages with escalating unbounded
 
 	assert.ok(
 		gotTwo,
-		`expected at least 2 recovery notifications within 45s; got ${JSON.stringify(notifications)};\nfirst raw lines:\n${rawLines.join("\n").slice(0, 4000)}\nstderr:\n${stderr.slice(0, 2000)}`,
+		`[${scenario.label}] expected at least 2 recovery notifications within 45s; got ${JSON.stringify(notifications)};\nfirst raw lines:\n${rawLines.join("\n").slice(0, 4000)}\nstderr:\n${stderr.slice(0, 2000)}`,
 	);
-	assert.ok(sawCheckpointAfterSettle, "a checkpoint continuation must be delivered after the first recovery");
-	assert.ok(sawAgentEndAfterFirstNotify || notifications.length >= 2, "the recovery loop must keep cycling");
+	assert.ok(sawCheckpointAfterSettle, `[${scenario.label}] a checkpoint continuation must be delivered after the first recovery`);
 
+	return notifications;
+}
+
+function assertEscalatingUnbounded(notifications: Notify[], label: string): void {
 	const delays = notifications.map((n) => Number(/in (\d+)s/.exec(n.message)?.[1]));
 	const attempts = notifications.map((n) => Number(/recovery (\d+)/.exec(n.message)?.[1]));
-	assert.ok(delays[1]! > delays[0]!, `delays must escalate: ${delays.join(", ")}`);
-	assert.equal(attempts[0]!, 1, "the counter starts at recovery 1 in a fresh session");
+	assert.ok(delays.length >= 2 && delays[1]! > delays[0]!, `[${label}] delays must escalate: ${delays.join(", ")}`);
+	assert.equal(attempts[0]!, 1, `[${label}] the counter starts at recovery 1 in a fresh session`);
 	assert.deepEqual(
-		notifications.map((n) => n.notifyType),
+		notifications.slice(0, 2).map((n) => n.notifyType),
 		["warning", "warning"],
+		`[${label}]`,
 	);
+}
+
+test("e2e: real pi recovers from sustained 503 outages with escalating unbounded backoff", async (t) => {
+	if (!piOnPath()) {
+		t.skip("pi CLI not available on PATH");
+		return;
+	}
+	const notifications = await runOutageScenario(t, SCENARIO_503);
+	assertEscalatingUnbounded(notifications, "503");
+});
+
+test("e2e: real pi recovers from sustained 429 rate-limit outages", async (t) => {
+	if (!piOnPath()) {
+		t.skip("pi CLI not available on PATH");
+		return;
+	}
+	const notifications = await runOutageScenario(t, SCENARIO_429);
+	assertEscalatingUnbounded(notifications, "429");
 });

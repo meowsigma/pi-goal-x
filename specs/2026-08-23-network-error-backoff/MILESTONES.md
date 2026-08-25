@@ -76,3 +76,54 @@
   scenario against a real `pi` subprocess (~20s; skips when `pi` is absent):
   asserts ≥2 escalating unbounded recovery notifications, checkpoint delivery
   after settle, warning level, and counter start. Manifest regenerated.
+
+## 2026-08-25 (evening) — second field report: provider-initiated aborts paused goals; 429s never classified
+
+- New field evidence showed two distinct failure shapes the previous fix missed:
+  1. `Goal paused.` after repeated 503s: an assistant message arrives with
+     `stopReason:"aborted"` (TUI renders "Aborted after N retry attempts") and
+     the agent_end handler paused the goal on ANY aborted message, even when
+     no user abort signal fired — misattributing provider-side termination to
+     user intent.
+  2. A second outage shaped as OpenRouter-style
+     `429: {"message":"Provider returned error",... "temporarily rate-limited
+     upstream..."}`: TRANSIENT_PROVIDER_ERROR_RE had no 429/rate-limit
+     patterns, so those errors silently never scheduled recovery.
+- Captured real shapes via the rpc harness with a 429 mock: final failure is
+  `stopReason:"error"` + `errorMessage:"429 status code ..."`; recovery was
+  never scheduled (0 notify events) before the fix.
+- Fixes:
+  - Classification adds `\b429\b`, `rate-limited`/`rate limit`,
+    `too many requests`; new NON_TRANSIENT exclusion list (quota/billing/
+    GoUsageLimitError etc.) wins over transient matches so deterministic
+    billing failures still fail fast.
+  - agent_end now pauses ONLY when `ctx.signal.aborted` is true (genuine user
+    abort). Aborted assistant messages without a user signal route into the
+    same bounded recovery as classified transient errors.
+- E2E harness generalized into parameterized outage scenarios; new live-pi
+  scenario proves sustained 429 outages now produce escalating unbounded
+  recovery notifications and checkpoint continuations.
+- Unit coverage: exact field-reported 429 payload classifies transient;
+  quota-flavored 429 stays non-transient; provider-initiated abort engages
+  recovery; user-signal abort still pauses.
+
+### Audit correction (same day)
+
+- Independent audit correctly flagged two gaps in the first attempt:
+  1. `message_end` and `turn_end` still paused on ANY aborted message and fire
+     BEFORE `agent_end`, so the agent_end-only fix was ineffective in the real
+     event flow. All three handlers are now signal-aware: only
+     `ctx.signal.aborted === true` (genuine user Esc) pauses; provider-side
+     aborts route into recovery. A dedicated regression test drives the FULL
+     real ordering (`message_end → turn_end → agent_end → agent_settled`)
+     with an aborted message and no user signal.
+  2. Attribution correction per pi 0.84.3 source: `retryAssistantCall` returns
+     `stopReason:"error"` on retry EXHAUSTION; `stopReason:"aborted"` with
+     retryAttempt > 0 ("Aborted after N retry attempts") marks a user abort
+     during the backoff sleep. The field report's "Goal paused." was therefore
+     most plausibly a genuine abort during the outage — but since transport-
+     level terminations can also surface as aborts without a user signal, the
+     signal-aware rule keeps goals alive through outages while preserving
+     explicit-Esc semantics.
+- The 429 classification fix and its live-pi e2e scenario were verified sound
+  by the audit and are unchanged.

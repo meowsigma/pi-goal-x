@@ -174,7 +174,10 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.accountProgress(ctx, { completedTurnTokens: tokens });
 
 		if (isAbortedAssistantMessage(message)) {
-			core.pauseActiveGoal(ctx);
+			// Pause only on a genuine user abort (signal fired). A provider- or
+			// transport-side abort without the signal routes into recovery via
+			// agent_end instead of stranding the goal.
+			if (ctx.signal?.aborted) core.pauseActiveGoal(ctx);
 			return;
 		}
 		// Provider failures are not completed work: do not turn one failed turn
@@ -266,7 +269,9 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		if (isAbortedAssistantMessage(event.message)) core.pauseActiveGoal(ctx);
+		// Signal-aware: see turn_end — only user aborts pause; provider-side
+		// aborts are handled by agent_end's recovery path.
+		if (isAbortedAssistantMessage(event.message) && ctx.signal?.aborted) core.pauseActiveGoal(ctx);
 		const raw = asRecord(event.message);
 		if (raw?.role === "custom" && raw.customType === GOAL_EVENT_ENTRY && raw.display !== false) {
 			return { message: { ...event.message, display: false } as typeof event.message };
@@ -494,14 +499,19 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (!core.state.goal || core.state.goal.status !== "active" || !core.state.goal.autoContinue) return;
 		if (endedGoalId && core.state.goal.id !== endedGoalId) return;
 		if (!core.reconcileFocusedGoalFromDisk(ctx)) return;
-		if (hasAbortedAssistantMessage(event.messages) || ctx.signal?.aborted) {
+		// A genuine user abort pauses the goal. An assistant message with
+		// stopReason "aborted" WITHOUT a user abort signal is a provider- or
+		// transport-side termination (e.g. after Pi exhausts its retries) —
+		// pausing there stranded goals during outages, so it routes into the
+		// same bounded recovery as classified transient errors instead.
+		if (ctx.signal?.aborted) {
 			core.pauseActiveGoal(ctx);
 			return;
 		}
 		// Provider failures are not completed work: persist and refresh the
 		// display, but never queue a continuation for a run whose messages
 		// include an assistant error (danim47c pattern).
-		if (hasNetworkErrorAssistantMessage(event.messages)) {
+		if (hasNetworkErrorAssistantMessage(event.messages) || hasAbortedAssistantMessage(event.messages)) {
 			core.persist(ctx);
 			core.updateUI(ctx);
 			networkErrorRecoveryAfterSettleFor = core.state.goal.id;

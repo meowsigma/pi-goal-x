@@ -189,6 +189,45 @@ test("classification: exact reported 503 server_error payload is a network error
 	);
 });
 
+test("classification: 429 rate-limit payloads are transient", () => {
+	assert.equal(
+		isNetworkErrorAssistantMessage({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: '429 status code (no body)',
+		}),
+		true,
+		"pi's compact 429 formatter must classify",
+	);
+	const reported = JSON.stringify({
+		message: "Provider returned error",
+		code: 429,
+		metadata: {
+			raw: "stealth/ox-alpha is temporarily rate-limited upstream. Please retry shortly.",
+			provider_name: "Stealth",
+			limit_source: "upstream_provider_shared_pool",
+		},
+	});
+	assert.equal(
+		isNetworkErrorAssistantMessage({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: `Retry failed after 3 attempts: 429: ${reported}`,
+		}),
+		true,
+		"the exact field-reported 429 payload must classify",
+	);
+	assert.equal(
+		isNetworkErrorAssistantMessage({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "429: quota exceeded for this billing period",
+		}),
+		false,
+		"quota/billing exhaustion stays non-transient even with a 429 code",
+	);
+});
+
 test("classification: non-transient errors stay non-recoverable", () => {
 	for (const message of [
 		"401: {\"type\":\"authentication_error\",\"message\":\"invalid api key\"}",
@@ -230,6 +269,113 @@ test("regression: reported 503 payload schedules goal-level recovery after settl
 		assert.equal(await countCheckpoints(h), 0, "the first recovery is delayed by the backoff policy");
 	} finally {
 		// The delayed timer is unref'd and needs no test teardown.
+	}
+});
+
+test("lifecycle: provider-initiated abort routes into recovery instead of pausing", async () => {
+	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "25";
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user typed: continue",
+			systemPromptOptions: {},
+		}, h.ctx);
+
+		await h.handlers["agent_end"]!({
+			messages: [{ role: "assistant", stopReason: "aborted", errorMessage: "Aborted after 3 retry attempts" }],
+		}, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+
+		assert.match(
+			h.notifications.at(-1)?.message ?? "",
+			/Retrying the goal in \d+s \(recovery 1, unbounded\)/,
+			"a provider-initiated abort without a user abort signal must engage recovery",
+		);
+	} finally {
+		delete process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS;
+	}
+});
+
+test("lifecycle: full real event ordering (message_end → turn_end → agent_end → settled) routes provider-side aborts into recovery", async () => {
+	// The auditor-verified gap: message_end and turn_end fire BEFORE agent_end
+	// in real pi runs. All three must agree: without a user abort signal, an
+	// aborted assistant message never pauses the goal and recovery engages.
+	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "25";
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user typed: continue",
+			systemPromptOptions: {},
+		}, h.ctx);
+
+		const abortedMessage = {
+			role: "assistant",
+			stopReason: "aborted",
+			usage: { input: 0, output: 0 },
+		};
+
+		await h.handlers["message_end"]?.({ message: abortedMessage }, idleCtx(h.ctx));
+		assert.equal(
+			h.notifications.some((n) => /Goal paused/.test(n.message)),
+			false,
+			"message_end must not pause without a user abort signal",
+		);
+		await h.handlers["turn_end"]?.({ message: abortedMessage }, idleCtx(h.ctx));
+		assert.equal(
+			h.notifications.some((n) => /Goal paused/.test(n.message)),
+			false,
+			"turn_end must not pause without a user abort signal",
+		);
+		await h.handlers["agent_end"]!({ messages: [abortedMessage] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+
+		assert.match(
+			h.notifications.at(-1)?.message ?? "",
+			/Retrying the goal in \d+s \(recovery 1, unbounded\)/,
+			"recovery must engage through the full real event ordering",
+		);
+	} finally {
+		delete process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS;
+	}
+});
+
+test("lifecycle: genuine user abort still pauses the goal", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user typed: continue",
+			systemPromptOptions: {},
+		}, h.ctx);
+
+		const signalCtx = {
+			...idleCtx(h.ctx),
+			signal: { aborted: true },
+		} as unknown as ExtensionContext;
+		await h.handlers["agent_end"]!({
+			messages: [{ role: "assistant", stopReason: "aborted", errorMessage: "Aborted after 2 retry attempts" }],
+		}, signalCtx);
+
+		assert.match(
+			h.notifications.at(-1)?.message ?? "",
+			/Goal paused\./,
+			"a user abort signal must keep pausing the goal",
+		);
+		assert.equal(
+			h.notifications.some((n) => /Retrying the goal/.test(n.message)),
+			false,
+			"user-initiated pauses never schedule recovery",
+		);
+	} finally {
+		// nothing to clean
 	}
 });
 

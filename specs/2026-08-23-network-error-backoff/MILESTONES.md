@@ -51,3 +51,28 @@
   counter, plus classification unit coverage. Fast lifecycle tests shrink
   delays via `PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS`.
 - Validation passed: `npm run check`, full `npm run test:serial`.
+
+## 2026-08-25 (later) — "unlimited retry still not working" report: verified fixed in real runtime; added live e2e guard
+
+- Follow-up user report: same `503 server_error / Endpoint is unavailable` payload,
+  goal stayed active with no retry notification after Pi's retries exhausted.
+- Built a REAL-runtime reproduction: local HTTP mock always returning the exact
+  reported payload, isolated `PI_CODING_AGENT_DIR`, custom provider via
+  `models.json`, seeded active autoContinue goal (`autoSelectSingleGoal`),
+  driving a genuine `pi --mode rpc` subprocess with this repo's extension.
+- Captured real pi 0.84.3 event shapes during outage: intermediate failures emit
+  `agent_end` (willRetry=true) without surfacing messages; final exhaustion emits
+  an assistant message with `stopReason:"error"` and
+  `errorMessage = '503: {"type":"server_error","message":"Error from provider
+  (Console): Upstream request failed: Endpoint is unavailable."}'`, then exactly
+  one `agent_settled`. Classification matched every cycle.
+- Observed end-to-end success with current code: "Retrying the goal in 5s
+  (recovery 1, unbounded)" → checkpoint continuation delivered → turn restarted
+  → escalation through recovery 2/10s, 3/20s, 4/40s across consecutive cycles.
+- Root cause of the field report: the failing session predated the 0.30.3 fix
+  (extensions load once per session; the old bounded/classifier code was still
+  in memory). No product defect found in the current tree.
+- Hardening: new `tests/e2e/network-recovery-rpc.test.ts` automates this whole
+  scenario against a real `pi` subprocess (~20s; skips when `pi` is absent):
+  asserts ≥2 escalating unbounded recovery notifications, checkpoint delivery
+  after settle, warning level, and counter start. Manifest regenerated.

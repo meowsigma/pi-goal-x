@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.8] — 2026-08-31
+
+### Fixed
+
+- **Productive multi-turn agent runs no longer trip the no-progress circuit breaker** — meaningful tool work is now tracked for the entire agent run instead of being erased at each provider turn. A normal tool call followed by its final text-only turn resets recovery state as intended.
+
 ## [0.30.7] — 2026-08-30
 
 ### Fixed

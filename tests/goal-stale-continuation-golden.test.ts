@@ -417,12 +417,52 @@ test("three consecutive no-progress turns open the circuit breaker instead of lo
 	}
 });
 
+test("meaningful tool work survives the post-tool provider turn and resets the circuit breaker", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+
+		// First empty run arms recovery 1/2.
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		const checkpoint = `<pi_goal_continuation goal_id="${goal.id}" kind="checkpoint">continue`;
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
+
+		// A real Pi agent run has another turn_start after every tool result. The
+		// productive edit must remain credited when the final text-only turn ends.
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({ toolName: "edit", args: { path: "src/app.ts" } }, h.ctx);
+		await h.handlers["turn_end"]!({ message: { role: "assistant", stopReason: "toolUse" } }, idleCtx(h.ctx));
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
+
+		// The next genuinely empty run must restart at recovery 1/2, not trip or
+		// continue the pre-edit chain.
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/, "productive work in an earlier provider turn resets the attempt number");
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
 test("meaningful tool work resets the no-progress circuit breaker", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+		await h.handlers["agent_start"]?.({}, h.ctx);
 		await h.handlers["turn_start"]!({}, h.ctx);
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
@@ -430,6 +470,7 @@ test("meaningful tool work resets the no-progress circuit breaker", async () => 
 		const firstCheckpoint = latestCheckpointContent(h);
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: firstCheckpoint, systemPromptOptions: {} }, h.ctx);
 
+		await h.handlers["agent_start"]?.({}, h.ctx);
 		await h.handlers["turn_start"]!({}, h.ctx);
 		await h.handlers["tool_call"]!({ toolName: "edit", args: { path: "src/app.ts" } }, h.ctx);
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
@@ -438,6 +479,7 @@ test("meaningful tool work resets the no-progress circuit breaker", async () => 
 		const productiveCheckpoint = latestCheckpointContent(h);
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: productiveCheckpoint, systemPromptOptions: {} }, h.ctx);
 
+		await h.handlers["agent_start"]?.({}, h.ctx);
 		await h.handlers["turn_start"]!({}, h.ctx);
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));

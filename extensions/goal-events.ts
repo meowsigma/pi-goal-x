@@ -105,10 +105,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		return messages === null ? undefined : { messages: messages as typeof event.messages };
 	});
 
-	pi.on("turn_start", async (_event, ctx) => {
-		// Per-turn flag resets (#4 + C9 fix).
-		core.advanceTurnSeq();
+	pi.on("agent_start", async () => {
+		// A Pi agent run may contain many provider turns while tools execute. Reset
+		// progress once per run so work from an earlier tool turn survives the
+		// final text-only provider turn and reaches the no-progress breaker.
 		core.goalWorkToolCalledThisTurn = false;
+	});
+
+	pi.on("turn_start", async (_event, ctx) => {
+		core.advanceTurnSeq();
 		core.beginAccounting();
 		core.goalService.beginTurn(ctx, core.focusedGoalId); // P1-3 transaction buffer
 		core.touchGoalActivity(); // F5

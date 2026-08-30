@@ -244,10 +244,15 @@ function makeAuditorResourceLoader(): ResourceLoader {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pi SDK types Model<any> idiomatically (pi-coding-agent sdk.d.ts)
+function exactSessionModel(ctx: ExtensionContext, provider: string, modelId: string): Model<any> | undefined {
+	return ctx.model?.provider === provider && ctx.model.id === modelId ? ctx.model : undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- pi SDK types Model<any> idiomatically (pi-coding-agent sdk.d.ts)
 export function resolveAuditorModel(ctx: ExtensionContext, config: GoalSettings): { model: Model<any> | undefined; error?: string } {
 	if (!config.model && !config.provider) return { model: ctx.model };
 	if (config.provider && config.model) {
-		const model = ctx.modelRegistry.find(config.provider, config.model);
+		const model = exactSessionModel(ctx, config.provider, config.model) ?? ctx.modelRegistry?.find?.(config.provider, config.model);
 		return model ? { model } : { model: undefined, error: `Configured auditor model not found: ${config.provider}/${config.model}` };
 	}
 	if (config.provider) {
@@ -263,10 +268,11 @@ export function resolveAuditorModel(ctx: ExtensionContext, config: GoalSettings)
 	if (slash > 0) {
 		const provider = config.model.slice(0, slash);
 		const modelId = config.model.slice(slash + 1);
-		const model = ctx.modelRegistry.find(provider, modelId);
+		const model = exactSessionModel(ctx, provider, modelId) ?? ctx.modelRegistry?.find?.(provider, modelId);
 		return model ? { model } : { model: undefined, error: `Configured auditor model not found: ${config.model}` };
 	}
-	const matches = ctx.modelRegistry.getAvailable().filter((model) => model.id === config.model || model.name === config.model);
+	const available = ctx.modelRegistry?.getAvailable?.() ?? ctx.scopedModels?.map((item) => item.model) ?? [];
+	const matches = available.filter((model) => model.id === config.model || model.name === config.model);
 	if (matches.length === 1) return { model: matches[0] };
 	return { model: undefined, error: `Configured auditor model is ambiguous or unavailable: ${config.model}` };
 }
@@ -317,7 +323,10 @@ export async function runGoalCompletionAuditor(args: {
 	 */
 	createSession?: typeof createAgentSession;
 }): Promise<GoalAuditorResult> {
-	const config = loadGoalSettings(args.ctx.cwd);
+	if (args.signal?.aborted) {
+		return { approved: false, disapproved: true, output: "", model: modelLabel(args.ctx.model), error: "Auditor aborted." };
+	}
+	const config = args.settings ?? loadGoalSettings(args.ctx.cwd);
 	const resolved = resolveAuditorModel(args.ctx, config);
 	const model = resolved.model;
 	const thinkingLevel = config.thinkingLevel;

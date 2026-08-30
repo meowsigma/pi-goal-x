@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.7] — 2026-08-30
+
+### Fixed
+
+- **Configured live auditor models no longer disappear when registry lookup misses** — exact configured provider/model references now accept the current live session model object before consulting `ModelRegistry.find()`. The completion auditor also honors the settings snapshot supplied by its caller instead of reloading a potentially different configuration, and aborts pre-flight before model resolution.
+
 ## [0.30.6] — 2026-08-30
 
 ### Fixed

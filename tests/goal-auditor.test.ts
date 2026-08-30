@@ -70,6 +70,14 @@ test("resolveAuditorSessionModelOptions shares parent ModelRuntime when availabl
 	assert.equal(legacy.modelRegistry, legacyRegistry);
 });
 
+test("resolveAuditorModel accepts an exact live session model when registry lookup misses", () => {
+	const live = { provider: "openai-codex", id: "gpt-5.6-luna" };
+	const ctx = { model: live, modelRegistry: { find: () => undefined, getAvailable: () => [] } } as any;
+	assert.equal(resolveAuditorModel(ctx, { model: "openai-codex/gpt-5.6-luna" }).model, live);
+	assert.equal(resolveAuditorModel(ctx, { provider: "openai-codex", model: "gpt-5.6-luna" }).model, live);
+	assert.match(resolveAuditorModel(ctx, { model: "openai-codex/missing" }).error ?? "", /not found/);
+});
+
 test("runGoalCompletionAuditor passes parent modelRuntime into createSession", async () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-test-"));
 	try {
@@ -86,6 +94,7 @@ test("runGoalCompletionAuditor passes parent modelRuntime into createSession", a
 			ctx: { cwd, model: undefined, modelRegistry } as any,
 			goal: goal(),
 			detailedSummary: "test",
+			settings: {},
 			createSession: async (opts: any) => {
 				captured = opts;
 				return { session: mockSession } as any;
@@ -94,6 +103,31 @@ test("runGoalCompletionAuditor passes parent modelRuntime into createSession", a
 
 		assert.equal(captured?.modelRuntime, runtime);
 		assert.equal(captured?.modelRegistry, modelRegistry);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor honors the caller-provided settings snapshot", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-settings-"));
+	try {
+		const selected = { provider: "session", id: "auditor-b" };
+		let capturedModel: unknown;
+		await runGoalCompletionAuditor({
+			ctx: {
+				cwd,
+				model: undefined,
+				modelRegistry: { find: (provider: string, id: string) => provider === "session" && id === "auditor-b" ? selected : undefined, getAvailable: () => [] },
+			} as any,
+			goal: goal(),
+			detailedSummary: "test",
+			settings: { provider: "session", model: "auditor-b" },
+			createSession: async (opts: any) => {
+				capturedModel = opts.model;
+				return { session: { abort: () => {}, subscribe: () => () => {}, prompt: async () => {} } } as any;
+			},
+		});
+		assert.equal(capturedModel, selected);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
@@ -321,6 +355,7 @@ test("runGoalCompletionAuditor aborts running prompt when signal fires (abort du
 			ctx: { cwd, model: undefined } as any,
 			goal: goal(),
 			detailedSummary: "test",
+			settings: {},
 			signal: ctrl.signal,
 			createSession: async () => ({ session: mockSession }) as any,
 		});
@@ -370,6 +405,7 @@ test("runGoalCompletionAuditor detects abort when session.prompt returns normall
 			ctx: { cwd, model: undefined } as any,
 			goal: goal(),
 			detailedSummary: "test",
+			settings: {},
 			signal: ctrl.signal,
 			createSession: async () => ({ session: mockSession }) as any,
 		});
@@ -414,6 +450,7 @@ test("runGoalCompletionAuditor cleans up abort listener on normal completion", a
 			ctx: { cwd, model: undefined } as any,
 			goal: goal(),
 			detailedSummary: "test",
+			settings: {},
 			signal: ctrl.signal,
 			createSession: async () => ({ session: mockSession }) as any,
 		});

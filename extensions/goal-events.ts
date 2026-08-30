@@ -24,6 +24,7 @@ import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";import {
 	goalPrompt,
+	noProgressRecoveryPrompt,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
 	untrustedObjectiveBlock,
@@ -92,8 +93,11 @@ export function compactGoalCheckpointContext(
  */
 export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
+	const MAX_NO_PROGRESS_RECOVERIES = 2;
 	let continuationAfterSettleFor: string | null = null;
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
+	let consecutiveNoProgressTurns = 0;
+	let noProgressRecoveryAttempt = 0;
 
 	pi.on("context", async (event) => {
 		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
@@ -379,10 +383,13 @@ export function registerGoalEvents(core: GoalCore): void {
 		} else {
 			// A user-driven turn — clear any queued continuation so we don't
 			// double-fire after the user's own message returns. Also reset the
-			// autoContinue nudge state so the user always gets a fresh chain.
+			// autoContinue nudge state and no-progress breaker so the user always
+			// gets a fresh autonomous recovery chain.
 			core.runtime.setCheckpoint(null);
 			core.clearContinuationState();
 			networkErrorRecoveryAfterSettleFor = null;
+			consecutiveNoProgressTurns = 0;
+			noProgressRecoveryAttempt = 0;
 		}
 
 		if (!core.state.goal) {
@@ -460,6 +467,10 @@ export function registerGoalEvents(core: GoalCore): void {
 		} catch {
 			// Ledger read failure should not break the prompt
 		}
+		if (noProgressRecoveryAttempt > 0) {
+			prompt = `${prompt}\n\n${noProgressRecoveryPrompt(noProgressRecoveryAttempt, MAX_NO_PROGRESS_RECOVERIES)}`;
+			noProgressRecoveryAttempt = 0;
+		}
 		if (core.runtime.isPostCompactReminderPending() && shouldInjectPostCompactReminder({ pending: true, goal: activeGoal })) {
 			core.runtime.clearPostCompactReminder();
 			// PR E §62: post-compaction DELTA — the active system goal block already
@@ -525,6 +536,23 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.runtime.clearNetworkErrorBackoff();
 		core.persist(ctx);
 		core.updateUI(ctx);
+		// A successful provider response is not necessarily productive. Without
+		// this gate, a model can emit the same status-only answer every few
+		// seconds and agent_end will keep queuing checkpoints forever.
+		if (core.goalWorkToolCalledThisTurn) {
+			consecutiveNoProgressTurns = 0;
+			noProgressRecoveryAttempt = 0;
+		} else {
+			consecutiveNoProgressTurns += 1;
+			if (consecutiveNoProgressTurns > MAX_NO_PROGRESS_RECOVERIES) {
+				ctx.ui.notify(
+					`No-progress circuit breaker stopped automatic continuation after ${consecutiveNoProgressTurns} consecutive turns without meaningful tool work. The goal remains active; user input starts a fresh recovery chain.`,
+					"warning",
+				);
+				return;
+			}
+			noProgressRecoveryAttempt = consecutiveNoProgressTurns;
+		}
 		// agent_end runs before pi finishes retries, compaction, terminating-tool
 		// settlement, and queued messages. Starting the continuation timer here
 		// can poll a stale busy context for minutes on pi 0.84. agent_settled is
@@ -566,6 +594,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		continuationAfterSettleFor = null;
 		networkErrorRecoveryAfterSettleFor = null;
+		consecutiveNoProgressTurns = 0;
+		noProgressRecoveryAttempt = 0;
 		core.accountProgress(ctx);
 		core.clearContinuationState();
 		core.terminalInputUnsubscribe?.();

@@ -297,6 +297,20 @@ export function continuationPrompt(goal: GoalRecord, _settings?: GoalSettings): 
 	return checkpointTriggerPrompt(goal.id);
 }
 
+export function noProgressRecoveryPrompt(attempt: number, maxAttempts: number): string {
+	const content = [
+		`[NO-PROGRESS RECOVERY ${attempt}/${maxAttempts}]`,
+		"The previous auto-continue turn performed no meaningful tool work. Do not repeat its conclusion or merely restate status.",
+		"Do not ask the user to clear, pause, resume, or authorize the goal. Do not declare TERMINAL_NOT_PROVEN yourself.",
+		"Re-read the objective, pending tasks, auditor feedback, and repository state. Separate uncontrollable outcome evidence from controllable work: implementation, research, competitive analysis, technical readiness, instrumentation, tests, experiments, documentation, and reversible local preparation.",
+		"Choose a materially different route and perform at least one materially productive tool action now. Do not wait or poll. Preserve unmet outcome claims as NOT PROVEN rather than weakening them or pretending they are satisfied.",
+		attempt >= maxAttempts
+			? "This is the final automatic recovery attempt. Another empty turn opens the no-progress circuit breaker instead of consuming turns forever."
+			: "If the prior route is exhausted, inspect other unsatisfied criteria and work the strongest safe independent one.",
+	].join("\n");
+	return content.length > MAX_PROMPT_FRAGMENT_CHARS ? `${content.slice(0, MAX_PROMPT_FRAGMENT_CHARS)}\n…[prompt truncated]` : content;
+}
+
 export function staleContinuationPrompt(staleGoalId: string, current: GoalRecord | null): string {
 	const currentLine = current
 		? `Current goal: ${current.id} (${statusLabel(current)}) - ${truncateText(current.objective)}`

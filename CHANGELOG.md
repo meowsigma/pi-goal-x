@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.6] — 2026-08-30
+
+### Fixed
+
+- **Successful empty turns no longer auto-loop forever** — the first two consecutive turns without meaningful goal-tool work receive escalating recovery steering that requires a materially different, tool-using strategy. A third empty turn opens a circuit breaker and queues no further checkpoint while leaving the goal active and recoverable. User input or meaningful work resets the breaker. This prevents status-only responses such as repeated `/goal-clear` or unsupported `TERMINAL_NOT_PROVEN` messages from consuming hours of turns.
+
 ## [0.30.5] — 2026-08-25
 
 ### Fixed

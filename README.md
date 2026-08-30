@@ -45,6 +45,10 @@ The `/goal-direct` and `/sisyphus-direct` commands create a goal immediately fro
 
 Open goals are stored in `.pi/goals/`. Their objectives, tasks, status, and progress remain available across sessions and context changes.
 
+### Auto-continuation safety
+
+Active goals continue after meaningful work. If a model instead ends a turn without meaningful tool work, pi-goal-x supplies two escalating recovery turns that require a materially different productive strategy. A third consecutive empty turn opens a circuit breaker: no more automatic checkpoint is queued, the goal remains active, and user input starts a fresh recovery chain. This prevents status-only or waiting responses from looping indefinitely.
+
 ### Multiple open goals
 
 A project can contain several open goals. Each session focuses on one goal at a time, and you can switch between them with `/goal-focus`.

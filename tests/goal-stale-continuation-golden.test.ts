@@ -41,6 +41,7 @@ function createHarness(cwd: string) {
 	const handlers: HandlerMap = {};
 	const sentMessages: Array<{ customType?: string; content?: string; details?: unknown }> = [];
 	const notifications: Array<{ message: string; level?: string }> = [];
+	const emittedEvents: Array<{ name: string; payload: unknown }> = [];
 	let aborts = 0;
 	let toolCalls = 0;
 
@@ -58,6 +59,10 @@ function createHarness(cwd: string) {
 		sendUserMessage: () => {},
 		getActiveTools: () => ["read", "bash", "edit", "write"],
 		setActiveTools: () => {},
+		events: {
+			on: () => {},
+			emit: (name: string, payload: unknown) => { emittedEvents.push({ name, payload }); },
+		},
 		hasUI: false,
 	};
 
@@ -88,6 +93,7 @@ function createHarness(cwd: string) {
 		handlers,
 		sentMessages,
 		notifications,
+		emittedEvents,
 		get aborts() { return aborts; },
 		get toolCalls() { return toolCalls; },
 		ctx,
@@ -412,6 +418,10 @@ test("three consecutive no-progress turns open the circuit breaker instead of lo
 
 		assert.equal(await countCheckpoints(h), 2, "the third empty turn must not queue another checkpoint");
 		assert.match(h.notifications.at(-1)?.message ?? "", /circuit breaker stopped automatic continuation/i);
+		assert.deepEqual(h.emittedEvents.at(-1), {
+			name: "pi-goal:no-progress-circuit-open",
+			payload: { version: 1, goalId: goal.id, consecutiveTurns: 3 },
+		}, "other continuation owners receive an authoritative circuit-open signal");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}

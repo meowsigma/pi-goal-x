@@ -560,6 +560,11 @@ export function registerGoalEvents(core: GoalCore): void {
 					`No-progress circuit breaker stopped automatic continuation after ${consecutiveNoProgressTurns} consecutive turns without meaningful tool work. The goal remains active; user input starts a fresh recovery chain.`,
 					"warning",
 				);
+				pi.events?.emit?.("pi-goal:no-progress-circuit-open", {
+					version: 1,
+					goalId: core.state.goal.id,
+					consecutiveTurns: consecutiveNoProgressTurns,
+				});
 				return;
 			}
 			noProgressRecoveryAttempt = consecutiveNoProgressTurns;

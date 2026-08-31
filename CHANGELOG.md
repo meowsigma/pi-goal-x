@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.10] — 2026-08-31
+
+### Fixed
+
+- **The no-progress circuit breaker is now authoritative across extensions** — opening the breaker emits a versioned `pi-goal:no-progress-circuit-open` event so compatible continuation owners can immediately suppress stale ordinary-request recovery. This prevents another extension from restarting the same empty goal loop after pi-goal-x has stopped it.
+
 ## [0.30.9] — 2026-08-31
 
 ### Fixed

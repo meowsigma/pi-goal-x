@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -412,6 +412,32 @@ test("three consecutive no-progress turns open the circuit breaker instead of lo
 
 		assert.equal(await countCheckpoints(h), 2, "the third empty turn must not queue another checkpoint");
 		assert.match(h.notifications.at(-1)?.message ?? "", /circuit breaker stopped automatic continuation/i);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("blocked goals inject a blocked prompt and never fall through to active-work steering", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		const blockedGoal = {
+			...goal,
+			status: "blocked" as const,
+			autoContinue: false,
+			pauseReason: "A required dependency remains unavailable.",
+		};
+		unlinkSync(path.join(cwd, ".pi", "goals", "active_goal_fixture.md"));
+		const persistedBlockedGoal = writeActiveGoalFile({ cwd } as ExtensionContext, blockedGoal);
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(persistedBlockedGoal));
+		const result = await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user typed: inspect status",
+			systemPromptOptions: {},
+		}, h.ctx) as { systemPrompt?: string };
+		assert.match(result.systemPrompt ?? "", /\[PI GOAL BLOCKED goalId=/);
+		assert.match(result.systemPrompt ?? "", /Do not autonomously continue substantive work/i);
+		assert.doesNotMatch(result.systemPrompt ?? "", /authoritative current lifecycle state is ACTIVE/i);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}

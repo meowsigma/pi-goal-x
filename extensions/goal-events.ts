@@ -437,6 +437,12 @@ export function registerGoalEvents(core: GoalCore): void {
 				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish the paused goal and the objective is already satisfied based on available evidence, you may call update_goal({status: "complete"}). To abandon a goal, the user runs /goal-clear. Do not report the goal blocked in response to a pause.`,
 			};
 		}
+		if (core.state.goal.status === "blocked") {
+			const current = core.state.goal;
+			return {
+				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL BLOCKED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}\n\nBlocker: ${current.pauseReason ?? "(unknown)"}\n\nThe goal is blocked. Do not autonomously continue substantive work or treat it as active. Preserve the blocker and yield to the user; only a user-owned lifecycle action may resume or revise this goal.`,
+			};
+		}
 		// Token-budget-limited goals get one-time wrap-up steering: summarize,
 		// do not start new substantive work, never claim completion unless real.
 		if (core.state.goal?.status === "budget_limited") {

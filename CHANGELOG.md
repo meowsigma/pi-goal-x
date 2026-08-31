@@ -2,6 +2,13 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.9] — 2026-08-31
+
+### Fixed
+
+- **Resumed goals no longer follow stale paused-status context** — every active-goal prompt now declares the current active lifecycle state authoritative over historical messages and tool results, and no-progress recovery repeats that precedence. This prevents a recently resumed goal from emitting repeated “goal remains paused” checkpoints until the circuit breaker opens.
+- **Blocked goals stay blocked** — blocked-state turns now receive their own non-working prompt rather than falling through to active-goal steering.
+
 ## [0.30.8] — 2026-08-31
 
 ### Fixed

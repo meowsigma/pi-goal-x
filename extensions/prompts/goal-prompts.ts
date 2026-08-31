@@ -252,6 +252,7 @@ function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	const budget = budgetLine(goal);
 	let prompt = `[PI GOAL ACTIVE goalId=${goal.id}]
 Status: ${statusLabel(goal)}${budget ? `\n${budget}` : ""}
+The authoritative current lifecycle state is ACTIVE. Earlier messages or tool results saying this goal is paused are historical and superseded; continue from this active state.
 Mode: ${goal.sisyphus ? "sisyphus" : "regular"}
 Usage: ${formatUsage(goal)}
 
@@ -301,6 +302,7 @@ export function noProgressRecoveryPrompt(attempt: number, maxAttempts: number): 
 	const content = [
 		`[NO-PROGRESS RECOVERY ${attempt}/${maxAttempts}]`,
 		"The previous auto-continue turn performed no meaningful tool work. Do not repeat its conclusion or merely restate status.",
+		"The current [PI GOAL ACTIVE] block is authoritative; earlier paused-status messages are stale and must not stop resumed work.",
 		"Do not ask the user to clear, pause, resume, or authorize the goal. Do not declare TERMINAL_NOT_PROVEN yourself.",
 		"Re-read the objective, pending tasks, auditor feedback, and repository state. Separate uncontrollable outcome evidence from controllable work: implementation, research, competitive analysis, technical readiness, instrumentation, tests, experiments, documentation, and reversible local preparation.",
 		"Choose a materially different route and perform at least one materially productive tool action now. Do not wait or poll. Preserve unmet outcome claims as NOT PROVEN rather than weakening them or pretending they are satisfied.",

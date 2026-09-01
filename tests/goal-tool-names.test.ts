@@ -82,7 +82,7 @@ test("progress tool set excludes read-only surface tools and workhorse includes 
 	for (const name of ["get_goal", "create_goal"]) {
 		assert.equal(GOAL_PROGRESS_TOOL_NAMES.includes(name as typeof GOAL_PROGRESS_TOOL_NAMES[number]), false, name);
 	}
-	for (const name of [UPDATE_GOAL_TOOL_NAME, SET_GOAL_TASKS_TOOL_NAME, UPDATE_GOAL_TASK_TOOL_NAME, "write", "edit", "bash", "read"]) {
+	for (const name of [UPDATE_GOAL_TOOL_NAME, SET_GOAL_TASKS_TOOL_NAME, UPDATE_GOAL_TASK_TOOL_NAME, "write", "edit", "bash", "read", "bg_logs"]) {
 		assert.equal(GOAL_PROGRESS_TOOL_NAMES.includes(name as typeof GOAL_PROGRESS_TOOL_NAMES[number]), true, name);
 	}
 });
@@ -91,7 +91,7 @@ test("work tool set covers the five goal tools plus common host work tools", () 
 	for (const name of FIVE_GOAL_TOOLS) {
 		assert.ok(GOAL_WORK_TOOL_NAMES.includes(name as typeof GOAL_WORK_TOOL_NAMES[number]), `work set must include ${name}`);
 	}
-	for (const name of ["bash", "write", "read", "edit", "grep", "find", "ls"]) {
+	for (const name of ["bash", "write", "read", "edit", "grep", "find", "ls", "bg_logs"]) {
 		assert.ok(GOAL_WORK_TOOL_NAMES.includes(name as typeof GOAL_WORK_TOOL_NAMES[number]), `work set must include ${name}`);
 	}
 	for (const removed of REMOVED_STEADY) {

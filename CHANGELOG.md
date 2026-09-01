@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.13] — 2026-09-01
+
+### Fixed
+
+- **Background jobs now own continuation while they run** — successful auto-notifying `bg_run` launches defer goal checkpoints to their provenance-bearing `background-task-notification`; completed notifications and changed successful `bg_logs` output reset stale no-progress recovery. Failed or detached launches and `bg_status` polling remain nonproductive.
+
 ## [0.30.12] — 2026-09-01
 
 ### Fixed

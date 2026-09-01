@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isMeaningfulProgressToolCall } from "./goal-format.ts";
 
-const OBSERVATIONAL_TOOL_NAMES = new Set(["bash", "read", "grep", "find", "ls"]);
+const OBSERVATIONAL_TOOL_NAMES = new Set(["bash", "read", "grep", "find", "ls", "bg_logs"]);
 const MAX_OBSERVATIONS = 64;
 
 function stableJson(value: unknown): string {
@@ -21,9 +21,17 @@ function fingerprint(value: unknown): string {
 }
 
 function semanticInput(toolName: string, input: unknown): unknown {
-	if (toolName !== "bash" || !input || typeof input !== "object") return input;
-	// Timeout is an execution control, not a materially different diagnostic.
-	return { command: (input as Record<string, unknown>).command };
+	if (!input || typeof input !== "object") return input;
+	const raw = input as Record<string, unknown>;
+	if (toolName === "bash") {
+		// Timeout is an execution control, not a materially different diagnostic.
+		return { command: raw.command };
+	}
+	if (toolName === "bg_logs") {
+		// Tail and byte limits alter presentation, not which completed task is observed.
+		return { taskId: raw.taskId };
+	}
+	return input;
 }
 
 /**
@@ -33,7 +41,7 @@ function semanticInput(toolName: string, input: unknown): unknown {
  * circuit while still recognizing newly observed state as useful evidence.
  */
 export class GoalProgressEvidenceTracker {
-	private readonly pendingObservations = new Map<string, string>();
+	private readonly pendingObservations = new Map<string, { invocation: string; toolName: string }>();
 	private readonly lastResultByInvocation = new Map<string, string>();
 
 	beginAgentRun(): void {
@@ -49,22 +57,28 @@ export class GoalProgressEvidenceTracker {
 		// Runtime events always carry an id. Preserve conservative compatibility
 		// with synthetic/older event producers that omit it.
 		if (typeof toolCallId !== "string" || toolCallId.length === 0) return true;
-		this.pendingObservations.set(toolCallId, fingerprint({ toolName, input: semanticInput(toolName, input) }));
+		this.pendingObservations.set(toolCallId, {
+			invocation: fingerprint({ toolName, input: semanticInput(toolName, input) }),
+			toolName,
+		});
 		return false;
 	}
 
 	observeResult(toolCallId: unknown, result: unknown, isError: unknown): boolean {
 		if (typeof toolCallId !== "string") return false;
-		const invocation = this.pendingObservations.get(toolCallId);
-		if (!invocation) return false;
+		const pending = this.pendingObservations.get(toolCallId);
+		if (!pending) return false;
 		this.pendingObservations.delete(toolCallId);
 		if (isError === true) return false;
 
-		const resultFingerprint = fingerprint(result);
-		const previous = this.lastResultByInvocation.get(invocation);
+		const resultEvidence = pending.toolName === "bg_logs" && result && typeof result === "object"
+			? (result as Record<string, unknown>).content
+			: result;
+		const resultFingerprint = fingerprint(resultEvidence);
+		const previous = this.lastResultByInvocation.get(pending.invocation);
 		// Refresh insertion order so the bounded map retains recently used calls.
-		this.lastResultByInvocation.delete(invocation);
-		this.lastResultByInvocation.set(invocation, resultFingerprint);
+		this.lastResultByInvocation.delete(pending.invocation);
+		this.lastResultByInvocation.set(pending.invocation, resultFingerprint);
 		while (this.lastResultByInvocation.size > MAX_OBSERVATIONS) {
 			const oldest = this.lastResultByInvocation.keys().next().value;
 			if (typeof oldest !== "string") break;

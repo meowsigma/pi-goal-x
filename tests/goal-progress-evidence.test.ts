@@ -25,6 +25,19 @@ test("changed observational results count as new evidence", () => {
 	assert.equal(tracker.observeResult("second", { content: [{ type: "text", text: "new" }] }, false), true);
 });
 
+test("completed background output is evidence once, while status polling is nonproductive", () => {
+	const tracker = new GoalProgressEvidenceTracker();
+	const content = [{ type: "text", text: "357 passed" }];
+	assert.equal(tracker.observeCall("logs-1", "bg_logs", { taskId: "task-1", maxBytes: 1_000 }), false);
+	assert.equal(tracker.observeResult("logs-1", { content, details: { bytesRead: 1_000, truncated: true } }, false), true);
+	tracker.beginAgentRun();
+	assert.equal(tracker.observeCall("logs-2", "bg_logs", { taskId: "task-1", maxBytes: 50_000 }), false);
+	assert.equal(tracker.observeResult("logs-2", { content, details: { bytesRead: 50_000, truncated: false } }, false), false,
+		"presentation metadata changes do not make unchanged logs productive");
+	assert.equal(tracker.observeCall("status", "bg_status", { taskId: "task-1" }), false);
+	assert.equal(tracker.observeResult("status", { status: "running" }, false), false);
+});
+
 test("failed observations never count as progress", () => {
 	const tracker = new GoalProgressEvidenceTracker();
 	tracker.observeCall("failed", "bash", { command: "git status --short" });

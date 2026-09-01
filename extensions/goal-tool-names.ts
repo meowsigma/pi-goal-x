@@ -48,6 +48,7 @@ export const GOAL_WORK_TOOL_NAMES = [
 	"grep",
 	"find",
 	"ls",
+	"bg_logs",
 ] as const;
 
 /**
@@ -65,6 +66,7 @@ export const GOAL_PROGRESS_TOOL_NAMES = [
 	"grep",
 	"find",
 	"ls",
+	"bg_logs",
 ] as const;
 
 /** Tools the model may still call on a stopped turn (state reads only). */

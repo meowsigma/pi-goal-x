@@ -521,6 +521,64 @@ test("an async delegated workflow owns continuation until its next notification"
 	}
 });
 
+test("an auto-notifying background task owns continuation until its terminal notification", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({
+			toolCallId: "background-1",
+			toolName: "bg_run",
+			input: { name: "verify", command: "npm test", isAgent: false },
+		}, h.ctx);
+		await h.handlers["tool_execution_end"]!({
+			toolCallId: "background-1",
+			toolName: "bg_run",
+			result: { content: [{ type: "text", text: "Started background task verify (task-1)" }] },
+			isError: false,
+		}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+
+		assert.equal(await countCheckpoints(h), 0, "goal checkpoints must not race the background task notification");
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("a background terminal notification and its logs reset stale no-progress recovery", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["context"]!({
+			messages: [{ role: "custom", customType: "background-task-notification", content: "<background-task-notification><status>completed</status></background-task-notification>" }],
+		}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({ toolCallId: "logs-1", toolName: "bg_logs", input: { taskId: "task-1" } }, h.ctx);
+		await h.handlers["tool_execution_end"]!({
+			toolCallId: "logs-1",
+			toolName: "bg_logs",
+			result: { content: [{ type: "text", text: "357 passed" }] },
+			isError: false,
+		}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+
+		assert.equal(await countCheckpoints(h), 1, "terminal output hands productive continuation back to the goal");
+		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: latestCheckpointContent(h), systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+		assert.doesNotMatch(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY/);
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
 test("a subagent progress wake suppresses the parent breaker without crediting status polling", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);

@@ -492,6 +492,45 @@ test("meaningful tool work survives the post-tool provider turn and resets the c
 	}
 });
 
+test("repeated observational shell output does not reset the no-progress circuit breaker", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	const checkpoint = `<pi_goal_continuation goal_id="${goal.id}" kind="checkpoint">continue`;
+	const command = "git log --oneline -6 && git status --short && git rev-parse HEAD";
+	const unchangedResult = { content: [{ type: "text", text: "6eb3723\n6eb3723\n" }] };
+	async function runObservation(run: number): Promise<void> {
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		const toolCallId = `status-${run}`;
+		await h.handlers["tool_call"]!({ toolCallId, toolName: "bash", args: { command } }, h.ctx);
+		await h.handlers["tool_execution_end"]!({ toolCallId, toolName: "bash", result: unchangedResult, isError: false }, h.ctx);
+		await h.handlers["turn_end"]!({ message: { role: "assistant", stopReason: "toolUse" } }, idleCtx(h.ctx));
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+	}
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+
+		await runObservation(1);
+		assert.equal(await countCheckpoints(h), 1, "the first diagnostic observation is useful");
+
+		for (let run = 2; run <= 3; run += 1) {
+			await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
+			await runObservation(run);
+			assert.equal(await countCheckpoints(h), run, `repeated observation ${run} uses bounded recovery`);
+		}
+
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
+		await runObservation(4);
+		assert.equal(await countCheckpoints(h), 3, "the third unchanged repetition opens the circuit instead of resetting it");
+		assert.ok(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")));
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
 test("meaningful tool work resets the no-progress circuit breaker", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);

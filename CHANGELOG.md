@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.11] — 2026-08-31
+
+### Fixed
+
+- **Repeated status checks no longer masquerade as productive goal work** — observational `bash`, `read`, `grep`, `find`, and `ls` calls are credited only after a successful result that differs from the previous result for the same invocation. Identical minute-by-minute repository checks now advance the bounded no-progress recovery chain and open its circuit instead of resetting it; changed evidence and real mutations still reset recovery.
+
 ## [0.30.10] — 2026-08-31
 
 ### Fixed

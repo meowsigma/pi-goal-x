@@ -9,7 +9,6 @@ import {
 	hasNetworkErrorAssistantMessage,
 	isAbortedAssistantMessage,
 	isErrorAssistantMessage,
-	isMeaningfulProgressToolCall,
 	isToolUseAssistantMessage,
 } from "./goal-format.ts";
 import { buildCompactionSummary, buildPostCompactionGoalDelta } from "./goal-compaction.ts";
@@ -22,7 +21,9 @@ import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord } from "./
 import { goalSelectorLabel } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
-import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";import {
+import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
+import { GoalProgressEvidenceTracker } from "./goal-progress-evidence.ts";
+import {
 	goalPrompt,
 	noProgressRecoveryPrompt,
 	staleContinuationPrompt,
@@ -98,6 +99,25 @@ export function registerGoalEvents(core: GoalCore): void {
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
 	let consecutiveNoProgressTurns = 0;
 	let noProgressRecoveryAttempt = 0;
+	const progressEvidence = new GoalProgressEvidenceTracker();
+	const recordMeaningfulWorkAttempt = (ctx: ExtensionContext, toolName: string): void => {
+		core.goalWorkToolCalledThisTurn = true;
+		// Issue #26: record a meaningful work attempt against armed Oracle advice.
+		const focusedId = core.focusedGoalId;
+		if (!focusedId || !hasPendingOracleAdviceForFocusedGoal(focusedId)) return;
+		const armed = consumeOracleFollowupMarker(focusedId);
+		if (!armed) return;
+		try {
+			core.goalService.appendEvents(ctx, [{
+				type: "oracle_followup_attempted",
+				goalId: armed.goalId,
+				fingerprint: armed.fingerprint,
+				adviceId: armed.adviceId,
+				firstToolName: toolName,
+				at: nowIso(),
+			}]);
+		} catch { /* best-effort ledger append */ }
+	};
 
 	pi.on("context", async (event) => {
 		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
@@ -110,6 +130,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		// progress once per run so work from an earlier tool turn survives the
 		// final text-only provider turn and reaches the no-progress breaker.
 		core.goalWorkToolCalledThisTurn = false;
+		progressEvidence.beginAgentRun();
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
@@ -145,33 +166,21 @@ export function registerGoalEvents(core: GoalCore): void {
 					`End the turn with a brief summary and yield to the user.`,
 			};
 		}
-		// Track for #4 empty-turn gate.
-		if (isMeaningfulProgressToolCall(event.toolName, asRecord(event)?.args)) {
-			core.goalWorkToolCalledThisTurn = true;
-			// Issue #26: record a meaningful work attempt against armed Oracle
-			// advice. get_goal / echo-only reads are excluded upstream by
-			// isMeaningfulProgressToolCall.
-			const focusedId = core.focusedGoalId;
-			if (focusedId && hasPendingOracleAdviceForFocusedGoal(focusedId)) {
-				const armed = consumeOracleFollowupMarker(focusedId);
-				if (armed) {
-					try {
-						core.goalService.appendEvents(ctx, [{
-							type: "oracle_followup_attempted",
-							goalId: armed.goalId,
-							fingerprint: armed.fingerprint,
-							adviceId: armed.adviceId,
-							firstToolName: event.toolName,
-							at: nowIso(),
-						}]);
-					} catch { /* best-effort ledger append */ }
-				}
-			}
+		// Track for #4 empty-turn gate. Mutation tools are credited at call time;
+		// observational tools are credited only after a changed successful result.
+		const eventRecord = asRecord(event);
+		const toolInput = eventRecord?.input ?? eventRecord?.args;
+		if (progressEvidence.observeCall(eventRecord?.toolCallId, event.toolName, toolInput)) {
+			recordMeaningfulWorkAttempt(ctx, event.toolName);
 		}
 		return;
 	});
 
-	pi.on("tool_execution_end", async (_event, ctx) => {
+	pi.on("tool_execution_end", async (event, ctx) => {
+		const eventRecord = asRecord(event);
+		if (progressEvidence.observeResult(eventRecord?.toolCallId, eventRecord?.result, eventRecord?.isError)) {
+			recordMeaningfulWorkAttempt(ctx, typeof eventRecord?.toolName === "string" ? eventRecord.toolName : "observational-tool");
+		}
 		core.touchGoalActivity(); // F5
 		core.accountProgress(ctx);
 	});

@@ -56,6 +56,7 @@ export const GOAL_WORK_TOOL_NAMES = [
  */
 export const GOAL_PROGRESS_TOOL_NAMES = [
 	UPDATE_GOAL_TOOL_NAME,
+	SET_GOAL_TASKS_TOOL_NAME,
 	UPDATE_GOAL_TASK_TOOL_NAME,
 	"write",
 	"edit",

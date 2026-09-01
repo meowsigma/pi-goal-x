@@ -7,4 +7,4 @@
 - [x] Full verification passed: 885/885 tests, TypeScript, ESLint, diff checks, and 59-file package.
 - [x] Fusion review found realistic `bg_logs` presentation metadata could spoof changed output; added a failing regression and normalized result evidence to content only.
 - [x] Independent re-review returned no findings after the metadata repair.
-- [ ] Release, push, and install.
+- [x] Released, pushed, and installed as pi-goal-x 0.30.13.

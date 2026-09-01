@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.12] — 2026-09-01
+
+### Fixed
+
+- **Active delegated workflows no longer trigger false parent no-progress warnings** — successful asynchronous `subagent` launches and live steering defer continuation to the delegate's native notification instead of racing it with goal checkpoints. Supervisor progress and attention wakes reset parent recovery and await the next child event; terminal child notifications remain outcomes that can continue the goal. Read-only `subagent status` polling still does not count as progress.
+
 ## [0.30.11] — 2026-08-31
 
 ### Fixed

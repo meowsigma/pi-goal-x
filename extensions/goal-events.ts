@@ -24,6 +24,11 @@ import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
 import { GoalProgressEvidenceTracker } from "./goal-progress-evidence.ts";
 import {
+	delegatedWakeKindFromMessage,
+	isAsyncDelegationCall,
+	type DelegatedWakeKind,
+} from "./goal-delegated-progress.ts";
+import {
 	goalPrompt,
 	noProgressRecoveryPrompt,
 	staleContinuationPrompt,
@@ -99,6 +104,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
 	let consecutiveNoProgressTurns = 0;
 	let noProgressRecoveryAttempt = 0;
+	let delegatedWakeThisRun: DelegatedWakeKind | null = null;
+	const pendingAsyncDelegations = new Set<string>();
 	const progressEvidence = new GoalProgressEvidenceTracker();
 	const recordMeaningfulWorkAttempt = (ctx: ExtensionContext, toolName: string): void => {
 		core.goalWorkToolCalledThisTurn = true;
@@ -120,6 +127,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	};
 
 	pi.on("context", async (event) => {
+		const latestMessage = event.messages[event.messages.length - 1];
+		delegatedWakeThisRun ??= delegatedWakeKindFromMessage(latestMessage);
 		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
 		// Reference equality means no goal-event messages existed at all.
 		return messages === null ? undefined : { messages: messages as typeof event.messages };
@@ -130,6 +139,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		// progress once per run so work from an earlier tool turn survives the
 		// final text-only provider turn and reaches the no-progress breaker.
 		core.goalWorkToolCalledThisTurn = false;
+		delegatedWakeThisRun = null;
+		pendingAsyncDelegations.clear();
 		progressEvidence.beginAgentRun();
 	});
 
@@ -170,6 +181,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		// observational tools are credited only after a changed successful result.
 		const eventRecord = asRecord(event);
 		const toolInput = eventRecord?.input ?? eventRecord?.args;
+		if (isAsyncDelegationCall(event.toolName, toolInput) && typeof eventRecord?.toolCallId === "string") {
+			pendingAsyncDelegations.add(eventRecord.toolCallId);
+		}
 		if (progressEvidence.observeCall(eventRecord?.toolCallId, event.toolName, toolInput)) {
 			recordMeaningfulWorkAttempt(ctx, event.toolName);
 		}
@@ -178,7 +192,12 @@ export function registerGoalEvents(core: GoalCore): void {
 
 	pi.on("tool_execution_end", async (event, ctx) => {
 		const eventRecord = asRecord(event);
-		if (progressEvidence.observeResult(eventRecord?.toolCallId, eventRecord?.result, eventRecord?.isError)) {
+		const toolCallId = eventRecord?.toolCallId;
+		if (typeof toolCallId === "string" && pendingAsyncDelegations.delete(toolCallId) && eventRecord?.isError !== true) {
+			recordMeaningfulWorkAttempt(ctx, "subagent");
+			delegatedWakeThisRun = "awaiting";
+		}
+		if (progressEvidence.observeResult(toolCallId, eventRecord?.result, eventRecord?.isError)) {
 			recordMeaningfulWorkAttempt(ctx, typeof eventRecord?.toolName === "string" ? eventRecord.toolName : "observational-tool");
 		}
 		core.touchGoalActivity(); // F5
@@ -556,6 +575,19 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.runtime.clearNetworkErrorBackoff();
 		core.persist(ctx);
 		core.updateUI(ctx);
+		// While an asynchronous delegate is active, its own notification is the
+		// continuation owner. Do not race it with a goal checkpoint or classify
+		// the supervising parent as stalled merely because work happened remotely.
+		if (delegatedWakeThisRun === "awaiting") {
+			delegatedWakeThisRun = null;
+			consecutiveNoProgressTurns = 0;
+			noProgressRecoveryAttempt = 0;
+			return;
+		}
+		if (delegatedWakeThisRun === "terminal") {
+			delegatedWakeThisRun = null;
+			core.goalWorkToolCalledThisTurn = true;
+		}
 		// A successful provider response is not necessarily productive. Without
 		// this gate, a model can emit the same status-only answer every few
 		// seconds and agent_end will keep queuing checkpoints forever.

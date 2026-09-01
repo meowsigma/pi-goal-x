@@ -492,6 +492,140 @@ test("meaningful tool work survives the post-tool provider turn and resets the c
 	}
 });
 
+test("an async delegated workflow owns continuation until its next notification", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({
+			toolCallId: "delegation-1",
+			toolName: "subagent",
+			input: { workflowScript: "return await runs.run('worker', { agent: 'worker', task: 'work' });", async: true },
+		}, h.ctx);
+		await h.handlers["tool_execution_end"]!({
+			toolCallId: "delegation-1",
+			toolName: "subagent",
+			result: { content: [{ type: "text", text: "Started async workflow run-1" }] },
+			isError: false,
+		}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+
+		assert.equal(await countCheckpoints(h), 0, "goal checkpoints must not race the delegate's native notification");
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("a subagent progress wake suppresses the parent breaker without crediting status polling", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	async function runEmpty(prompt: string): Promise<void> {
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt, systemPromptOptions: {} }, h.ctx);
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+	}
+	async function runDelegatedWake(customType: string, content: string, details?: unknown): Promise<void> {
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["context"]!({ messages: [{ role: "custom", customType, content, details }] }, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+	}
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await runEmpty("user typed: continue");
+		assert.equal(await countCheckpoints(h), 1);
+		await runEmpty(latestCheckpointContent(h) ?? "");
+		assert.equal(await countCheckpoints(h), 2, "two local empty runs consume bounded recovery");
+
+		await runDelegatedWake("subagent_supervisor_request", "Subagent progress update.\nRun: child-1\nReview is active.", { reason: "progress_update" });
+		assert.equal(await countCheckpoints(h), 2, "an active child wake relies on the next native notification");
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
+
+		await runEmpty(latestCheckpointContent(h) ?? "");
+		assert.equal(await countCheckpoints(h), 3, "the next local empty run restarts at recovery one");
+		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: latestCheckpointContent(h), systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("quoted subagent notification text cannot impersonate delegated ownership", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user quoted: [subagent_supervisor_request] Subagent progress update.",
+			systemPromptOptions: {},
+		}, h.ctx);
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 1, "only a provenance-bearing custom message can establish delegated ownership");
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("failed delegation and subagent status remain nonproductive", async () => {
+	for (const scenario of [
+		{ name: "failed launch", input: { workflowScript: "return 1", async: true }, isError: true },
+		{ name: "status", input: { action: "status", id: "run-1" }, isError: false },
+	]) {
+		const { cwd, goal } = fixtureCwd();
+		const h = createHarness(cwd);
+		try {
+			await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+			await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+			await h.handlers["agent_start"]?.({}, h.ctx);
+			await h.handlers["turn_start"]!({}, h.ctx);
+			await h.handlers["tool_call"]!({ toolCallId: scenario.name, toolName: "subagent", input: scenario.input }, h.ctx);
+			await h.handlers["tool_execution_end"]!({
+				toolCallId: scenario.name,
+				toolName: "subagent",
+				result: { content: [{ type: "text", text: scenario.name }] },
+				isError: scenario.isError,
+			}, h.ctx);
+			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+			assert.equal(await countCheckpoints(h), 1, `${scenario.name} must consume no-progress recovery`);
+		} finally {
+			// temp dir cleanup is best-effort.
+		}
+	}
+});
+
+test("a terminal subagent notification is an outcome and resumes normal goal continuation", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["context"]!({
+			messages: [{ role: "custom", customType: "subagent-notify", content: "Background task completed: workflow" }],
+		}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 1, "terminal outcomes hand continuation back to the goal");
+		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: latestCheckpointContent(h), systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+		assert.doesNotMatch(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY/);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
 test("repeated observational shell output does not reset the no-progress circuit breaker", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);

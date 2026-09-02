@@ -22,6 +22,7 @@ import { goalSelectorLabel } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
+import { countTrailingNoProgressRuns } from "./goal-tool-names.ts";
 import { GoalProgressEvidenceTracker } from "./goal-progress-evidence.ts";
 import {
 	delegatedOwnershipFromMessages,
@@ -353,7 +354,9 @@ export function registerGoalEvents(core: GoalCore): void {
 			}
 		}
 		core.beginAccounting();
-		core.queueContinuation(ctx, true);
+		const branch = ctx.sessionManager?.getBranch?.() ?? [];
+		consecutiveNoProgressTurns = countTrailingNoProgressRuns(branch);
+		if (consecutiveNoProgressTurns <= MAX_NO_PROGRESS_RECOVERIES) core.queueContinuation(ctx, true);
 	});
 
 	pi.on("session_before_compact", async (_event, ctx) => {
@@ -369,7 +372,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (shouldArmPostCompactReminder(core.state.goal)) {
 			core.runtime.armPostCompactReminder();
 		}
-		core.queueContinuation(ctx, true);
+		const compactBranch = ctx.sessionManager?.getBranch?.() ?? [];
+		consecutiveNoProgressTurns = countTrailingNoProgressRuns(compactBranch);
+		if (consecutiveNoProgressTurns <= MAX_NO_PROGRESS_RECOVERIES) core.queueContinuation(ctx, true);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
@@ -378,7 +383,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
 		core.beginAccounting();
-		core.queueContinuation(ctx, true);
+		const treeBranch = ctx.sessionManager?.getBranch?.() ?? [];
+		consecutiveNoProgressTurns = countTrailingNoProgressRuns(treeBranch);
+		if (consecutiveNoProgressTurns <= MAX_NO_PROGRESS_RECOVERIES) core.queueContinuation(ctx, true);
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {

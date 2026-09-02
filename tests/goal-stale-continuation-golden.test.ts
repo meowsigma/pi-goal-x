@@ -142,6 +142,23 @@ async function startSession(handlers: HandlerMap, ctx: ExtensionContext, entries
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
+test("reload does not restart auto-continue after a latched no-progress chain", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		const emptyTurns = [
+			...sessionEntriesFor(goal),
+			{ message: { role: "assistant", stopReason: "end_turn" } },
+			{ message: { role: "assistant", stopReason: "end_turn" } },
+			{ message: { role: "assistant", stopReason: "end_turn" } },
+		];
+		await startSession(h.handlers, h.ctx, emptyTurns);
+		assert.equal(await countCheckpoints(h), 0, "session_start must not replay empty restatement loops after reload");
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
 test("golden: stale checkpoint for a non-focused goal aborts the turn and injects GOAL STALE", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);

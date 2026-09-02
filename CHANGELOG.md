@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.18] — 2026-09-02
+
+### Fixed
+
+- **Reload no longer replays a latched no-progress loop** — `session_start` / compact / tree restore the trailing empty-run count from session history. If three tool-free end_turns already latched the breaker, extension reload does not queue another continuation. A fresh user prompt still starts a recovery chain.
+
 ## [0.30.17] — 2026-09-02
 
 ### Fixed

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+	countTrailingNoProgressRuns,
 	isGoalProgressToolName,
 	ALL_REGISTERED_GOAL_TOOLS,
 	CORE_GOAL_TOOL_NAMES,
@@ -115,4 +116,17 @@ test("work tool set covers the five goal tools plus common host work tools", () 
 test("POST_STOP_ALLOWED_TOOLS only includes get_goal", () => {
 	assert.equal(POST_STOP_ALLOWED_TOOLS.length, 1, "post-stop allowlist should be minimal");
 	assert.equal(POST_STOP_ALLOWED_TOOLS[0], "get_goal");
+});
+
+test("trailing no-progress runs ignore earlier work and count empty end_turns", () => {
+	const entries = [
+		{ message: { role: "assistant", stopReason: "toolUse" } },
+		{ message: { role: "toolResult", toolName: "reach_search" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+		{ message: { role: "toolResult", toolName: "get_goal" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+	];
+	assert.equal(countTrailingNoProgressRuns(entries), 3);
 });

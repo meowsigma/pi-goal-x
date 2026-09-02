@@ -74,6 +74,38 @@ export function isGoalProgressToolName(toolName: string, input?: unknown): boole
 	return true;
 }
 
+function entryMessage(entry: unknown): Record<string, unknown> | null {
+	if (entry === null || typeof entry !== "object") return null;
+	const raw = entry as Record<string, unknown>;
+	const nested = raw.message;
+	if (nested !== null && typeof nested === "object") return nested as Record<string, unknown>;
+	return raw;
+}
+
+/** Count completed end_turn runs from the tail that used no progress-class tools. */
+export function countTrailingNoProgressRuns(entries: readonly unknown[]): number {
+	const runs: string[][] = [];
+	let tools: string[] = [];
+	for (const entry of entries) {
+		const message = entryMessage(entry);
+		if (!message) continue;
+		const toolName = typeof message.toolName === "string" ? message.toolName : undefined;
+		if (message.role === "toolResult" && toolName) tools.push(toolName);
+		if (message.role !== "assistant") continue;
+		const stop = message.stopReason;
+		if (stop === "error" || stop === "aborted" || stop === "toolUse") continue;
+		runs.push(tools);
+		tools = [];
+	}
+	let count = 0;
+	for (let index = runs.length - 1; index >= 0; index -= 1) {
+		const run = runs[index];
+		if (!run || run.some((name) => isGoalProgressToolName(name))) break;
+		count += 1;
+	}
+	return count;
+}
+
 export const GOAL_PROGRESS_TOOL_NAMES = [
 	UPDATE_GOAL_TOOL_NAME,
 	SET_GOAL_TASKS_TOOL_NAME,

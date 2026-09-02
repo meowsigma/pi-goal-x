@@ -12,6 +12,18 @@ export function delegatedWakeKindFromMessage(message: unknown): DelegatedWakeKin
 	return null;
 }
 
+export function delegatedOwnershipFromMessages(messages: readonly unknown[]): DelegatedWakeKind | null {
+	if (messages.length === 0) return null;
+	const latest = delegatedWakeKindFromMessage(messages[messages.length - 1]);
+	if (latest) return latest;
+	let lastWake: DelegatedWakeKind | null = null;
+	for (const message of messages) {
+		const wake = delegatedWakeKindFromMessage(message);
+		if (wake) lastWake = wake;
+	}
+	return lastWake === "awaiting" ? "awaiting" : null;
+}
+
 export function isAsyncDelegationCall(toolName: string, input: unknown): boolean {
 	const raw = asRecord(input);
 	if (!raw) return false;

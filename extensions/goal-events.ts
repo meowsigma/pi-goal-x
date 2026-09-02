@@ -24,7 +24,7 @@ import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
 import { GoalProgressEvidenceTracker } from "./goal-progress-evidence.ts";
 import {
-	delegatedWakeKindFromMessage,
+	delegatedOwnershipFromMessages,
 	isAsyncDelegationCall,
 	type DelegatedWakeKind,
 } from "./goal-delegated-progress.ts";
@@ -127,8 +127,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	};
 
 	pi.on("context", async (event) => {
-		const latestMessage = event.messages[event.messages.length - 1];
-		delegatedWakeThisRun ??= delegatedWakeKindFromMessage(latestMessage);
+		const ownership = delegatedOwnershipFromMessages(event.messages);
+		if (ownership) delegatedWakeThisRun = ownership;
 		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
 		// Reference equality means no goal-event messages existed at all.
 		return messages === null ? undefined : { messages: messages as typeof event.messages };
@@ -139,7 +139,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		// progress once per run so work from an earlier tool turn survives the
 		// final text-only provider turn and reaches the no-progress breaker.
 		core.goalWorkToolCalledThisTurn = false;
-		delegatedWakeThisRun = null;
+		if (delegatedWakeThisRun !== "awaiting") delegatedWakeThisRun = null;
 		pendingAsyncDelegations.clear();
 		progressEvidence.beginAgentRun();
 	});
@@ -579,7 +579,6 @@ export function registerGoalEvents(core: GoalCore): void {
 		// continuation owner. Do not race it with a goal checkpoint or classify
 		// the supervising parent as stalled merely because work happened remotely.
 		if (delegatedWakeThisRun === "awaiting") {
-			delegatedWakeThisRun = null;
 			consecutiveNoProgressTurns = 0;
 			noProgressRecoveryAttempt = 0;
 			return;

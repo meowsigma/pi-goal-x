@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.14] — 2026-09-01
+
+### Fixed
+
+- **Active child workflows keep continuation ownership across parent turns and reloads** — an awaiting supervisor/progress wake now persists until a provenance-bearing terminal notification. Later parent `subagent status`/`list` polling, user notes, and extension reloads no longer open the no-progress circuit while the child is still running.
+
 ## [0.30.13] — 2026-09-01
 
 ### Fixed

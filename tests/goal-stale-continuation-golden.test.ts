@@ -603,14 +603,33 @@ test("a subagent progress wake suppresses the parent breaker without crediting s
 		await runEmpty(latestCheckpointContent(h) ?? "");
 		assert.equal(await countCheckpoints(h), 2, "two local empty runs consume bounded recovery");
 
-		await runDelegatedWake("subagent_supervisor_request", "Subagent progress update.\nRun: child-1\nReview is active.", { reason: "progress_update" });
+		const progress = {
+			role: "custom",
+			customType: "subagent_supervisor_request",
+			content: "Subagent progress update.\nRun: child-1\nReview is active.",
+			details: { reason: "progress_update" },
+		};
+		await runDelegatedWake(progress.customType, progress.content, progress.details);
 		assert.equal(await countCheckpoints(h), 2, "an active child wake relies on the next native notification");
 		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 
-		await runEmpty(latestCheckpointContent(h) ?? "");
-		assert.equal(await countCheckpoints(h), 3, "the next local empty run restarts at recovery one");
-		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: latestCheckpointContent(h), systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
-		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/);
+		for (let run = 1; run <= 3; run += 1) {
+			await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: keep the current subagents", systemPromptOptions: {} }, h.ctx);
+			await h.handlers["agent_start"]?.({}, h.ctx);
+			await h.handlers["context"]!({ messages: [progress, { role: "user", content: "keep the current subagents" }] }, h.ctx);
+			await h.handlers["turn_start"]!({}, h.ctx);
+			await h.handlers["tool_call"]!({ toolCallId: `status-${run}`, toolName: "subagent", input: { action: "status", id: "child-1" } }, h.ctx);
+			await h.handlers["tool_execution_end"]!({
+				toolCallId: `status-${run}`,
+				toolName: "subagent",
+				result: { content: [{ type: "text", text: "running" }] },
+				isError: false,
+			}, h.ctx);
+			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		}
+		assert.equal(await countCheckpoints(h), 2, "status polling must not race an active child");
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}

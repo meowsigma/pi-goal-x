@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	delegatedOwnershipFromMessages,
 	delegatedWakeKindFromMessage,
 	isAsyncDelegationCall,
 } from "../extensions/goal-delegated-progress.ts";
@@ -37,6 +38,26 @@ test("async launches and live steering await notifications, but status and foreg
 	assert.equal(isAsyncDelegationCall("subagent", { action: "list" }), false);
 	assert.equal(isAsyncDelegationCall("subagent", { agent: "worker", task: "work", async: false }), false);
 	assert.equal(isAsyncDelegationCall("bash", { command: "git status" }), false);
+});
+
+test("history restores awaiting ownership until a later terminal wake", () => {
+	const progress = {
+		role: "custom",
+		customType: "subagent_supervisor_request",
+		content: "Subagent progress update.",
+	};
+	const user = { role: "user", content: "keep the current subagents" };
+	const terminal = {
+		role: "custom",
+		customType: "subagent-notify",
+		content: "Background task completed: workflow",
+	};
+	assert.equal(delegatedOwnershipFromMessages([progress, user]), "awaiting");
+	assert.equal(delegatedOwnershipFromMessages([progress, user, { role: "assistant", content: "status only" }]), "awaiting");
+	assert.equal(delegatedOwnershipFromMessages([progress, terminal]), "terminal");
+	assert.equal(delegatedOwnershipFromMessages([progress, terminal, user]), null,
+		"a consumed terminal wake must not keep crediting later parent turns");
+	assert.equal(delegatedOwnershipFromMessages([user]), null);
 });
 
 test("auto-notifying background launches own continuation, but detached launches do not", () => {

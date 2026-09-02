@@ -593,19 +593,6 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (core.goalWorkToolCalledThisTurn) {
 			consecutiveNoProgressTurns = 0;
 			noProgressRecoveryAttempt = 0;
-		} else if (!progressEvidence.hadObservationalAttempt()) {
-			consecutiveNoProgressTurns = 1;
-			noProgressRecoveryAttempt = 0;
-			ctx.ui.notify(
-				"Automatic continuation stopped after a turn with no new evidence. The goal remains active; user input starts a fresh recovery chain.",
-				"warning",
-			);
-			pi.events?.emit?.("pi-goal:no-progress-circuit-open", {
-				version: 1,
-				goalId: core.state.goal.id,
-				consecutiveTurns: consecutiveNoProgressTurns,
-			});
-			return;
 		} else {
 			consecutiveNoProgressTurns += 1;
 			if (consecutiveNoProgressTurns > MAX_NO_PROGRESS_RECOVERIES) {

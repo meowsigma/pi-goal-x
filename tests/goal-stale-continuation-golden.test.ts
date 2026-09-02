@@ -360,14 +360,14 @@ test("a successful Pi retry clears the pending network-error recovery", async ()
 		}, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 
-		assert.equal(await countCheckpoints(h), 0, "a tool-free successful retry does not restart empty auto-continue");
-		assert.equal(h.notifications.some((notice) => notice.message.includes("Retrying the goal")), false, "no goal-level network recovery is announced after Pi retries successfully");
+		assert.equal(await countCheckpoints(h), 1, "the successful Pi retry uses the normal continuation path");
+		assert.equal(h.notifications.length, 0, "no goal-level recovery is announced after Pi retries successfully");
 	} finally {
 		// No delayed timer should exist after the successful retry.
 	}
 });
 
-test("a tool-free yield stops automatic continuation instead of restating the blocker", async () => {
+test("a first successful no-progress turn waits for settlement and receives recovery steering", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -377,25 +377,50 @@ test("a tool-free yield stops automatic continuation instead of restating the bl
 			prompt: "user typed: continue",
 			systemPromptOptions: {},
 		}, h.ctx);
-		await h.handlers["agent_start"]?.({}, h.ctx);
 		await h.handlers["turn_start"]!({}, h.ctx);
-		await h.handlers["tool_call"]!({ toolCallId: "inspect", toolName: "get_goal", input: {} }, h.ctx);
-		await h.handlers["tool_execution_end"]!({
-			toolCallId: "inspect",
-			toolName: "get_goal",
-			result: { content: [{ type: "text", text: "Goal running" }] },
-			isError: false,
-		}, h.ctx);
 
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		assert.equal(await countCheckpoints(h), 0, "agent_end runs before pi is truly idle");
 
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-		assert.equal(await countCheckpoints(h), 0, "a tool-free yield must not queue recovery restatements");
-		assert.match(h.notifications.at(-1)?.message ?? "", /Automatic continuation stopped after a turn with no new evidence/);
+		assert.equal(await countCheckpoints(h), 1, "the first empty turn gets one recovery continuation");
+		const recovery = await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: latestCheckpointContent(h),
+			systemPromptOptions: {},
+		}, h.ctx) as { systemPrompt?: string };
+		assert.match(recovery.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/);
+		assert.match(recovery.systemPrompt ?? "", /Do not ask the user to clear, pause, resume, or authorize the goal/);
+		assert.match(recovery.systemPrompt ?? "", /perform at least one materially productive tool action/);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("three consecutive no-progress turns open the circuit breaker instead of looping forever", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+
+		for (let attempt = 1; attempt <= 3; attempt += 1) {
+			await h.handlers["turn_start"]!({}, h.ctx);
+			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+			if (attempt <= 2) {
+				assert.equal(await countCheckpoints(h), attempt);
+				const checkpoint = latestCheckpointContent(h);
+				const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+				assert.match(next.systemPrompt ?? "", new RegExp(`NO-PROGRESS RECOVERY ${attempt}/2`));
+			}
+		}
+
+		assert.equal(await countCheckpoints(h), 2, "the third empty turn must not queue another checkpoint");
+		assert.match(h.notifications.at(-1)?.message ?? "", /circuit breaker stopped automatic continuation/i);
 		assert.deepEqual(h.emittedEvents.at(-1), {
 			name: "pi-goal:no-progress-circuit-open",
-			payload: { version: 1, goalId: goal.id, consecutiveTurns: 1 },
+			payload: { version: 1, goalId: goal.id, consecutiveTurns: 3 },
 		}, "other continuation owners receive an authoritative circuit-open signal");
 	} finally {
 		// temp dir cleanup is best-effort.
@@ -435,6 +460,14 @@ test("meaningful tool work survives the post-tool provider turn and resets the c
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
 
+		// First empty run arms recovery 1/2.
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		const checkpoint = `<pi_goal_continuation goal_id="${goal.id}" kind="checkpoint">continue`;
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
+
 		// A real Pi agent run has another turn_start after every tool result. The
 		// productive edit must remain credited when the final text-only turn ends.
 		await h.handlers["agent_start"]?.({}, h.ctx);
@@ -444,7 +477,16 @@ test("meaningful tool work survives the post-tool provider turn and resets the c
 		await h.handlers["turn_start"]!({}, h.ctx);
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-		assert.equal(await countCheckpoints(h), 1, "productive work must still queue the next continuation");
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
+
+		// The next genuinely empty run must restart at recovery 1/2, not trip or
+		// continue the pre-edit chain.
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/, "productive work in an earlier provider turn resets the attempt number");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -540,6 +582,13 @@ test("a background terminal notification and its logs reset stale no-progress re
 test("a subagent progress wake suppresses the parent breaker without crediting status polling", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
+	async function runEmpty(prompt: string): Promise<void> {
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt, systemPromptOptions: {} }, h.ctx);
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+	}
 	async function runDelegatedWake(customType: string, content: string, details?: unknown): Promise<void> {
 		await h.handlers["agent_start"]?.({}, h.ctx);
 		await h.handlers["context"]!({ messages: [{ role: "custom", customType, content, details }] }, h.ctx);
@@ -549,7 +598,10 @@ test("a subagent progress wake suppresses the parent breaker without crediting s
 	}
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
-		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+		await runEmpty("user typed: continue");
+		assert.equal(await countCheckpoints(h), 1);
+		await runEmpty(latestCheckpointContent(h) ?? "");
+		assert.equal(await countCheckpoints(h), 2, "two local empty runs consume bounded recovery");
 
 		const progress = {
 			role: "custom",
@@ -558,8 +610,8 @@ test("a subagent progress wake suppresses the parent breaker without crediting s
 			details: { reason: "progress_update" },
 		};
 		await runDelegatedWake(progress.customType, progress.content, progress.details);
-		assert.equal(await countCheckpoints(h), 0, "an active child wake relies on the next native notification");
-		assert.equal(h.notifications.some((notice) => /circuit breaker stopped|no new evidence/.test(notice.message)), false);
+		assert.equal(await countCheckpoints(h), 2, "an active child wake relies on the next native notification");
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 
 		for (let run = 1; run <= 3; run += 1) {
 			await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: keep the current subagents", systemPromptOptions: {} }, h.ctx);
@@ -576,8 +628,8 @@ test("a subagent progress wake suppresses the parent breaker without crediting s
 			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 		}
-		assert.equal(await countCheckpoints(h), 0, "status polling must not race an active child");
-		assert.equal(h.notifications.some((notice) => /circuit breaker stopped|no new evidence/.test(notice.message)), false);
+		assert.equal(await countCheckpoints(h), 2, "status polling must not race an active child");
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -597,8 +649,7 @@ test("quoted subagent notification text cannot impersonate delegated ownership",
 		await h.handlers["turn_start"]!({}, h.ctx);
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-		assert.equal(await countCheckpoints(h), 0, "quoted notification text must not establish delegated ownership or keep auto-continue alive");
-		assert.match(h.notifications.at(-1)?.message ?? "", /no new evidence/);
+		assert.equal(await countCheckpoints(h), 1, "only a provenance-bearing custom message can establish delegated ownership");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -625,7 +676,7 @@ test("failed delegation and subagent status remain nonproductive", async () => {
 			}, h.ctx);
 			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-			assert.equal(await countCheckpoints(h), 0, `${scenario.name} must not keep empty auto-continue alive`);
+			assert.equal(await countCheckpoints(h), 1, `${scenario.name} must consume no-progress recovery`);
 		} finally {
 			// temp dir cleanup is best-effort.
 		}
@@ -694,40 +745,34 @@ test("repeated observational shell output does not reset the no-progress circuit
 test("meaningful tool work resets the no-progress circuit breaker", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
-	const command = "git status --short";
-	const unchanged = { content: [{ type: "text", text: "clean\n" }] };
-	async function observe(id: string): Promise<void> {
-		await h.handlers["agent_start"]?.({}, h.ctx);
-		await h.handlers["turn_start"]!({}, h.ctx);
-		await h.handlers["tool_call"]!({ toolCallId: id, toolName: "bash", args: { command } }, h.ctx);
-		await h.handlers["tool_execution_end"]!({ toolCallId: id, toolName: "bash", result: unchanged, isError: false }, h.ctx);
-		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
-		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-	}
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
-		await observe("status-1");
-		assert.equal(await countCheckpoints(h), 1, "the first diagnostic observation is useful");
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 1);
 		const firstCheckpoint = latestCheckpointContent(h);
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: firstCheckpoint, systemPromptOptions: {} }, h.ctx);
-		await observe("status-2");
-		assert.equal(await countCheckpoints(h), 2, "unchanged observation uses bounded recovery");
 
-		const productiveCheckpoint = latestCheckpointContent(h);
-		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: productiveCheckpoint, systemPromptOptions: {} }, h.ctx);
 		await h.handlers["agent_start"]?.({}, h.ctx);
 		await h.handlers["turn_start"]!({}, h.ctx);
 		await h.handlers["tool_call"]!({ toolName: "edit", args: { path: "src/app.ts" } }, h.ctx);
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-		assert.equal(await countCheckpoints(h), 3);
+		assert.equal(await countCheckpoints(h), 2);
+		const productiveCheckpoint = latestCheckpointContent(h);
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: productiveCheckpoint, systemPromptOptions: {} }, h.ctx);
 
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 3, `expected a fresh checkpoint after reset; notifications=${JSON.stringify(h.notifications)}`);
 		const recoveredCheckpoint = latestCheckpointContent(h);
-		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: recoveredCheckpoint, systemPromptOptions: {} }, h.ctx);
-		await observe("status-3");
-		assert.equal(await countCheckpoints(h), 4, "verification after a mutation is a fresh evidence epoch");
-		assert.equal(h.notifications.some((notice) => /circuit breaker stopped|no new evidence/.test(notice.message)), false);
+		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: recoveredCheckpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/, "productive work resets the attempt number");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}

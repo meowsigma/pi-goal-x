@@ -2,12 +2,6 @@
 
 All notable changes to pi-goal-x are documented here.
 
-## [0.30.15] — 2026-09-02
-
-### Fixed
-
-- **Tool-free yields no longer get poked into restatement loops** — a goal turn with no progress-class tools now stops automatic continuation immediately and emits the existing circuit-open event. Unchanged observational loops still receive two recoveries before the breaker. This prevents Kalshi/Day 8-style user-only blockers from looking like random no-progress stalls.
-
 ## [0.30.14] — 2026-09-01
 
 ### Fixed

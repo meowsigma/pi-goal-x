@@ -43,15 +43,9 @@ function semanticInput(toolName: string, input: unknown): unknown {
 export class GoalProgressEvidenceTracker {
 	private readonly pendingObservations = new Map<string, { invocation: string; toolName: string }>();
 	private readonly lastResultByInvocation = new Map<string, string>();
-	private observationalAttempt = false;
 
 	beginAgentRun(): void {
 		this.pendingObservations.clear();
-		this.observationalAttempt = false;
-	}
-
-	hadObservationalAttempt(): boolean {
-		return this.observationalAttempt;
 	}
 
 	observeCall(toolCallId: unknown, toolName: string, input: unknown): boolean {
@@ -62,7 +56,6 @@ export class GoalProgressEvidenceTracker {
 		}
 		// Runtime events always carry an id. Preserve conservative compatibility
 		// with synthetic/older event producers that omit it.
-		this.observationalAttempt = true;
 		if (typeof toolCallId !== "string" || toolCallId.length === 0) return true;
 		this.pendingObservations.set(toolCallId, {
 			invocation: fingerprint({ toolName, input: semanticInput(toolName, input) }),

@@ -482,12 +482,8 @@ test("lifecycle: a successful turn resets the recovery counter and clears pendin
 		const notificationsBeforeSuccess = h.notifications.length;
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-		assert.equal(await countCheckpoints(h), checkpointsFromRecoveryTimers, "a tool-free success does not restart empty auto-continue");
-		assert.equal(
-			h.notifications.slice(notificationsBeforeSuccess).some((notice) => notice.message.includes("Retrying the goal")),
-			false,
-			"success announces no network recovery",
-		);
+		assert.equal(await countCheckpoints(h), checkpointsFromRecoveryTimers + 1, "success queues the normal continuation");
+		assert.equal(h.notifications.length, notificationsBeforeSuccess, "success announces no recovery");
 
 		// The next failure starts over at recovery 1.
 		await h.handlers["agent_end"]!({

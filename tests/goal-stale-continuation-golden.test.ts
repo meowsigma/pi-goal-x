@@ -453,6 +453,33 @@ test("blocked goals inject a blocked prompt and never fall through to active-wor
 	}
 });
 
+test("desktop and web research tools reset the no-progress circuit breaker", async () => {
+	for (const toolName of ["computer_use_linux_press_key", "reach_search"]) {
+		const { cwd, goal } = fixtureCwd();
+		const h = createHarness(cwd);
+		try {
+			await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+			await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+			await h.handlers["agent_start"]?.({}, h.ctx);
+			await h.handlers["turn_start"]!({}, h.ctx);
+			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+			assert.equal(await countCheckpoints(h), 1);
+			const checkpoint = latestCheckpointContent(h);
+			await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
+			await h.handlers["agent_start"]?.({}, h.ctx);
+			await h.handlers["turn_start"]!({}, h.ctx);
+			await h.handlers["tool_call"]!({ toolCallId: `${toolName}-1`, toolName, input: { query: "kalshi" } }, h.ctx);
+			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+			assert.equal(await countCheckpoints(h), 2, `${toolName} must count as progress`);
+			assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
+		} finally {
+			// temp dir cleanup is best-effort.
+		}
+	}
+});
+
 test("meaningful tool work survives the post-tool provider turn and resets the circuit breaker", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);

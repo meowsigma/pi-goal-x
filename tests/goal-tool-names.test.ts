@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+	isGoalProgressToolName,
 	ALL_REGISTERED_GOAL_TOOLS,
 	CORE_GOAL_TOOL_NAMES,
 	CORE_GOAL_TOOLS,
@@ -85,6 +86,13 @@ test("progress tool set excludes read-only surface tools and workhorse includes 
 	for (const name of [UPDATE_GOAL_TOOL_NAME, SET_GOAL_TASKS_TOOL_NAME, UPDATE_GOAL_TASK_TOOL_NAME, "write", "edit", "bash", "read", "bg_logs"]) {
 		assert.equal(GOAL_PROGRESS_TOOL_NAMES.includes(name as typeof GOAL_PROGRESS_TOOL_NAMES[number]), true, name);
 	}
+	assert.equal(isGoalProgressToolName("computer_use_linux_screenshot"), true);
+	assert.equal(isGoalProgressToolName("computer_use_linux_press_key"), true);
+	assert.equal(isGoalProgressToolName("reach_search"), true);
+	assert.equal(isGoalProgressToolName("get_goal"), false);
+	assert.equal(isGoalProgressToolName("bg_status"), false);
+	assert.equal(isGoalProgressToolName("subagent", { action: "status" }), false);
+	assert.equal(isGoalProgressToolName("subagent", { action: "list" }), false);
 });
 
 test("work tool set covers the five goal tools plus common host work tools", () => {

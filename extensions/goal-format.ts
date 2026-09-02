@@ -9,7 +9,7 @@ import {
 import { buildTaskSummary } from "./goal-policy.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
 import { latestAuditorResultForGoal, latestEventsForGoal, type GoalLedgerEvent } from "./goal-ledger.ts";
-import { GOAL_PROGRESS_TOOL_NAMES } from "./goal-tool-names.ts";
+import { GOAL_PROGRESS_TOOL_NAMES, isGoalProgressToolName } from "./goal-tool-names.ts";
 import {
 	asRecord,
 	cloneGoal,
@@ -308,7 +308,7 @@ export function assistantTurnTokens(message: unknown): number {
 }
 
 export function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean {
-	if (!GOAL_PROGRESS_TOOL_SET.has(toolName)) return false;
+	if (!isGoalProgressToolName(toolName, args)) return false;
 	if (toolName === "read") {
 		const path = asRecord(args)?.path;
 		if (typeof path === "string" && (path === ".pi/goals" || path.startsWith(".pi/goals/"))) return false;

@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.17] — 2026-09-02
+
+### Fixed
+
+- **Desktop control and web research now count as goal progress** — the no-progress breaker no longer uses a closed allowlist of `write`/`edit`/`bash`/`read`. Host tools such as `computer_use_linux_*` and `reach_search` credit work; `get_goal`, `create_goal`, `bg_status`, and `subagent status`/`list`/`models` still do not. Unchanged observational shell/read loops are unchanged.
+
 ## [0.30.16] — 2026-09-02
 
 ### Fixed

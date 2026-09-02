@@ -55,6 +55,25 @@ export const GOAL_WORK_TOOL_NAMES = [
  * The subset of GOAL_WORK_TOOL_NAMES that indicates actual progress (excludes
  * read-only surface tools such as get_goal and create_goal).
  */
+const NON_PROGRESS_TOOL_NAMES = new Set([
+	CREATE_GOAL_TOOL_NAME,
+	GET_GOAL_TOOL_NAME,
+	"bg_status",
+]);
+
+/** Host tools that are never progress, including polling that must not reset the breaker. */
+export function isGoalProgressToolName(toolName: string, input?: unknown): boolean {
+	if (NON_PROGRESS_TOOL_NAMES.has(toolName)) return false;
+	if (toolName === "subagent") {
+		const action = input && typeof input === "object" ? (input as Record<string, unknown>).action : undefined;
+		if (typeof action === "string") {
+			const normalized = action.toLowerCase();
+			if (normalized === "status" || normalized === "list" || normalized === "models") return false;
+		}
+	}
+	return true;
+}
+
 export const GOAL_PROGRESS_TOOL_NAMES = [
 	UPDATE_GOAL_TOOL_NAME,
 	SET_GOAL_TASKS_TOOL_NAME,

@@ -2,6 +2,18 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.16] — 2026-09-02
+
+### Fixed
+
+- **Running goals no longer latch on a single `get_goal` or summary turn** — 0.30.15 treated any turn without progress-class tools as a terminal yield. After reload that stopped auto-continue while the goal still said running (Lumeance Day 8 still at 1/5). Tool-free turns again use the bounded two-recovery chain; unchanged observational loops are unchanged.
+
+## [0.30.15] — 2026-09-02
+
+### Fixed
+
+- Tool-free yields stopped automatic continuation immediately. **Reverted in 0.30.16** after it latched mid-goal on `get_goal` + restatement.
+
 ## [0.30.14] — 2026-09-01
 
 ### Fixed

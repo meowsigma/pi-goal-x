@@ -38,6 +38,20 @@ test("completed background output is evidence once, while status polling is nonp
 	assert.equal(tracker.observeResult("status", { status: "running" }, false), false);
 });
 
+test("observational attempts are remembered even when the result is unchanged", () => {
+	const tracker = new GoalProgressEvidenceTracker();
+	tracker.beginAgentRun();
+	assert.equal(tracker.hadObservationalAttempt(), false);
+	tracker.observeCall("first", "bash", { command: "git status --short" });
+	assert.equal(tracker.hadObservationalAttempt(), true);
+	assert.equal(tracker.observeResult("first", unchanged, false), true);
+	tracker.beginAgentRun();
+	assert.equal(tracker.hadObservationalAttempt(), false);
+	tracker.observeCall("second", "bash", { command: "git status --short" });
+	assert.equal(tracker.observeResult("second", unchanged, false), false);
+	assert.equal(tracker.hadObservationalAttempt(), true);
+});
+
 test("failed observations never count as progress", () => {
 	const tracker = new GoalProgressEvidenceTracker();
 	tracker.observeCall("failed", "bash", { command: "git status --short" });

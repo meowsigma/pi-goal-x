@@ -59,6 +59,8 @@ export interface GoalCore {
 	readonly goalsById: Map<string, GoalRecord>;
 	readonly focusedGoalId: string | null;
 	readonly focusRevision: number;
+	/** Monotonic session marker epoch used to scope continuation coaching. */
+	readonly continuationEpoch: number;
 	hasExplicitSessionFocus: boolean;
 	runningGoalId: string | null;
 	auditProgress: AuditorWidgetProgress | null;
@@ -139,6 +141,7 @@ export function createGoalCore(
 	let goalsById = new Map<string, GoalRecord>();
 	let focusedGoalId: string | null = null;
 	let focusRevision = 0;
+	let continuationEpoch = 0;
 	let hasExplicitSessionFocus = false;
 
 	function assignFocusedGoalId(next: string | null): void {
@@ -395,6 +398,7 @@ export function createGoalCore(
 	}
 
 	function appendFocusEntry(goalId: string | null, reason: GoalFocusReason): void {
+		continuationEpoch += 1;
 		hasExplicitSessionFocus = true;
 		pi.appendEntry(FOCUS_ENTRY, goalFocusDetails(goalId, reason));
 	}
@@ -910,6 +914,9 @@ export function createGoalCore(
 		},
 		get focusRevision() {
 			return focusRevision;
+		},
+		get continuationEpoch() {
+			return continuationEpoch;
 		},
 		get hasExplicitSessionFocus() {
 			return hasExplicitSessionFocus;

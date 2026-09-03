@@ -47,7 +47,7 @@ Open goals are stored in `.pi/goals/`. Their objectives, tasks, status, and prog
 
 ### Auto-continuation safety
 
-Active goals continue after meaningful work. If a model instead ends a turn without meaningful tool work, pi-goal-x supplies two escalating recovery turns that require a materially different productive strategy. A third consecutive empty turn opens a circuit breaker: no more automatic checkpoint is queued, the goal remains active, and user input starts a fresh recovery chain. This prevents status-only or waiting responses from looping indefinitely.
+Active goals continue after meaningful work. If a model instead ends a turn without meaningful tool work, pi-goal-x supplies escalating recovery coaching: research and attempt a new route first, then write an evidence-backed dual-sided packet for the current task at attempt three and continue independent tasks. Empty turns never open a circuit breaker or stop the goal; polling and unchanged observations remain non-progress signals.
 
 ### Multiple open goals
 

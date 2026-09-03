@@ -298,18 +298,29 @@ export function continuationPrompt(goal: GoalRecord, _settings?: GoalSettings): 
 	return checkpointTriggerPrompt(goal.id);
 }
 
-export function noProgressRecoveryPrompt(attempt: number, maxAttempts: number): string {
-	const content = [
-		`[NO-PROGRESS RECOVERY ${attempt}/${maxAttempts}]`,
-		"The previous auto-continue turn performed no meaningful tool work. Do not repeat its conclusion or merely restate status.",
+const NO_PROGRESS_COACH_PHASES = 3;
+
+export function noProgressRecoveryPrompt(attempt: number): string {
+	const lines = [
+		`[NO-PROGRESS RECOVERY ${attempt}/${NO_PROGRESS_COACH_PHASES}+]`,
+		"The previous auto-continue turn produced no new evidence. That is a strategy failure, not permission to stop. Auto-continue stays on.",
 		"The current [PI GOAL ACTIVE] block is authoritative; earlier paused-status messages are stale and must not stop resumed work.",
-		"Do not ask the user to clear, pause, resume, or authorize the goal. Do not declare TERMINAL_NOT_PROVEN yourself.",
-		"Re-read the objective, pending tasks, auditor feedback, and repository state. Separate uncontrollable outcome evidence from controllable work: implementation, research, competitive analysis, technical readiness, instrumentation, tests, experiments, documentation, and reversible local preparation.",
-		"Choose a materially different route and perform at least one materially productive tool action now. Do not wait or poll. Preserve unmet outcome claims as NOT PROVEN rather than weakening them or pretending they are satisfied.",
-		attempt >= maxAttempts
-			? "This is the final automatic recovery attempt. Another empty turn opens the no-progress circuit breaker instead of consuming turns forever."
-			: "If the prior route is exhausted, inspect other unsatisfied criteria and work the strongest safe independent one.",
-	].join("\n");
+		"Do not repeat the same blocker. Do not ask the user to clear, pause, resume, or authorize the goal. Do not call update_goal blocked or paused. Do not declare TERMINAL_NOT_PROVEN yourself.",
+	];
+	if (attempt <= 1) {
+		lines.push(
+			"Research concrete options for the current hurdle. Write the comparison in the goal journal or progress log with evidence. Pick the strongest option and attempt it with a real tool now.",
+		);
+	} else if (attempt === 2) {
+		lines.push(
+			"You already restated. Attempt a materially different method, or write why the last attempt failed with evidence, then try the next method. PC/desktop/browser/research tools count. Get_goal and status polling do not.",
+		);
+	} else {
+		lines.push(
+			"Write a dual-sided packet for THIS task only: what you tried, why each path failed, and why remaining tasks do not require it. If that packet is honest, skip/NOT PROVEN this task and immediately work an independent remaining task. Do not halt the goal.",
+		);
+	}
+	const content = lines.join("\n");
 	return content.length > MAX_PROMPT_FRAGMENT_CHARS ? `${content.slice(0, MAX_PROMPT_FRAGMENT_CHARS)}\n…[prompt truncated]` : content;
 }
 

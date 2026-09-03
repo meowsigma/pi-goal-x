@@ -142,7 +142,7 @@ async function startSession(handlers: HandlerMap, ctx: ExtensionContext, entries
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-test("reload does not restart auto-continue after a latched no-progress chain", async () => {
+test("reload resumes auto-continue with the current goal's coach prompt", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -152,8 +152,47 @@ test("reload does not restart auto-continue after a latched no-progress chain", 
 			{ message: { role: "assistant", stopReason: "end_turn" } },
 			{ message: { role: "assistant", stopReason: "end_turn" } },
 		];
-		await startSession(h.handlers, h.ctx, emptyTurns);
-		assert.equal(await countCheckpoints(h), 0, "session_start must not replay empty restatement loops after reload");
+		const ss = h.handlers["session_start"];
+		assert.ok(ss);
+		await ss({ reason: "start" }, idleCtx({
+			...h.ctx,
+			sessionManager: { ...h.ctx.sessionManager, getBranch: () => emptyTurns },
+		} as ExtensionContext));
+		await new Promise((resolve) => setTimeout(resolve, 80));
+		assert.equal(await countCheckpoints(h), 1, "reload keeps auto-continue with the next coach prompt");
+		assert.equal(h.notifications.some((notice) => /circuit breaker stopped/.test(notice.message)), false);
+		const recovery = await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: latestCheckpointContent(h),
+			systemPromptOptions: {},
+		}, h.ctx) as { systemPrompt?: string };
+		assert.match(recovery.systemPrompt ?? "", /NO-PROGRESS RECOVERY 3\//);
+		assert.match(recovery.systemPrompt ?? "", /dual-sided packet/);
+	} finally {
+		// temp dir cleanup is best-effort.
+	}
+});
+
+test("a new focused goal starts despite prior-goal empty history", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		const priorGoalHistory = [
+			{ type: "custom", customType: "pi-goal-focus", data: { version: 1, focusedGoalId: "prior-goal", reason: "created" } },
+			{ message: { role: "assistant", stopReason: "end_turn" } },
+			{ message: { role: "assistant", stopReason: "end_turn" } },
+			{ message: { role: "assistant", stopReason: "end_turn" } },
+		];
+		const entries = [...priorGoalHistory, ...sessionEntriesFor(goal)];
+		const ss = h.handlers["session_start"];
+		assert.ok(ss);
+		await ss({ reason: "start" }, idleCtx({
+			...h.ctx,
+			sessionManager: { ...h.ctx.sessionManager, getBranch: () => entries },
+		} as ExtensionContext));
+		await new Promise((resolve) => setTimeout(resolve, 80));
+		assert.equal(await countCheckpoints(h), 1, "the new goal must get its first continuation");
+		assert.equal(h.notifications.some((notice) => /circuit breaker stopped/.test(notice.message)), false);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -406,15 +445,15 @@ test("a first successful no-progress turn waits for settlement and receives reco
 			prompt: latestCheckpointContent(h),
 			systemPromptOptions: {},
 		}, h.ctx) as { systemPrompt?: string };
-		assert.match(recovery.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/);
+		assert.match(recovery.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\//);
 		assert.match(recovery.systemPrompt ?? "", /Do not ask the user to clear, pause, resume, or authorize the goal/);
-		assert.match(recovery.systemPrompt ?? "", /perform at least one materially productive tool action/);
+		assert.match(recovery.systemPrompt ?? "", /Research concrete options/);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
 });
 
-test("three consecutive no-progress turns open the circuit breaker instead of looping forever", async () => {
+test("three consecutive no-progress turns keep auto-continue with escalating coach prompts", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -425,20 +464,15 @@ test("three consecutive no-progress turns open the circuit breaker instead of lo
 			await h.handlers["turn_start"]!({}, h.ctx);
 			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-			if (attempt <= 2) {
-				assert.equal(await countCheckpoints(h), attempt);
-				const checkpoint = latestCheckpointContent(h);
-				const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
-				assert.match(next.systemPrompt ?? "", new RegExp(`NO-PROGRESS RECOVERY ${attempt}/2`));
-			}
+			assert.equal(await countCheckpoints(h), attempt);
+			const checkpoint = latestCheckpointContent(h);
+			const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+			assert.match(next.systemPrompt ?? "", new RegExp(`NO-PROGRESS RECOVERY ${attempt}/`));
+			if (attempt >= 3) assert.match(next.systemPrompt ?? "", /dual-sided packet/);
 		}
 
-		assert.equal(await countCheckpoints(h), 2, "the third empty turn must not queue another checkpoint");
-		assert.match(h.notifications.at(-1)?.message ?? "", /circuit breaker stopped automatic continuation/i);
-		assert.deepEqual(h.emittedEvents.at(-1), {
-			name: "pi-goal:no-progress-circuit-open",
-			payload: { version: 1, goalId: goal.id, consecutiveTurns: 3 },
-		}, "other continuation owners receive an authoritative circuit-open signal");
+		assert.equal(h.notifications.some((notice) => /circuit breaker stopped/.test(notice.message)), false);
+		assert.equal(h.emittedEvents.some((event) => event.name === "pi-goal:no-progress-circuit-open"), false);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -530,7 +564,7 @@ test("meaningful tool work survives the post-tool provider turn and resets the c
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
-		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/, "productive work in an earlier provider turn resets the attempt number");
+		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\//, "productive work in an earlier provider turn resets the attempt number");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -779,8 +813,8 @@ test("repeated observational shell output does not reset the no-progress circuit
 
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
 		await runObservation(4);
-		assert.equal(await countCheckpoints(h), 3, "the third unchanged repetition opens the circuit instead of resetting it");
-		assert.ok(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")));
+		assert.equal(await countCheckpoints(h), 4, "unchanged observations keep auto-continue with coach prompts instead of halting");
+		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -816,7 +850,7 @@ test("meaningful tool work resets the no-progress circuit breaker", async () => 
 		assert.equal(await countCheckpoints(h), 3, `expected a fresh checkpoint after reset; notifications=${JSON.stringify(h.notifications)}`);
 		const recoveredCheckpoint = latestCheckpointContent(h);
 		const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: recoveredCheckpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
-		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\/2/, "productive work resets the attempt number");
+		assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\//, "productive work resets the attempt number");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}

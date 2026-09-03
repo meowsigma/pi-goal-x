@@ -38,7 +38,7 @@ function semanticInput(toolName: string, input: unknown): unknown {
  * Credits mutations immediately, but credits observational tools only when
  * their completed result differs from the previous result for the same call.
  * This prevents repeated status/read commands from resetting the no-progress
- * circuit while still recognizing newly observed state as useful evidence.
+ * counter while still recognizing newly observed state as useful evidence.
  */
 export class GoalProgressEvidenceTracker {
 	private readonly pendingObservations = new Map<string, { invocation: string; toolName: string }>();

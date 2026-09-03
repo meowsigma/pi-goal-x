@@ -28,9 +28,9 @@ export const GOAL_EVENT_ENTRY = "pi-goal-event";
 export const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 export const COMPLETE_STATUS = "complete";
 /**
- * Tools that count as "real work" toward the active goal. If a non-tool-use
- * turn ends without any of these having been called, we DO NOT queue the next
- * autoContinue — the agent was just chatting. This stops infinite chat loops.
+ * Tools that count as "real work" toward the active goal. Non-progress turns
+ * receive escalating coaching, but this set still distinguishes evidence from
+ * status-only or polling activity.
  */
 export const GOAL_PROGRESS_TOOL_SET = new Set<string>(GOAL_PROGRESS_TOOL_NAMES);
 

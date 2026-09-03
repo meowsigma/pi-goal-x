@@ -59,7 +59,7 @@ test("goalPrompt wraps objective as untrusted data and includes Sisyphus discipl
 });
 
 test("no-progress recovery resolves stale paused-status conflicts in favor of current active state", () => {
-	const prompt = noProgressRecoveryPrompt(1, 2);
+	const prompt = noProgressRecoveryPrompt(1);
 
 	assert.match(prompt, /current \[PI GOAL ACTIVE\] block is authoritative/i);
 	assert.match(prompt, /earlier paused-status messages.*stale/i);

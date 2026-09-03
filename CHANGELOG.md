@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.19] — 2026-09-02
+
+### Fixed
+
+- **Restatement is a coach prompt, not a kill switch** — text-only turns no longer open `pi-goal:no-progress-circuit-open` or stop auto-continue. They inject escalating research/attempt prompts (including a dual-sided packet at 3+) and keep the goal running. Create/tweak/reload still queue continuation so a new goal in a session with old empty turns actually starts.
+
 ## [0.30.18] — 2026-09-02
 
 ### Fixed

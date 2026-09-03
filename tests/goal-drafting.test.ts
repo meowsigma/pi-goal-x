@@ -26,6 +26,7 @@ interface Harness {
 	commands: Map<string, any>;
 	tools: Map<string, any>;
 	messages: string[];
+	followUps: Array<{ message: any; opts?: any }>;
 	notifications: string[];
 	activeTools(): string[];
 	toolHistory(): string[][];
@@ -42,6 +43,7 @@ function createHarness(cwd: string, opts: { hasUI?: boolean } = {}): Harness {
 	const commands = new Map<string, any>();
 	const notifications: string[] = [];
 	const messages: string[] = [];
+	const followUps: Array<{ message: any; opts?: any }> = [];
 	const tools = new Map<string, any>();
 	const toolHistory: string[][] = [];
 	const entries: unknown[] = [];
@@ -57,7 +59,7 @@ function createHarness(cwd: string, opts: { hasUI?: boolean } = {}): Harness {
 		appendEntry: (customType: string, data: unknown) => { entries.push({ type: "custom", customType, data }); },
 		registerMessageRenderer: () => {},
 		sendUserMessage: (message: string) => { messages.push(message); },
-		sendMessage: () => {},
+		sendMessage: (message: any, opts?: any) => { followUps.push({ message, opts }); },
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (names: string[]) => { activeTools = [...names]; toolHistory.push([...names]); },
 		hasUI,
@@ -91,6 +93,7 @@ function createHarness(cwd: string, opts: { hasUI?: boolean } = {}): Harness {
 		commands,
 		tools,
 		messages,
+		followUps,
 		notifications,
 		activeTools: () => [...activeTools],
 		toolHistory: () => toolHistory.map((t) => [...t]),
@@ -950,6 +953,8 @@ test("a tweak confirmation on an active goal stays active without a resume event
 		const h = createHarness(cwd, { hasUI: true });
 		await h.sessionStart();
 		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const followUpsBeforeTweak = h.followUps.length;
 		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
 		const pending = runProposal(h, proposalParams("Revised while active", { sisyphus: false }));
 		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
@@ -957,6 +962,12 @@ test("a tweak confirmation on an active goal stays active without a resume event
 		const after = firstGoal(cwd);
 		assert.equal(after.status, "active", "active goal stays active");
 		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_resumed").length, 0, "no resume event when the goal was already active");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.ok(h.followUps.length > followUpsBeforeTweak, "an active tweak queues a fresh continuation");
+		const focusEntries = h.entries().filter((entry) => (entry as any)?.customType === "pi-goal-focus");
+		const tweakFocus = focusEntries.at(-1) as any;
+		assert.equal(tweakFocus?.data?.focusedGoalId, after.id);
+		assert.equal(tweakFocus?.data?.reason, "tweaked");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}

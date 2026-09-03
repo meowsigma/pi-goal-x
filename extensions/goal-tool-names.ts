@@ -82,11 +82,43 @@ function entryMessage(entry: unknown): Record<string, unknown> | null {
 	return raw;
 }
 
+const GOAL_FOCUS_ENTRY = "pi-goal-focus";
+
+function focusMarkerGoalId(entry: unknown): string | null | undefined {
+	if (entry === null || typeof entry !== "object") return undefined;
+	const raw = entry as Record<string, unknown>;
+	if (raw.customType !== GOAL_FOCUS_ENTRY) return undefined;
+	const data = raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
+		? raw.data as Record<string, unknown>
+		: raw.details && typeof raw.details === "object" && !Array.isArray(raw.details)
+			? raw.details as Record<string, unknown>
+			: null;
+	if (!data || !Object.prototype.hasOwnProperty.call(data, "focusedGoalId")) return null;
+	return typeof data.focusedGoalId === "string" ? data.focusedGoalId : null;
+}
+
 /** Count completed end_turn runs from the tail that used no progress-class tools. */
-export function countTrailingNoProgressRuns(entries: readonly unknown[]): number {
+export function countTrailingNoProgressRuns(entries: readonly unknown[], currentGoalId?: string | null): number {
+	let firstRelevantEntry = 0;
+	if (currentGoalId !== undefined) {
+		let lastFocusGoalId: string | null | undefined;
+		let currentGoalMarker = -1;
+		for (let index = 0; index < entries.length; index += 1) {
+			const markerGoalId = focusMarkerGoalId(entries[index]);
+			if (markerGoalId === undefined) continue;
+			lastFocusGoalId = markerGoalId;
+			if (markerGoalId === currentGoalId) currentGoalMarker = index;
+		}
+		// A missing or stale focus marker must not let another goal's historical
+		// empty turns suppress this goal's first continuation after reload.
+		if (currentGoalMarker < 0 || lastFocusGoalId !== currentGoalId) return 0;
+		firstRelevantEntry = currentGoalMarker + 1;
+	}
+
 	const runs: string[][] = [];
 	let tools: string[] = [];
-	for (const entry of entries) {
+	for (let index = firstRelevantEntry; index < entries.length; index += 1) {
+		const entry = entries[index];
 		const message = entryMessage(entry);
 		if (!message) continue;
 		const toolName = typeof message.toolName === "string" ? message.toolName : undefined;

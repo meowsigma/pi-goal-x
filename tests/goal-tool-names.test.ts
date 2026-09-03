@@ -130,3 +130,18 @@ test("trailing no-progress runs ignore earlier work and count empty end_turns", 
 	];
 	assert.equal(countTrailingNoProgressRuns(entries), 3);
 });
+
+test("goal-scoped trailing counts ignore empty turns from a prior focused goal", () => {
+	const entries = [
+		{ type: "custom", customType: "pi-goal-focus", data: { version: 1, focusedGoalId: "old-goal", reason: "created" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+		{ type: "custom", customType: "pi-goal-focus", data: { version: 1, focusedGoalId: "new-goal", reason: "created" } },
+		{ message: { role: "assistant", stopReason: "end_turn" } },
+	];
+
+	assert.equal(countTrailingNoProgressRuns(entries, "new-goal"), 1);
+	assert.equal(countTrailingNoProgressRuns(entries, "old-goal"), 0, "a stale goal cannot claim the current tail");
+	assert.equal(countTrailingNoProgressRuns(entries, "missing-goal"), 0, "a goal without a marker starts fresh");
+});

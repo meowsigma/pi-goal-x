@@ -100,11 +100,12 @@ export function compactGoalCheckpointContext(
  */
 export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
-	const MAX_NO_PROGRESS_RECOVERIES = 2;
 	let continuationAfterSettleFor: string | null = null;
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
 	let consecutiveNoProgressTurns = 0;
 	let noProgressRecoveryAttempt = 0;
+	let noProgressScopeGoalId: string | null = null;
+	let noProgressScopeEpoch = 0;
 	let delegatedWakeThisRun: DelegatedWakeKind | null = null;
 	const pendingAsyncDelegations = new Set<string>();
 	const progressEvidence = new GoalProgressEvidenceTracker();
@@ -138,7 +139,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	pi.on("agent_start", async () => {
 		// A Pi agent run may contain many provider turns while tools execute. Reset
 		// progress once per run so work from an earlier tool turn survives the
-		// final text-only provider turn and reaches the no-progress breaker.
+		// final text-only provider turn and reaches the no-progress coach.
 		core.goalWorkToolCalledThisTurn = false;
 		if (delegatedWakeThisRun !== "awaiting") delegatedWakeThisRun = null;
 		pendingAsyncDelegations.clear();
@@ -354,9 +355,12 @@ export function registerGoalEvents(core: GoalCore): void {
 			}
 		}
 		core.beginAccounting();
+		noProgressScopeGoalId = core.state.goal?.id ?? null;
+		noProgressScopeEpoch = core.continuationEpoch;
 		const branch = ctx.sessionManager?.getBranch?.() ?? [];
-		consecutiveNoProgressTurns = countTrailingNoProgressRuns(branch);
-		if (consecutiveNoProgressTurns <= MAX_NO_PROGRESS_RECOVERIES) core.queueContinuation(ctx, true);
+		consecutiveNoProgressTurns = countTrailingNoProgressRuns(branch, core.focusedGoalId);
+		if (consecutiveNoProgressTurns > 0) noProgressRecoveryAttempt = consecutiveNoProgressTurns;
+		core.queueContinuation(ctx, true);
 	});
 
 	pi.on("session_before_compact", async (_event, ctx) => {
@@ -367,14 +371,17 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		if (core.state.goal) core.persist(ctx);
 		core.beginAccounting();
+		noProgressScopeGoalId = core.state.goal?.id ?? null;
+		noProgressScopeEpoch = core.continuationEpoch;
 		// Arm a deterministic compaction summary for the next agent turn.
 		// This replaces the generic reminder with artifact-backed state.
 		if (shouldArmPostCompactReminder(core.state.goal)) {
 			core.runtime.armPostCompactReminder();
 		}
 		const compactBranch = ctx.sessionManager?.getBranch?.() ?? [];
-		consecutiveNoProgressTurns = countTrailingNoProgressRuns(compactBranch);
-		if (consecutiveNoProgressTurns <= MAX_NO_PROGRESS_RECOVERIES) core.queueContinuation(ctx, true);
+		consecutiveNoProgressTurns = countTrailingNoProgressRuns(compactBranch, core.focusedGoalId);
+		if (consecutiveNoProgressTurns > 0) noProgressRecoveryAttempt = consecutiveNoProgressTurns;
+		core.queueContinuation(ctx, true);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
@@ -383,9 +390,12 @@ export function registerGoalEvents(core: GoalCore): void {
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
 		core.beginAccounting();
+		noProgressScopeGoalId = core.state.goal?.id ?? null;
+		noProgressScopeEpoch = core.continuationEpoch;
 		const treeBranch = ctx.sessionManager?.getBranch?.() ?? [];
-		consecutiveNoProgressTurns = countTrailingNoProgressRuns(treeBranch);
-		if (consecutiveNoProgressTurns <= MAX_NO_PROGRESS_RECOVERIES) core.queueContinuation(ctx, true);
+		consecutiveNoProgressTurns = countTrailingNoProgressRuns(treeBranch, core.focusedGoalId);
+		if (consecutiveNoProgressTurns > 0) noProgressRecoveryAttempt = consecutiveNoProgressTurns;
+		core.queueContinuation(ctx, true);
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
@@ -423,7 +433,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		} else {
 			// A user-driven turn — clear any queued continuation so we don't
 			// double-fire after the user's own message returns. Also reset the
-			// autoContinue nudge state and no-progress breaker so the user always
+			// autoContinue nudge state and no-progress coach so the user always
 			// gets a fresh autonomous recovery chain.
 			core.runtime.setCheckpoint(null);
 			core.clearContinuationState();
@@ -447,6 +457,16 @@ export function registerGoalEvents(core: GoalCore): void {
 			if (openCount > 0) return { systemPrompt: `${currentSystemPrompt()}\n\n${unfocusedOpenGoalsPrompt(openCount)}` };
 			return;
 		}
+		const currentScopeGoalId = core.state.goal.id;
+		const currentScopeEpoch = core.continuationEpoch;
+		if (noProgressScopeGoalId !== currentScopeGoalId || noProgressScopeEpoch !== currentScopeEpoch) {
+			// A new goal, focus epoch, or successful tweak must not inherit the
+			// previous goal/revision's empty-turn coaching state.
+			consecutiveNoProgressTurns = 0;
+			noProgressRecoveryAttempt = 0;
+		}
+		noProgressScopeGoalId = currentScopeGoalId;
+		noProgressScopeEpoch = currentScopeEpoch;
 		core.runningGoalId = core.state.goal.status === "active" ? core.state.goal.id : null;
 		if (core.state.goal.status === "complete") return;
 		if (core.state.goal.status === "paused") {
@@ -514,7 +534,7 @@ export function registerGoalEvents(core: GoalCore): void {
 			// Ledger read failure should not break the prompt
 		}
 		if (noProgressRecoveryAttempt > 0) {
-			prompt = `${prompt}\n\n${noProgressRecoveryPrompt(noProgressRecoveryAttempt, MAX_NO_PROGRESS_RECOVERIES)}`;
+			prompt = `${prompt}\n\n${noProgressRecoveryPrompt(noProgressRecoveryAttempt)}`;
 			noProgressRecoveryAttempt = 0;
 		}
 		if (core.runtime.isPostCompactReminderPending() && shouldInjectPostCompactReminder({ pending: true, goal: activeGoal })) {
@@ -602,18 +622,6 @@ export function registerGoalEvents(core: GoalCore): void {
 			noProgressRecoveryAttempt = 0;
 		} else {
 			consecutiveNoProgressTurns += 1;
-			if (consecutiveNoProgressTurns > MAX_NO_PROGRESS_RECOVERIES) {
-				ctx.ui.notify(
-					`No-progress circuit breaker stopped automatic continuation after ${consecutiveNoProgressTurns} consecutive turns without meaningful tool work. The goal remains active; user input starts a fresh recovery chain.`,
-					"warning",
-				);
-				pi.events?.emit?.("pi-goal:no-progress-circuit-open", {
-					version: 1,
-					goalId: core.state.goal.id,
-					consecutiveTurns: consecutiveNoProgressTurns,
-				});
-				return;
-			}
 			noProgressRecoveryAttempt = consecutiveNoProgressTurns;
 		}
 		// agent_end runs before pi finishes retries, compaction, terminating-tool
@@ -659,6 +667,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		networkErrorRecoveryAfterSettleFor = null;
 		consecutiveNoProgressTurns = 0;
 		noProgressRecoveryAttempt = 0;
+		noProgressScopeGoalId = null;
+		noProgressScopeEpoch = 0;
 		core.accountProgress(ctx);
 		core.clearContinuationState();
 		core.terminalInputUnsubscribe?.();

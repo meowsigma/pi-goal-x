@@ -22,6 +22,8 @@ The focused goal stays `running` with `autoContinue` on. The system never opens 
 
 Reload must not replay a halt and must not freeze a goal that still has unproven work.
 
+**Create / tweak / focus always start.** A new or successfully tweaked goal must queue continuation immediately. Trailing empty-run counts are **scoped to the current focused goal** (after its `pi-goal-focus` / create / tweak marker). Prior restatements from an old goal in the same session must not prevent the new goal from starting. This is the 0.30.18 hang: PolyEdge create/tweak showed `running` + auto-continue on, then waited forever because session history still had three empty Kalshi turns.
+
 `update_goal({status:"blocked"|"paused"})` stays forbidden. No purchases, account changes, or legal acceptance unless the user already authorized that exact action. “Work around payment” means find a non-purchase path or prove none exists.
 
 NQA / `$full-throttle` uses the same rule. The halt they hit is **pi-goal-x**, not NQA.
@@ -40,7 +42,8 @@ On `agent_end` for an actionable focused goal:
    - 3rd+: dual-sided packet for *that task only*; skip/NOT PROVEN if the packet exists; continue siblings; do not stop the goal.
 4. Remove the yellow “stopped automatic continuation” notify (or replace with a non-halting research nudge if UI is needed).
 5. Stop emitting `pi-goal:no-progress-circuit-open` for this path so NQA does not suspend its own continuation on a false halt.
-6. Reload / `session_start`: restore restatement count from trailing empty runs; inject the *next* coach prompt and continue. Do not freeze. Do not replay a halt.
+6. Reload / `session_start`: restore restatement count from trailing empty runs **after the current goal marker**; inject the next coach prompt and continue. Do not freeze. Do not replay a halt.
+7. `create` / `tweak` / `focus` / `armFocusedContinuation`: always queue continuation (`force`), ignoring prior-goal empty history.
 
 `get_goal`, `create_goal`, `bg_status`, and `subagent status`/`list`/`models` remain non-progress. 0.30.17 denylist for other host tools stays.
 
@@ -49,7 +52,8 @@ On `agent_end` for an actionable focused goal:
 - Three text-only turns still queue continuation, with coach prompts 1 → 2 → dual-sided packet, and do **not** emit `pi-goal:no-progress-circuit-open` or the yellow halt.
 - `reach_search` / `computer_use_linux_*` still reset the restatement counter.
 - `get_goal` / `subagent status` still do not.
-- Reload after three restatements continues with the next coach prompt, not silence and not a halt.
+- Reload after three restatements of the *current* goal continues with the next coach prompt, not silence and not a halt.
+- A new/tweaked goal in a session that already had three empty turns still queues its first continuation.
 - Child/`bg_run` ownership unchanged.
 
 ## Out of scope

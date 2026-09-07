@@ -112,7 +112,11 @@ export function registerGoalEvents(core: GoalCore): void {
 	const progressEvidence = new GoalProgressEvidenceTracker();
 	const recordMeaningfulWorkAttempt = (ctx: ExtensionContext, toolName: string): void => {
 		core.goalWorkToolCalledThisTurn = true;
-		if (toolName !== "update_goal") core.goalWorkToolProductiveThisTurn = true;
+		if (toolName !== "update_goal") {
+			core.goalWorkToolProductiveThisTurn = true;
+			const recoveryGoalId = core.state.goal?.id;
+			if (recoveryGoalId) core.runtime.clearAuditRecovery(recoveryGoalId);
+		}
 		// Issue #26: record a meaningful work attempt against armed Oracle advice.
 		const focusedId = core.focusedGoalId;
 		if (!focusedId || !hasPendingOracleAdviceForFocusedGoal(focusedId)) return;
@@ -580,6 +584,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		} catch {
 			// Ledger read failure should not break the prompt
 		}
+		if (core.runtime.consumeAuditRecoveryPrompt(activeGoal.id)) {
+			prompt = `${prompt}\n\n[AUDIT RECOVERY PIVOT goalId=${activeGoal.id}]\nThe completion auditor is unavailable or exhausted. Do not request completion again during this cooldown/exhaustion window. Continue with an independently actionable pending task now; preserve the unmet completion criteria and record evidence. A NOT PROVEN criterion is not success, and task skipping is allowed only for explicit user direction or a hard contradiction.`;
+		}
 		if (noProgressRecoveryAttempt > 0) {
 			prompt = `${prompt}\n\n${noProgressRecoveryPrompt(noProgressRecoveryAttempt)}`;
 			noProgressRecoveryAttempt = 0;
@@ -679,7 +686,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		// can poll a stale busy context for minutes on pi 0.84. agent_settled is
 		// available in both supported SDK lines (0.83 and 0.84) and is the first
 		// point where pi guarantees no automatic work remains.
-		continuationAfterSettleFor = continuationRun ? core.state.goal.id : null;
+		const auditRecoveryRun = core.runtime.hasAuditRecoveryLease(core.state.goal.id);
+		continuationAfterSettleFor = continuationRun || auditRecoveryRun ? core.state.goal.id : null;
 	});
 
 	pi.on("agent_settled", async (_event, ctx) => {
@@ -688,6 +696,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		const networkErrorGoalId = networkErrorRecoveryAfterSettleFor;
 		networkErrorRecoveryAfterSettleFor = null;
 		if (goalId && core.isActionableContinuationGoal(goalId)) {
+			core.runtime.issueAuditRecovery(goalId);
 			core.queueContinuation(ctx, true);
 			return;
 		}

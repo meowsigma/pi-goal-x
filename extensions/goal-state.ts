@@ -821,6 +821,7 @@ export function createGoalCore(
 	function pauseActiveGoal(ctx: ExtensionContext): void {
 		if (!state.goal || state.goal.status !== "active") return;
 		const pausedGoalId = state.goal.id;
+		runtime.clearAuditRecovery(pausedGoalId);
 		// User-initiated pause (Esc / aborted turn). Clear any stale agent pause reason.
 		state.goal = { ...state.goal, autoContinue: false, pauseReason: undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);

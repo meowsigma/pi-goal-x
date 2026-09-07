@@ -55,6 +55,8 @@ export class GoalRuntime {
 	private auditRetryByGoal = new Map<string, { attempt: number; nextAt: number; exhausted: boolean }>();
 	private auditRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private auditRetryWakeGeneration = new Map<string, number>();
+	/** One-shot continuation lease that pivots an audit-only turn to independent work. */
+	private auditRecoveryLeases = new Map<string, { pending: boolean; issued: boolean; promptDelivered: boolean }>();
 
 	// ── turn-stop guard ──────────────────────────────────────────────────
 	private turnSeq = 0;
@@ -151,12 +153,51 @@ export class GoalRuntime {
 			if (!this.hooks.isActionable(goal.id)) return;
 			const currentGoal = this.hooks.getGoal();
 			if (!currentGoal || currentGoal.id !== goal.id) return;
+			// A recovery lease already dispatched an independent-work pivot. Do
+			// not add a second hidden wake while audit admission remains blocked.
+			if (this.auditRecoveryLeases.has(goal.id)) return;
 			// Do not displace productive ordinary continuation work. The
 			// admission gate still protects the next completion request.
 			this.queueContinuation(ctx, currentGoal, false);
 		}, delayMs);
 		timer.unref?.();
 		this.auditRetryTimers.set(goal.id, timer);
+	}
+
+	/**
+	 * Give an audit-only turn one bounded pivot to independently actionable work.
+	 * The lease stays active until productive work or explicit user input clears
+	 * it, so a model repeating update_goal cannot create a hot loop.
+	 */
+	scheduleAuditRecovery(_ctx: ExtensionContext, goal: GoalRecord): boolean {
+		if (goal.status !== "active" || !goal.autoContinue || this.auditRecoveryLeases.has(goal.id)) return false;
+		this.auditRecoveryLeases.set(goal.id, { pending: true, issued: false, promptDelivered: false });
+		return true;
+	}
+
+	/** Whether a recovery continuation is eligible for dispatch at settlement. */
+	hasAuditRecoveryLease(goalId: string): boolean {
+		return this.auditRecoveryLeases.get(goalId)?.pending === true;
+	}
+
+	/** Retire dispatch eligibility while retaining the issued lease for coaching. */
+	issueAuditRecovery(goalId: string): boolean {
+		const lease = this.auditRecoveryLeases.get(goalId);
+		if (!lease?.pending) return false;
+		lease.pending = false;
+		lease.issued = true;
+		return true;
+	}
+
+	consumeAuditRecoveryPrompt(goalId: string): boolean {
+		const lease = this.auditRecoveryLeases.get(goalId);
+		if (!lease?.issued || lease.promptDelivered) return false;
+		lease.promptDelivered = true;
+		return true;
+	}
+
+	clearAuditRecovery(goalId: string): void {
+		this.auditRecoveryLeases.delete(goalId);
 	}
 
 	/** Record one goal-scoped audit infrastructure failure and schedule one recovery wake. */
@@ -200,6 +241,7 @@ export class GoalRuntime {
 	clearAuditRetry(goalId: string): void {
 		this.disposeAuditRetryTimer(goalId);
 		this.auditRetryByGoal.delete(goalId);
+		this.clearAuditRecovery(goalId);
 	}
 
 	private disposeAuditRetryTimer(goalId: string): void {

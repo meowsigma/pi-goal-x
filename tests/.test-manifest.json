@@ -16,6 +16,7 @@
     ".tests/goal-dashboard-golden.test.ts",
     ".tests/goal-dashboard-model.test.ts",
     ".tests/goal-deferred-archival.test.ts",
+    ".tests/goal-delegated-progress.test.ts",
     ".tests/goal-draft.test.ts",
     ".tests/goal-drafting.test.ts",
     ".tests/goal-e2e.test.ts",
@@ -37,6 +38,7 @@
     ".tests/goal-policy.test.ts",
     ".tests/goal-pool-snapshot.test.ts",
     ".tests/goal-pool.test.ts",
+    ".tests/goal-progress-evidence.test.ts",
     ".tests/goal-prompts.test.ts",
     ".tests/goal-questionnaire.test.ts",
     ".tests/goal-record.test.ts",
@@ -70,7 +72,8 @@
     ".tests/verification-contract.test.ts"
   ],
   "integrationFiles": [
-    ".tests/integration/extension.test.ts"
+    ".tests/integration/extension.test.ts",
+    ".tests/integration/nqa-goal-host.test.ts"
   ],
   "e2eFiles": [
     ".tests/e2e/goal-lifecycle-dashboard.test.ts",

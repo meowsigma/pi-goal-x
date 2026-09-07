@@ -35,6 +35,7 @@ import { createMockTheme, createMockTUI } from "./tui-test-utils.ts";
 const FIXTURE_GOAL = readFileSync(new URL("./fixtures/goals/active_goal_fixture.md", import.meta.url), "utf8");
 const ESCAPE = "\x1b";
 const CTRL_SHIFT_T = "\x1b[116;6u"; // kitty protocol: 't' with ctrl+shift modifiers
+const BTW_FOCUS_SIGNAL_KEY = "__pi_extension_focus_ownership_v1";
 
 interface Harness {
 	handlers: Record<string, (event: unknown, ctx: ExtensionContext) => unknown>;
@@ -201,6 +202,44 @@ test("Escape while a goal modal is open never pauses the goal; Escape after it c
 		assert.ok(h.notifyCalls.includes("Goal paused."), "Escape without a goal modal pauses the goal");
 	} finally {
 		// temp dir cleanup is best-effort.
+	}
+});
+
+test("focused BTW Escape is passed to the side overlay without pausing the goal", async () => {
+	const { cwd } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h);
+		(globalThis as Record<string, unknown>)[BTW_FOCUS_SIGNAL_KEY] = {
+			version: 1,
+			owner: "btw",
+			focused: true,
+		};
+
+		const result = h.terminalInput(ESCAPE);
+		assert.equal(result, undefined, "focused BTW owns Escape after the goal listener yields");
+		assert.ok(!h.notifyCalls.includes("Goal paused."), "focused BTW Escape must not pause the goal");
+	} finally {
+		delete (globalThis as Record<string, unknown>)[BTW_FOCUS_SIGNAL_KEY];
+	}
+});
+
+test("visible but unfocused BTW does not swallow main Escape", async () => {
+	const { cwd } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h);
+		(globalThis as Record<string, unknown>)[BTW_FOCUS_SIGNAL_KEY] = {
+			version: 1,
+			owner: "btw",
+			focused: false,
+		};
+
+		const result = h.terminalInput(ESCAPE);
+		assert.equal(result, undefined, "main Escape still passes to pi after goal pause");
+		assert.ok(h.notifyCalls.includes("Goal paused."), "unfocused BTW must not prevent the main goal pause");
+	} finally {
+		delete (globalThis as Record<string, unknown>)[BTW_FOCUS_SIGNAL_KEY];
 	}
 });
 

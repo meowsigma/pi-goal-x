@@ -9,6 +9,15 @@ import type { GoalCore } from "./goal-state.ts";
 
 const DEBUG_GOALS_DIR = ".pi/goals/debug";
 
+/** Versioned ephemeral focus handoff shared with pi-learn's BTW overlay. */
+const BTW_FOCUS_SIGNAL_KEY = "__pi_extension_focus_ownership_v1";
+function btwOverlayOwnsFocus(): boolean {
+	const signal = (globalThis as Record<string, unknown>)[BTW_FOCUS_SIGNAL_KEY];
+	if (!signal || typeof signal !== "object") return false;
+	const value = signal as { version?: unknown; owner?: unknown; focused?: unknown };
+	return value.version === 1 && value.owner === "btw" && value.focused === true;
+}
+
 /**
  * Terminal input keybindings (Escape pause/abort-audit, Ctrl+Shift+T dashboard
  * overlay, and the hidden debug-mode bindings) plus the debug goal/task/audit
@@ -114,6 +123,13 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 		const settings = loadGoalSettings(typeof ctx.cwd === "string" ? ctx.cwd : process.cwd());
 		const keybindings = settings.keybindings?.dashboard ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
 		core.terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
+			// Goal-owned modals remain authoritative even if a stale cross-extension
+			// signal survives a focus transition.
+			if (core.goalModalDepth > 0) return undefined;
+			// A focused BTW overlay owns Escape. The overlay is non-capturing so this
+			// listener runs first; yield only when the versioned signal reflects the
+			// actual TUI focus, never merely because BTW is visible.
+			if (matchesKey(data, "escape") && btwOverlayOwnsFocus()) return undefined;
 			// If an audit is running, Escape aborts the audit instead of pausing.
 			// Must return { consume: true } so the TUI doesn't also process the key
 			// and abort the running tool execution, which would cascade into pausing
@@ -127,7 +143,6 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// it is open: never intercept — otherwise Escape would pause the goal
 			// before the dialog could process it (bn-l pattern). Depth counter so
 			// nested goal modals remain guarded.
-			if (core.goalModalDepth > 0) return undefined;
 			if (matchesKey(data, "escape") && core.auditProgress) {
 				core.abortAudit(ctx);
 				return { consume: true };

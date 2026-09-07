@@ -59,11 +59,14 @@ test("goalPrompt wraps objective as untrusted data and includes Sisyphus discipl
 	assert.doesNotMatch(prompt, /update_goal\(\{status: "blocked"\}\)/);
 });
 
-test("no-progress recovery resolves stale paused-status conflicts in favor of current active state", () => {
-	const prompt = noProgressRecoveryPrompt(1);
+test("no-progress recovery resolves stale paused-status conflicts without weakening task policy", () => {
+	const prompt = noProgressRecoveryPrompt(3);
 
 	assert.match(prompt, /current \[PI GOAL ACTIVE\] block is authoritative/i);
 	assert.match(prompt, /earlier paused-status messages.*stale/i);
+	assert.match(prompt, /explicit user direction or a hard contradiction/i);
+	assert.match(prompt, /NOT PROVEN.*not success/i);
+	assert.doesNotMatch(prompt, /skip\/NOT PROVEN/i);
 });
 
 test("continuation checkpoint is a bounded v2 marker carrying only the goal id", () => {

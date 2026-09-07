@@ -27,6 +27,7 @@ interface Harness {
 	commands: Map<string, any>;
 	ctx: ExtensionContext;
 	notifies: Array<{ msg: string; level: string }>;
+	sentMessages: Array<{ content?: string; details?: unknown }>;
 	activeToolsHistory: string[][];
 	terminalInputHandler: ((data: string) => unknown) | null;
 	statusCalls: Array<{ key: string; value?: string }>;
@@ -49,6 +50,7 @@ function createHarness(options: HarnessOptions): Harness {
 	const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, any>();
 	const notifies: Array<{ msg: string; level: string }> = [];
+	const sentMessages: Array<{ content?: string; details?: unknown }> = [];
 	const activeToolsHistory: string[][] = [];
 	const statusCalls: Array<{ key: string; value?: string }> = [];
 	const widgetCalls: Array<{ key: string; factory: unknown }> = [];
@@ -60,7 +62,7 @@ function createHarness(options: HarnessOptions): Harness {
 		on: (event: string, handler: Function) => { handlers.set(event, handler); },
 		appendEntry: () => {},
 		registerMessageRenderer: () => {},
-		sendMessage: () => {},
+		sendMessage: (message: { content?: string; details?: unknown }) => { sentMessages.push(message); },
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = [...next]; activeToolsHistory.push([...next]); },
 		hasUI: options.hasUI ?? false,
@@ -92,7 +94,7 @@ function createHarness(options: HarnessOptions): Harness {
 	goalExtension(pi as any, options.runCompletionAuditor ? { runCompletionAuditor: options.runCompletionAuditor } : {});
 	return {
 		handlers, tools, commands, ctx, notifies, activeToolsHistory,
-		statusCalls, widgetCalls,
+		statusCalls, widgetCalls, sentMessages,
 		get terminalInputHandler() { return terminalInputHandler; },
 	};
 }
@@ -411,6 +413,37 @@ describe("five-tool handler integration", () => {
 		}
 	});
 
+	it("pause-mid-run resume followed by a queued checkpoint uses fresh active state", async () => {
+		const f = fixture();
+		try {
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+			await h.handlers.get("session_start")?.({ reason: "start" }, h.ctx);
+			await h.handlers.get("agent_start")?.({}, h.ctx);
+			writeActiveGoalFile({ cwd: f.cwd }, { ...f.goal, status: "paused", autoContinue: false, stopReason: "user", updatedAt: new Date().toISOString() });
+			const pausedPrompt = await h.handlers.get("before_agent_start")?.({
+				systemPrompt: "base",
+				prompt: "stale in-flight frame",
+				systemPromptOptions: {},
+			}, h.ctx) as { systemPrompt?: string };
+			assert.match(pausedPrompt.systemPrompt ?? "", /PI GOAL PAUSED/);
+
+			// This is the explicit user resume boundary; the queued checkpoint is
+			// then evaluated against the newly persisted goal, not the old frame.
+			writeActiveGoalFile({ cwd: f.cwd }, { ...f.goal, status: "active", autoContinue: true, stopReason: undefined, updatedAt: new Date().toISOString() });
+			const checkpoint = checkpointTriggerPrompt(f.goal.id);
+			const resumedPrompt = await h.handlers.get("before_agent_start")?.({
+				systemPrompt: "base",
+				prompt: checkpoint,
+				systemPromptOptions: {},
+			}, h.ctx) as { systemPrompt?: string };
+			assert.match(resumedPrompt.systemPrompt ?? "", /PI GOAL ACTIVE/);
+			assert.doesNotMatch(resumedPrompt.systemPrompt ?? "", /PI GOAL PAUSED/);
+			assert.match(resumedPrompt.systemPrompt ?? "", new RegExp(`goalId=${f.goal.id}`));
+		} finally {
+			f.cleanup();
+		}
+	});
+
 	it("durable audit reset boundary survives exhaustion, reload, and a new failure", async () => {
 		const f = fixture();
 		let auditorCalled = 0;
@@ -449,6 +482,137 @@ describe("five-tool handler integration", () => {
 			const restored = await (afterNewFailure.tools.get("update_goal")!.execute as any)("reset-3", { status: "complete" }, undefined, undefined, afterNewFailure.ctx);
 			assert.match(restored.content[0].text, /cooling down/i, "the new post-reset failure survives reload");
 			assert.equal(auditorCalled, 1);
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("audit exhaustion coaches one independent-task continuation without a denied-call loop", async () => {
+		const f = fixture();
+		try {
+			const goalWithPendingTask = {
+				...f.goal,
+				taskList: {
+					tasks: [{ id: "independent", title: "Independent work", status: "pending" as const }],
+					blockCompletion: false,
+					proposedAt: new Date().toISOString(),
+				},
+			};
+			writeActiveGoalFile({ cwd: f.cwd }, goalWithPendingTask);
+			appendFileSync(goalLedgerPath({ cwd: f.cwd }), Array.from({ length: 4 }, (_, index) => JSON.stringify({
+				type: "audit_result",
+				goalId: f.goal.id,
+				verdict: "error",
+				report: `Auditor diagnostic: exhausted-${index}`,
+				at: new Date(Date.now() - (10_000 - index) * 1_000).toISOString(),
+			})).join("\n") + "\n");
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+			await start(h);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			h.sentMessages.length = 0;
+
+			const update = h.tools.get("update_goal")!;
+			let coachedPrompt = "";
+			for (let loop = 0; loop < 3; loop++) {
+				// Model the complete SDK lifecycle: each denied completion is a real
+				// tool call/result inside a fresh agent run, followed by settlement.
+				await h.handlers.get("agent_start")?.({}, h.ctx);
+				await h.handlers.get("tool_call")?.({ toolName: "update_goal", toolCallId: `denied-${loop}`, input: { status: "complete" } }, h.ctx);
+				const denied = await (update.execute as any)(`exhausted-${loop}`, { status: "complete" }, undefined, undefined, h.ctx);
+				await h.handlers.get("tool_execution_end")?.({ toolName: "update_goal", toolCallId: `denied-${loop}`, result: denied }, h.ctx);
+				assert.match(denied.content[0].text, /independently actionable work|exhausted/i);
+				await h.handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, h.ctx);
+				await h.handlers.get("agent_settled")?.({}, h.ctx);
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				if (loop === 0) {
+					assert.equal(h.sentMessages.length, 1, "one actionable recovery checkpoint is dispatched");
+					assert.match(String(h.sentMessages[0]?.content), /pi_goal_continuation/);
+					const coached = await h.handlers.get("before_agent_start")?.({
+						systemPrompt: "base",
+						prompt: String(h.sentMessages[0]?.content),
+						systemPromptOptions: {},
+					}, h.ctx) as { systemPrompt?: string };
+					coachedPrompt = coached.systemPrompt ?? "";
+				}
+			}
+			assert.match(coachedPrompt, /AUDIT RECOVERY PIVOT/);
+			assert.match(coachedPrompt, /NOT PROVEN criterion is not success/i);
+			assert.equal(h.sentMessages.length, 1, "repeated denied completion cannot hot-loop recovery checkpoints");
+			assert.equal(parseGoalFile(path.join(f.cwd, ".pi", "goals", activeGoalFiles(f.cwd)[0]!))?.status, "active");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("final auditor infrastructure failure dispatches one independent-work recovery", async () => {
+		const f = fixture();
+		let auditorCalled = 0;
+		try {
+			writeActiveGoalFile({ cwd: f.cwd }, {
+				...f.goal,
+				taskList: {
+					tasks: [{ id: "independent", title: "Independent work", status: "pending" as const }],
+					blockCompletion: false,
+					proposedAt: new Date().toISOString(),
+				},
+			});
+			const h = createHarness({
+				cwd: f.cwd,
+				sessionEntries: f.sessionEntries,
+				runCompletionAuditor: async () => {
+					auditorCalled++;
+					return { approved: false, disapproved: false, output: "", error: "final provider failure", model: "fixture" };
+				},
+			});
+			await start(h);
+			h.sentMessages.length = 0;
+			const realNow = Date.now;
+			let fakeNow = realNow();
+			const admissionDelays = [0, 2_001, 5_001, 15_001];
+			try {
+				Date.now = () => fakeNow;
+				for (let attempt = 0; attempt < 4; attempt++) {
+					fakeNow += admissionDelays[attempt]!;
+					await h.handlers.get("agent_start")?.({}, h.ctx);
+					await h.handlers.get("tool_call")?.({ toolName: "update_goal", toolCallId: `final-audit-${attempt}`, input: { status: "complete" } }, h.ctx);
+					const result = await (h.tools.get("update_goal")!.execute as any)(`final-audit-${attempt}`, { status: "complete" }, undefined, undefined, h.ctx);
+					await h.handlers.get("tool_execution_end")?.({ toolName: "update_goal", toolCallId: `final-audit-${attempt}`, result }, h.ctx);
+				}
+			} finally {
+				Date.now = realNow;
+			}
+			assert.equal(auditorCalled, 4, "the actual final/fourth audit failure is exercised");
+			h.sentMessages.length = 0;
+			await h.handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, h.ctx);
+			await h.handlers.get("agent_settled")?.({}, h.ctx);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			assert.equal(h.sentMessages.length, 1, "exhaustion failure dispatches one recovery checkpoint");
+			assert.match(String(h.sentMessages[0]?.content), /pi_goal_continuation/);
+			assert.equal(parseGoalFile(path.join(f.cwd, ".pi", "goals", activeGoalFiles(f.cwd)[0]!))?.status, "active");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("audit exhaustion without pending tasks stays fail-closed and does not dispatch recovery work", async () => {
+		const f = fixture();
+		try {
+			appendFileSync(goalLedgerPath({ cwd: f.cwd }), Array.from({ length: 4 }, (_, index) => JSON.stringify({
+				type: "audit_result",
+				goalId: f.goal.id,
+				verdict: "error",
+				report: `Auditor diagnostic: exhausted-${index}`,
+				at: new Date(Date.now() - (10_000 - index) * 1_000).toISOString(),
+			})).join("\n") + "\n");
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+			await start(h);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			h.sentMessages.length = 0;
+			const denied = await (h.tools.get("update_goal")!.execute as any)("exhausted-3", { status: "complete" }, undefined, undefined, h.ctx);
+			assert.match(denied.content[0].text, /exhausted/i);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			assert.equal(h.sentMessages.length, 0, "no pending independent work means no continuation");
+			assert.equal(parseGoalFile(path.join(f.cwd, ".pi", "goals", activeGoalFiles(f.cwd)[0]!))?.status, "active");
 		} finally {
 			f.cleanup();
 		}

@@ -13,6 +13,7 @@ import { latestEventsForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 import type { GoalCore } from "./goal-state.ts";
+import { countTaskSubtree } from "./goal-task-count.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
 
 // update_goal(complete) execution path: validates the completable state,
@@ -55,11 +56,17 @@ export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContex
 		// bookkeeping from granting an empty continuation lease. Other useful
 		// tools in the same run retain credit through goalWorkToolProductiveThisTurn.
 		core.goalWorkToolDeniedThisTurn = true;
+		const pendingTasks = auditTarget.taskList ? countTaskSubtree(auditTarget.taskList.tasks).pending : 0;
+		const hasIndependentWork = pendingTasks > 0;
+		const recoveryDispatched = hasIndependentWork && core.runtime.scheduleAuditRecovery(ctx, auditTarget);
 		const wait = auditAdmission.retryAfterMs
 			? ` Retry admission opens in ${Math.ceil(auditAdmission.retryAfterMs / 1000)}s.`
 			: " Automatic audit retries are exhausted; the goal remains active for independent work and a user request can start a fresh attempt.";
+		const recovery = hasIndependentWork
+			? ` Independently actionable work remains (${pendingTasks} pending task${pendingTasks === 1 ? "" : "s"}). Do not request completion again while audit admission is unavailable; continue that work and record evidence.${recoveryDispatched ? " A recovery continuation has been queued." : " The recovery continuation was already issued; do not repeat this denied request."}`
+			: " No independent pending task is available, so no automatic continuation is issued.";
 		return {
-			content: [{ type: "text", text: `Completion audit is cooling down after an infrastructure failure.${wait}` }],
+			content: [{ type: "text", text: `Completion audit is cooling down after an infrastructure failure.${wait}${recovery}` }],
 			details: goalDetails(auditTarget),
 		};
 	}
@@ -394,15 +401,22 @@ if (settings.disabled === true) {
 		const retryPlan = infrastructureFailure && auditor.error !== "Auditor aborted."
 			? core.runtime.scheduleAuditRetry(ctx, auditTarget, auditor.error!)
 			: null;
+		const pendingTasks = auditTarget.taskList ? countTaskSubtree(auditTarget.taskList.tasks).pending : 0;
+		const recoveryDispatched = infrastructureFailure && auditor.error !== "Auditor aborted." && !retryPlan && pendingTasks > 0
+			? core.runtime.scheduleAuditRecovery(ctx, auditTarget)
+			: false;
 		const retryText = retryPlan
 			? ` A bounded retry is scheduled in ${Math.round(retryPlan.delayMs / 1000)}s (attempt ${retryPlan.attempt}${retryPlan.maxAttempts > 0 ? `/${retryPlan.maxAttempts}` : ""}).`
 			: infrastructureFailure && auditor.error !== "Auditor aborted."
 				? " Automatic retries are paused after the bounded recovery attempts; the goal remains active and user work is unaffected."
 				: "";
+		const recoveryText = recoveryDispatched
+			? ` Independently actionable work remains (${pendingTasks} pending task${pendingTasks === 1 ? "" : "s"}); continue that work instead of requesting completion again. A recovery continuation is queued.`
+			: "";
 		const rejectionText = [
 			resultHeading,
 			"",
-			resultSummary + retryText,
+			resultSummary + retryText + recoveryText,
 			auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
 			auditor.error ? `Auditor diagnostic: ${auditor.error}` : undefined,
 			"",

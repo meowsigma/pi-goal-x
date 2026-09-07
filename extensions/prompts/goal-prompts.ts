@@ -317,7 +317,7 @@ export function noProgressRecoveryPrompt(attempt: number): string {
 		);
 	} else {
 		lines.push(
-			"Write a dual-sided packet for THIS task only: what you tried, why each path failed, and why remaining tasks do not require it. If that packet is honest, skip/NOT PROVEN this task and immediately work an independent remaining task. Do not halt the goal.",
+			"Write a dual-sided packet for THIS task only: what you tried, why each path failed, and what remains unverified. NOT PROVEN is not success; it records an unmet criterion. Continue with an independent remaining task. Skip a task only through update_goal_task with a concrete reason after explicit user direction or a hard contradiction makes the task impossible; never skip merely to escape the hurdle. Do not halt the goal.",
 		);
 	}
 	const content = lines.join("\n");

@@ -269,11 +269,11 @@ describe("Tool profile invariance", () => {
 			const bas = lifecycleHandlers.get("before_agent_start")!;
 			await bas({ systemPrompt: "", prompt: "start", systemPromptOptions: {} }, f.mockCtx);
 
-			// update_goal(blocked) transitions active -> blocked; profile stays five.
+			// Agent lifecycle outcomes are non-terminal; profile stays five.
 			const update = registeredTools.find((t) => t.name === "update_goal");
 			assert.ok(update);
 			const result = await (update.execute as Function)("update-b", { status: "blocked", reason: "test blocker" }, new AbortController().signal, undefined, f.mockCtx);
-			assert.ok(result.terminate === true, "blocked terminates the turn");
+			assert.notEqual(result.terminate, true, "blocked request does not terminate the turn");
 			expectGoalProfile(FIVE_GOAL_TOOLS);
 			expectHostUntouched(HOST_SEED_A);
 		} finally {
@@ -281,8 +281,8 @@ describe("Tool profile invariance", () => {
 		}
 	});
 
-	// ── Invalid lifecycle calls: state-aware rejection, not tool removal ───
-	it("update_goal(blocked) from a paused goal is rejected with a state-aware message while tools stay", async () => {
+	// ── Agent lifecycle calls: state-aware no-op, not tool removal ───
+	it("update_goal(blocked) from a paused goal stays active while tools stay", async () => {
 		const f = testFixture();
 		try {
 			// Pause the goal on disk, then reload the session.
@@ -307,8 +307,8 @@ describe("Tool profile invariance", () => {
 			assert.ok(update);
 			const result = await (update.execute as Function)("update-p", { status: "blocked", reason: "test blocker" }, new AbortController().signal, undefined, f.mockCtx);
 			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("applies only to an active goal"),
-				`blocked from paused must be a state-aware failure, got: ${text.slice(0, 100)}`);
+			assert.match(text, /goal remains active/i,
+				`blocked from paused must remain non-terminal, got: ${text.slice(0, 100)}`);
 			// The full five-tool profile remains advertised after the rejection.
 			expectGoalProfile(FIVE_GOAL_TOOLS);
 			expectHostUntouched(HOST_SEED_A);

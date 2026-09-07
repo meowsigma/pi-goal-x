@@ -103,6 +103,7 @@ test("runGoalCompletionAuditor passes parent modelRuntime into createSession", a
 
 		assert.equal(captured?.modelRuntime, runtime);
 		assert.equal(captured?.modelRegistry, modelRegistry);
+		assert.deepEqual(captured?.tools, ["read", "grep", "find", "ls"]);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
@@ -325,7 +326,7 @@ test("runGoalCompletionAuditor returns aborted error when signal is already abor
 
 		assert.equal(result.error, "Auditor aborted.");
 		assert.equal(result.approved, false);
-		assert.equal(result.disapproved, true);
+		assert.equal(result.disapproved, false);
 		assert.equal(result.output, "");
 		// The signal listener for the already-aborted signal should have been
 		// cleaned up in the inner finally before session.abort() could fire.
@@ -370,7 +371,7 @@ test("runGoalCompletionAuditor aborts running prompt when signal fires (abort du
 
 		assert.equal(result.error, "Auditor aborted.");
 		assert.equal(result.approved, false);
-		assert.equal(result.disapproved, true);
+		assert.equal(result.disapproved, false);
 		assert.ok(abortCalledOnSession, "session.abort() must have been called via the signal listener");
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
@@ -421,8 +422,146 @@ test("runGoalCompletionAuditor detects abort when session.prompt returns normall
 
 		assert.equal(result.error, "Auditor aborted.");
 		assert.equal(result.approved, false);
-		assert.equal(result.disapproved, true);
+		assert.equal(result.disapproved, false);
 		assert.ok(abortCalledOnSession, "session.abort() must have been called via the signal listener");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor treats an empty resolved prompt as a protocol error", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-empty-"));
+	try {
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			settings: {},
+			createSession: async () => ({ session: { abort: () => {}, subscribe: () => () => {}, prompt: async () => {} } }) as any,
+		});
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, false);
+		assert.match(result.error ?? "", /empty report/);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor treats an invalid verdict as a protocol error", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-invalid-"));
+	try {
+		let onEvent: ((event: any) => void) | undefined;
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			settings: {},
+			createSession: async () => ({ session: {
+				abort: () => {},
+				subscribe: (listener: (event: any) => void) => { onEvent = listener; return () => {}; },
+				prompt: async () => onEvent?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "No trustworthy verdict." }] } }),
+			} }) as any,
+		});
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, false);
+		assert.match(result.error ?? "", /no valid verdict/);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor parses a verdict beyond the bounded display output", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-long-"));
+	try {
+		let onEvent: ((event: any) => void) | undefined;
+		const longReport = `${"Evidence line.\n".repeat(2_000)}<approved/>`;
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			settings: {},
+			createSession: async () => ({ session: {
+				abort: () => {},
+				subscribe: (listener: (event: any) => void) => { onEvent = listener; return () => {}; },
+				prompt: async () => onEvent?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: longReport }], stopReason: "stop" } }),
+			} }) as any,
+		});
+		assert.equal(result.approved, true);
+		assert.equal(result.disapproved, false);
+		assert.equal(result.error, undefined);
+		assert.ok(result.output.length <= 12_000, "display output remains bounded");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor fails closed for a provider abort without an external signal", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-provider-abort-"));
+	try {
+		let onEvent: ((event: any) => void) | undefined;
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			settings: {},
+			createSession: async () => ({ session: {
+				abort: () => {},
+				subscribe: (listener: (event: any) => void) => { onEvent = listener; return () => {}; },
+				prompt: async () => onEvent?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Earlier claim\\n<approved/>" }], stopReason: "aborted" } }),
+			} }) as any,
+		});
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, false);
+		assert.equal(result.error, "Auditor aborted by provider.");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor fails closed when the provider truncates a report", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-length-"));
+	try {
+		let onEvent: ((event: any) => void) | undefined;
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			settings: {},
+			createSession: async () => ({ session: {
+				abort: () => {},
+				subscribe: (listener: (event: any) => void) => { onEvent = listener; return () => {}; },
+				prompt: async () => onEvent?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Earlier claim\\n<approved/>" }], stopReason: "length" } }),
+			} }) as any,
+		});
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, false);
+		assert.equal(result.error, "Auditor report was truncated before a verdict.");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runGoalCompletionAuditor preserves provider diagnostics and fails closed over an earlier approval", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-provider-error-"));
+	try {
+		let onEvent: ((event: any) => void) | undefined;
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			settings: {},
+			createSession: async () => ({ session: {
+				abort: () => {},
+				subscribe: (listener: (event: any) => void) => { onEvent = listener; return () => {}; },
+				prompt: async () => {
+					onEvent?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Looks complete\\n<approved/>" }], stopReason: "error", errorMessage: "Provider finish_reason: network_error" } });
+				},
+			} }) as any,
+		});
+		assert.equal(result.approved, false);
+		assert.equal(result.disapproved, false);
+		assert.match(result.error ?? "", /network_error/);
+		assert.match(result.output, /<approved\/>/);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
@@ -457,8 +596,8 @@ test("runGoalCompletionAuditor cleans up abort listener on normal completion", a
 
 		// Normal completion — no abort occurred, no approval/disapproval markers
 		assert.equal(result.approved, false);
-		assert.equal(result.disapproved, false); // Empty output has no disapproval marker
-		assert.equal(result.error, undefined); // No error
+		assert.equal(result.disapproved, false); // Empty output has no rejection verdict
+		assert.match(result.error ?? "", /empty report/);
 		assert.equal(abortCalledOnSession, false, "session.abort() should not have been called");
 
 		// Also verify the signal listener was cleaned up: triggering the signal after

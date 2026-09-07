@@ -75,7 +75,7 @@ pi.registerTool(defineTool({
 		const otherCount = otherOpenGoalCount(core.goalsById, core.focusedGoalId);
 		if (!view) {
 			const text = core.openGoals().length > 0
-				? `${buildUnfocusedOpenGoalsSummary(core.openGoals().length)}\n\nCall create_goal with the objective to create and focus a new goal, or ask the user to run /goal-focus to choose an open goal.`
+				? `${buildUnfocusedOpenGoalsSummary(core.openGoals().length)}\n\nNo focused goal is available; preserve the open goals and continue only with non-goal-specific work.`
 				: "No goal is set in this session. Call create_goal with the objective when the user explicitly asks to start a persistent goal.";
 			return {
 				content: [{ type: "text", text }],
@@ -111,9 +111,9 @@ pi.registerTool(defineTool({
 			}
 			if (view.activePath) lines.push(`Path: ${view.activePath}`);
 			if (view.archivedPath) lines.push(`Archive: ${view.archivedPath}`);
-			if (otherCount > 0) lines.push(`Other open goals: ${otherCount} (user can run /goal-list or /goal-focus)`);
+			if (otherCount > 0) lines.push(`Other open goals: ${otherCount} (focus remains user-owned)`);
 			lines.push("");
-			lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Call update_goal({status: \"blocked\"}) only after the same blocker recurs on three consecutive goal turns. User commands handle pause/resume/clear/focus.");
+			lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Keep blockers and pauses in your response; user commands handle pause/resume/clear/focus.");
 			// E1: goal history (last audit verdict + recent lifecycle events).
 			if (includeHistory) {
 				const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
@@ -238,8 +238,8 @@ pi.registerTool(defineTool({
 
 	// ── update_goal: the model's terminal-outcome surface (Stage 3) ────────
 // complete → the independent auditor verifies from actual evidence (no
-// paperwork field); blocked → a distinct agent-blocked state that stops
-// continuation. The three-consecutive-turn blocker rule is prompt policy.
+// paperwork field). Agent lifecycle calls never pause, block, or clear a goal;
+// those transitions remain user-owned.
 	async function runGoalBlockedFlow(ctx: ExtensionContext, reasonInput?: string, attemptedActions: string[] = []): Promise<AgentToolResult<unknown>> {
 	core.reconcileFocusedGoalFromDisk(ctx);
 	const gate = validateGoalBlock({ goal: core.state.goal, runningGoalId: core.runningGoalId });
@@ -491,7 +491,7 @@ async function runGoalAgentPauseFlow(ctx: ExtensionContext, reason: string | und
 		core.updateUI(ctx);
 		const suggestion = trimmedAction ? ` Suggested next step: ${trimmedAction}` : "";
 		return {
-			content: [{ type: "text", text: `Goal paused by the agent: ${trimmedReason}.${suggestion} Stop now; the user can resume with /goal-resume or revise with /goal-tweak.` }],
+			content: [{ type: "text", text: `Goal pause request rejected as an agent lifecycle transition: ${trimmedReason}.${suggestion} The goal remains active; continue safe independent work. Scope revisions remain external via /goal-tweak.` }],
 			details: goalDetails(core.state.goal, `Pause reason: ${trimmedReason}${trimmedAction ? `\nSuggested action: ${trimmedAction}` : ""}`), // E7
 			terminate: true,
 		};
@@ -508,8 +508,8 @@ async function runGoalAgentPauseFlow(ctx: ExtensionContext, reason: string | und
 pi.registerTool(defineTool({
 	name: "update_goal",
 	label: "Update Goal",
-	description: "Report a terminal or pausing outcome for the current run: \"complete\" runs the independent completion auditor (completion_summary is an untrusted claim only); \"blocked\" records a distinct agent-blocked state and stops continuation per the active-goal policy; \"paused\" pauses immediately with a required reason. Never archive or abandon a goal yourself — ask the user to run /goal-clear.",
-	promptSnippet: "Report the current run as complete (audited) or blocked per the active-goal lifecycle policy; paused is immediate with a required reason.",
+	description: "Report completion for the current run: \"complete\" runs the independent completion auditor (completion_summary is an untrusted claim only). Do not pause, block, abandon, or clear goals; those lifecycle transitions are outside this tool's authority. Never archive a goal yourself; lifecycle cleanup remains external (/goal-clear).",
+	promptSnippet: "Request audited completion only when every requirement is satisfied; keep blockers and pauses in your response for the user.",
 	promptGuidelines: [
 		// PR E §54: capability + hard boundary here; the WHEN rules (evidence,
 		// third-identical-blocker, objective immutability) live once in the
@@ -518,10 +518,7 @@ pi.registerTool(defineTool({
 		"An optional completion_summary is passed to the auditor as an UNTRUSTED claim — it is never evidence and can never substitute for real artifacts.",
 	],
 	parameters: Type.Object({
-		status: StringEnum(["complete", "blocked", "paused"] as const, { description: "complete runs the independent auditor; blocked records a distinct agent-blocked state; paused is an immediate agent pause with a required reason." }),
-		reason: Type.Optional(Type.String({ description: "Required when status is paused or blocked: describe the concrete blocker." })),
-		attempted_actions: Type.Optional(Type.Array(Type.String({ maxLength: 240 }), { maxItems: 8, description: "Optional: up to 8 concrete actions already attempted against this blocker." })),
-		suggested_action: Type.Optional(Type.String({ description: "Optional suggested next step when status is paused." })),
+		status: StringEnum(["complete"] as const, { description: "complete runs the independent auditor." }),
 		completion_summary: Type.Optional(Type.String({ description: "Optional untrusted executor claim shown to the auditor; never evidence." })),
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
@@ -529,14 +526,13 @@ pi.registerTool(defineTool({
 		// P1-3: persist any buffered in-turn mutations now so the auditor and
 		// status transitions observe the current task/state, not the stale disk.
 		core.flushGoalTransaction(ctx);
-		if (params.status === "blocked") {
-			const attempted = Array.isArray((params as { attempted_actions?: unknown }).attempted_actions)
-				? ((params as { attempted_actions: unknown[] }).attempted_actions.filter((a): a is string => typeof a === "string"))
-				: [];
-			return runGoalBlockedFlow(ctx, params.reason, attempted);
-		}
-		if (params.status === "paused") {
-			return runGoalAgentPauseFlow(ctx, params.reason, params.suggested_action);
+		const requestedStatus = (params as { status?: string }).status;
+		if (requestedStatus !== "complete") {
+			return {
+				content: [{ type: "text", text: "Agent pause/block outcomes are not lifecycle transitions. The goal remains active; continue safe independent work and report the obstacle without changing lifecycle state." }],
+				details: goalDetails(core.state.goal),
+				terminate: false,
+			};
 		}
 		return deps.runGoalCompletionFlow(core, ctx, params.completion_summary);
 	},

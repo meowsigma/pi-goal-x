@@ -95,6 +95,15 @@ function createHarness(cwd: string) {
 	} as unknown as ExtensionContext & { abort: () => void };
 
 	piGoalExtension(mockPi as never);
+	const beforeAgentStart = handlers["before_agent_start"];
+	if (beforeAgentStart) {
+		handlers["before_agent_start"] = async (event, ctx) => {
+			if (typeof event.prompt === "string" && event.prompt.startsWith("user typed")) {
+				await handlers["input"]?.({ type: "input", text: event.prompt, source: "interactive" }, ctx);
+			}
+			return beforeAgentStart(event, ctx);
+		};
+	}
 
 	return {
 		handlers,
@@ -273,7 +282,7 @@ test("regression: reported 503 payload schedules goal-level recovery after settl
 });
 
 test("lifecycle: provider-initiated abort routes into recovery instead of pausing", async () => {
-	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "25";
+	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "1000";
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -303,7 +312,7 @@ test("lifecycle: full real event ordering (message_end → turn_end → agent_en
 	// The auditor-verified gap: message_end and turn_end fire BEFORE agent_end
 	// in real pi runs. All three must agree: without a user abort signal, an
 	// aborted assistant message never pauses the goal and recovery engages.
-	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "25";
+	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "1000";
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -388,7 +397,7 @@ function lastNotification(h: ReturnType<typeof createHarness>): string {
 }
 
 test("lifecycle: unbounded recovery keeps retrying past the old 5-attempt cap", async () => {
-	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "25";
+	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "1000";
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -406,11 +415,11 @@ test("lifecycle: unbounded recovery keeps retrying past the old 5-attempt cap", 
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 			assert.match(
 				lastNotification(h),
-				new RegExp(`Retrying the goal in 0s \\(recovery ${attempt}, unbounded\\)`),
+				new RegExp(`Retrying the goal in 1s \\(recovery ${attempt}, unbounded\\)`),
 				`cycle ${attempt} must keep scheduling recovery`,
 			);
-			// Let the (25ms) recovery timer fire and clear before the next cycle.
-			await sleep(80);
+			// Let the (1s) recovery timer fire and clear before the next cycle.
+			await sleep(1100);
 		}
 	} finally {
 		delete process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS;
@@ -419,7 +428,7 @@ test("lifecycle: unbounded recovery keeps retrying past the old 5-attempt cap", 
 
 test("lifecycle: configured bounded cap exhausts with a resume hint instead of retrying", async () => {
 	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS = "2";
-	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "25";
+	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "1000";
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -436,7 +445,7 @@ test("lifecycle: configured bounded cap exhausts with a resume hint instead of r
 			}, idleCtx(h.ctx));
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 			assert.match(lastNotification(h), new RegExp(`recovery ${attempt}/2`), `bounded cycle ${attempt}`);
-			await sleep(80);
+			await sleep(1100);
 		}
 
 		const checkpointsBeforeExhaustion = await countCheckpoints(h);
@@ -457,7 +466,7 @@ test("lifecycle: configured bounded cap exhausts with a resume hint instead of r
 });
 
 test("lifecycle: a successful turn resets the recovery counter and clears pending backoff", async () => {
-	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "25";
+	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "1000";
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -474,7 +483,7 @@ test("lifecycle: a successful turn resets the recovery counter and clears pendin
 				messages: [{ role: "assistant", stopReason: "error", errorMessage: REPORTED_503_MESSAGE }],
 			}, idleCtx(h.ctx));
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-			await sleep(80);
+			await sleep(1100);
 		}
 
 		// A successful turn uses the normal continuation path.

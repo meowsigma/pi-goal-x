@@ -49,6 +49,20 @@ export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContex
 
 	const auditTarget = mergeGoalPromptFromDisk(ctx, core.state.goal);
 	const completionFocus = core.focusedOperationToken(auditTarget.id);
+	const auditAdmission = core.runtime.auditRetryAdmission(auditTarget.id);
+	if (!auditAdmission.allowed) {
+		// The tool call itself is not productive work: prevent the lifecycle
+		// bookkeeping from granting an empty continuation lease. Other useful
+		// tools in the same run retain credit through goalWorkToolProductiveThisTurn.
+		core.goalWorkToolDeniedThisTurn = true;
+		const wait = auditAdmission.retryAfterMs
+			? ` Retry admission opens in ${Math.ceil(auditAdmission.retryAfterMs / 1000)}s.`
+			: " Automatic audit retries are exhausted; the goal remains active for independent work and a user request can start a fresh attempt.";
+		return {
+			content: [{ type: "text", text: `Completion audit is cooling down after an infrastructure failure.${wait}` }],
+			details: goalDetails(auditTarget),
+		};
+	}
 	// Append ledger: completion requested
 	try {
 		core.goalService.appendEvents(ctx, [{
@@ -355,39 +369,57 @@ if (settings.disabled === true) {
 			type: "audit_result",
 			goalId: auditTarget.id,
 			verdict,
-			report: auditor.output || "Auditor produced no output.",
+			report: auditor.error
+				? `Auditor diagnostic: ${auditor.error}${auditor.output ? `\n${auditor.output}` : ""}`.slice(0, 12_500)
+				: auditor.output || "Auditor produced no output.",
 			at: nowIso(),
 		}]);
 	} catch {
 		// Ledger append failure should not block completion
 	}
 	if (!auditor.approved) {
+		if (auditor.error) core.goalWorkToolDeniedThisTurn = true;
+		if (!auditor.error) core.runtime.clearAuditRetry(auditTarget.id);
 		// Clear auditor progress to restore normal widget state, then show the
 		// §15.4 result card briefly so the required next work is visible before
 		// the normal dashboard returns (the goal stays open).
 		core.auditProgress = null;
 		core.setAuditResult(auditor.error ? "error" : "disapproved", auditor.output || "Auditor produced no output.");
 		core.goalWidgetComponentRef.current?.invalidate();
+		const infrastructureFailure = !!auditor.error;
+		const resultHeading = infrastructureFailure ? "Goal audit unavailable." : "Goal audit rejected.";
+		const resultSummary = infrastructureFailure
+			? "The completion audit could not produce a trustworthy verdict. The goal remains active and was not completed."
+			: "Goal completion rejected by independent auditor.";
+		const retryPlan = infrastructureFailure && auditor.error !== "Auditor aborted."
+			? core.runtime.scheduleAuditRetry(ctx, auditTarget, auditor.error!)
+			: null;
+		const retryText = retryPlan
+			? ` A bounded retry is scheduled in ${Math.round(retryPlan.delayMs / 1000)}s (attempt ${retryPlan.attempt}${retryPlan.maxAttempts > 0 ? `/${retryPlan.maxAttempts}` : ""}).`
+			: infrastructureFailure && auditor.error !== "Auditor aborted."
+				? " Automatic retries are paused after the bounded recovery attempts; the goal remains active and user work is unaffected."
+				: "";
 		const rejectionText = [
-			"Goal audit rejected.",
+			resultHeading,
 			"",
-			"Goal completion rejected by independent auditor.",
+			resultSummary + retryText,
 			auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
-			auditor.error ? `Auditor error: ${auditor.error}` : undefined,
+			auditor.error ? `Auditor diagnostic: ${auditor.error}` : undefined,
 			"",
-			auditor.output || "Auditor produced no approval marker.",
+			auditor.output || (infrastructureFailure ? "No auditor verdict was received." : "Auditor produced no approval marker."),
 		].filter((line): line is string => line !== undefined).join("\n");
 		pi.sendMessage<GoalAuditEventDetails>({
 			customType: GOAL_AUDIT_ENTRY,
 			content: rejectionText,
 			display: true,
-			details: { phase: "rejected", goalId: auditTarget.id, auditor: auditor.model },
+			details: { phase: infrastructureFailure ? "error" : "rejected", goalId: auditTarget.id, auditor: auditor.model },
 		});
 		return {
 			content: [{ type: "text", text: rejectionText }],
 			details: goalDetails(core.state.goal),
 		};
 	}
+	core.runtime.clearAuditRetry(auditTarget.id);
 	const approvalText = [
 		"Auditor: I approve this completion claim.",
 		auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,

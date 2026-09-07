@@ -90,7 +90,7 @@ describe("model-facing safety invariant (PR #29 §39)", () => {
 		const prompt = unfocusedOpenGoalsPrompt(2);
 		assert.match(prompt, /\[PI GOAL UNFOCUSED\]/);
 		assert.match(prompt, /Do not choose or switch focus autonomously/);
-		assert.match(prompt, /Ask the user to run \/goal-focus/);
+		assert.match(prompt, /continue only when an authoritative focused goal is available/);
 		// The prompt builder takes only the open-goal count — the setting cannot
 		// reach it structurally.
 		assert.equal(unfocusedOpenGoalsPrompt(1), unfocusedOpenGoalsPrompt(1));

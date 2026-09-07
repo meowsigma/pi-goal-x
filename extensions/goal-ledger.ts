@@ -15,6 +15,7 @@ export type GoalLedgerEvent =
   | { type: "completion_requested"; goalId: string; summary?: string; at: string }
   | { type: "audit_started"; goalId: string; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "audit_result"; goalId: string; verdict: "approved" | "disapproved" | "error"; report: string; at: string }
+  | { type: "audit_retry_reset"; goalId: string; reason: "user_input"; at: string }
   | { type: "audit_skipped"; goalId: string; reason: "disabled" | "user_aborted"; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "goal_completed"; goalId: string; archivePath?: string; at: string }
   | { type: "goal_archived"; goalId: string; archivePath: string; at: string }
@@ -625,6 +626,8 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
       return typeof obj.goalId === "string" && (obj.provider === undefined || typeof obj.provider === "string") && (obj.model === undefined || typeof obj.model === "string") && (obj.thinkingLevel === undefined || typeof obj.thinkingLevel === "string");
     case "audit_result":
       return typeof obj.goalId === "string" && (obj.verdict === "approved" || obj.verdict === "disapproved" || obj.verdict === "error") && typeof obj.report === "string";
+    case "audit_retry_reset":
+      return typeof obj.goalId === "string" && obj.reason === "user_input";
     case "audit_skipped":
       return typeof obj.goalId === "string" && (obj.reason === "disabled" || obj.reason === "user_aborted") && (obj.provider === undefined || typeof obj.provider === "string") && (obj.model === undefined || typeof obj.model === "string") && (obj.thinkingLevel === undefined || typeof obj.thinkingLevel === "string");
     case "goal_completed":
@@ -685,6 +688,8 @@ function sanitizeEvent(event: GoalLedgerEvent): GoalLedgerEvent {
     case "audit_started":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "audit_result":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "audit_retry_reset":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "audit_skipped":
       return { ...event, goalId: safeGoalId(event.goalId) };

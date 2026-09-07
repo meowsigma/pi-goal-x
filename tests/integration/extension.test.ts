@@ -19,6 +19,7 @@ import goalExtension from "../../extensions/goal.ts";
 import { createGoal, goalFocusDetails } from "../../extensions/goal-record.ts";
 import { activePathForGoal, parseGoalFile, serializeGoalFile, writeActiveGoalFile } from "../../extensions/storage/goal-files.ts";
 import { goalLedgerPath } from "../../extensions/goal-ledger.ts";
+import { checkpointTriggerPrompt } from "../../extensions/prompts/goal-prompts.ts";
 
 interface Harness {
 	handlers: Map<string, Function>;
@@ -292,6 +293,167 @@ describe("five-tool handler integration", () => {
 		}
 	});
 
+	it("update_goal(complete) treats an auditor provider error as infrastructure, not rejection", async () => {
+		const f = fixture();
+		try {
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, runCompletionAuditor: async () =>
+				({ approved: false, disapproved: false, output: "", error: "Provider finish_reason: network_error", model: "fixture" }) });
+			await start(h);
+			const update = h.tools.get("update_goal")!;
+			const result = await (update.execute as any)("u-error", { status: "complete" }, new AbortController().signal, undefined, h.ctx);
+			const text = result.content?.[0]?.text ?? "";
+			assert.match(text, /Goal audit unavailable/);
+			assert.doesNotMatch(text, /Goal audit rejected/);
+			assert.equal(activeGoalFiles(f.cwd).length, 1, "goal stays active");
+			assert.equal(parseGoalFile(path.join(f.cwd, ".pi", "goals", activeGoalFiles(f.cwd)[0]!))?.status, "active");
+			assert.equal(ledgerEvents(f.cwd).find((e) => e.type === "audit_result")?.verdict, "error");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("audit cooldown survives settled and hidden continuation events but user input can retry", async () => {
+		const f = fixture();
+		let auditorCalled = 0;
+		const auditErrors = ["first provider failure", "second provider failure", "third provider failure"];
+		try {
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, runCompletionAuditor: async () => {
+				const error = auditErrors[Math.min(auditorCalled, auditErrors.length - 1)]!;
+				auditorCalled++;
+				return { approved: false, disapproved: false, output: "", error, model: "fixture" };
+			} });
+			await start(h);
+			const update = h.tools.get("update_goal")!;
+			await (update.execute as any)("cool-1", { status: "complete" }, undefined, undefined, h.ctx);
+			assert.equal(auditorCalled, 1);
+
+			// NQA/background prompts are extension-originated SDK input, not user
+			// recovery requests, even when they omit a goal checkpoint marker.
+			await h.handlers.get("input")?.({ type: "input", text: "NQA generated followup", source: "extension" }, h.ctx);
+			await h.handlers.get("before_agent_start")?.({ systemPrompt: "base", prompt: "NQA generated followup", systemPromptOptions: {} }, h.ctx);
+			const nqaBlocked = await (update.execute as any)("cool-nqa", { status: "complete" }, undefined, undefined, h.ctx);
+			assert.match(nqaBlocked.content[0].text, /cooling down/i);
+			assert.equal(auditorCalled, 1, "NQA followup cannot bypass audit admission");
+
+			// A successful parent run and the settled continuation path must not
+			// clear the independent audit admission state.
+			await h.handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, h.ctx);
+			await h.handlers.get("agent_settled")?.({}, h.ctx);
+			await h.handlers.get("before_agent_start")?.({
+				systemPrompt: "base",
+				prompt: checkpointTriggerPrompt(f.goal.id),
+				systemPromptOptions: {},
+			}, h.ctx);
+			const blocked = await (update.execute as any)("cool-2", { status: "complete" }, undefined, undefined, h.ctx);
+			assert.match(blocked.content[0].text, /cooling down/i);
+			assert.equal(auditorCalled, 1, "hidden continuation cannot bypass the cooldown");
+
+			// A new session restores the active-goal cooldown from the ledger
+			// instead of replaying the same provider failure immediately.
+			const reloaded = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, runCompletionAuditor: async () => {
+				auditorCalled++;
+				return { approved: false, disapproved: false, output: "", error: "same provider failure", model: "fixture" };
+			} });
+			await reloaded.handlers.get("session_start")?.({ reason: "start" }, reloaded.ctx);
+			const reloadResult = await (reloaded.tools.get("update_goal")!.execute as any)("cool-reload", { status: "complete" }, undefined, undefined, reloaded.ctx);
+			assert.match(reloadResult.content[0].text, /cooling down/i);
+			assert.equal(auditorCalled, 1, "reload cannot replay the same audit immediately");
+
+			// An explicit SDK user input is a fresh retry request, not a hidden
+			// continuation, and may retry without changing the goal lifecycle.
+			await h.handlers.get("input")?.({ type: "input", text: "user retry", source: "interactive" }, h.ctx);
+			await h.handlers.get("before_agent_start")?.({ systemPrompt: "base", prompt: "user retry", systemPromptOptions: {} }, h.ctx);
+			await (update.execute as any)("cool-3", { status: "complete" }, undefined, undefined, h.ctx);
+			assert.equal(auditorCalled, 2, "user input can start a fresh audit attempt");
+			await new Promise((resolve) => setTimeout(resolve, 2_100));
+			await h.handlers.get("input")?.({ type: "input", text: "NQA retry", source: "extension" }, h.ctx);
+			await h.handlers.get("before_agent_start")?.({ systemPrompt: "base", prompt: "NQA retry", systemPromptOptions: {} }, h.ctx);
+			const secondRecovery = await (update.execute as any)("cool-4", { status: "complete" }, undefined, undefined, h.ctx);
+			assert.match(secondRecovery.content[0].text, /attempt 2\/3/);
+			assert.equal(auditorCalled, 3, "a changed diagnostic does not reset the goal retry count");
+			assert.equal(parseGoalFile(path.join(f.cwd, ".pi", "goals", activeGoalFiles(f.cwd)[0]!))?.status, "active");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("before_agent_start lifecycle frames use the current-turn prompt chain", async () => {
+		const f = fixture();
+		try {
+			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
+			await h.handlers.get("session_start")?.({ reason: "start" }, h.ctx);
+			const beforeAgentStart = h.handlers.get("before_agent_start")!;
+			let previousEffectivePrompt = "base";
+			const runBefore = async () => {
+				(h.ctx as any).getSystemPrompt = () => previousEffectivePrompt;
+				const eventPrompt = "base\\n[OTHER EXTENSION CURRENT-TURN]";
+				const result = await beforeAgentStart({ systemPrompt: eventPrompt, prompt: "internal turn", systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+				previousEffectivePrompt = result.systemPrompt ?? eventPrompt;
+				return previousEffectivePrompt;
+			};
+
+			const activeFirst = await runBefore();
+			const activeSecond = await runBefore();
+			assert.equal(activeSecond.length, activeFirst.length, "repeated active turns do not accumulate prompt frames");
+			assert.equal((activeSecond.match(/\[OTHER EXTENSION CURRENT-TURN\]/g) ?? []).length, 1);
+
+			writeActiveGoalFile({ cwd: f.cwd }, { ...f.goal, status: "paused", autoContinue: false, stopReason: "user", updatedAt: new Date().toISOString() });
+			const paused = await runBefore();
+			assert.equal((paused.match(/\[PI GOAL PAUSED /g) ?? []).length, 1);
+			assert.equal((paused.match(/\[PI GOAL ACTIVE /g) ?? []).length, 0, "paused turn has no stale active frame");
+
+			writeActiveGoalFile({ cwd: f.cwd }, { ...f.goal, status: "active", autoContinue: true, stopReason: undefined, updatedAt: new Date().toISOString() });
+			const resumed = await runBefore();
+			assert.equal((resumed.match(/\[PI GOAL ACTIVE /g) ?? []).length, 1);
+			assert.equal((resumed.match(/\[PI GOAL PAUSED /g) ?? []).length, 0, "resumed turn has no stale paused frame");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("durable audit reset boundary survives exhaustion, reload, and a new failure", async () => {
+		const f = fixture();
+		let auditorCalled = 0;
+		try {
+			appendFileSync(goalLedgerPath({ cwd: f.cwd }), Array.from({ length: 4 }, (_, index) => JSON.stringify({
+				type: "audit_result",
+				goalId: f.goal.id,
+				verdict: "error",
+				report: `Auditor diagnostic: historical-${index}`,
+				at: new Date(Date.now() - (10_000 - index) * 1_000).toISOString(),
+			})).join("\n") + "\n");
+			const auditor = async () => {
+				auditorCalled++;
+				return { approved: false, disapproved: false, output: "", error: "new provider failure", model: "fixture" };
+			};
+			const exhausted = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, runCompletionAuditor: auditor });
+			assert.equal(ledgerEvents(f.cwd).filter((entry) => entry.type === "audit_result").length, 4);
+			await start(exhausted);
+			const denied = await (exhausted.tools.get("update_goal")!.execute as any)("reset-1", { status: "complete" }, undefined, undefined, exhausted.ctx);
+			assert.match(denied.content[0].text, /exhausted/i);
+			assert.equal(auditorCalled, 0);
+			await exhausted.handlers.get("input")?.({ type: "input", text: "NQA retry", source: "extension" }, exhausted.ctx);
+			await exhausted.handlers.get("before_agent_start")?.({ systemPrompt: "base", prompt: "NQA retry", systemPromptOptions: {} }, exhausted.ctx);
+			assert.equal(ledgerEvents(f.cwd).filter((entry) => entry.type === "audit_retry_reset").length, 0, "extension input does not persist a reset");
+
+			// Only genuine SDK user input persists the reset boundary.
+			await exhausted.handlers.get("input")?.({ type: "input", text: "retry", source: "interactive" }, exhausted.ctx);
+			await exhausted.handlers.get("before_agent_start")?.({ systemPrompt: "base", prompt: "retry", systemPromptOptions: {} }, exhausted.ctx);
+			const reloaded = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, runCompletionAuditor: auditor });
+			await reloaded.handlers.get("session_start")?.({ reason: "start" }, reloaded.ctx);
+			await (reloaded.tools.get("update_goal")!.execute as any)("reset-2", { status: "complete" }, undefined, undefined, reloaded.ctx);
+			assert.equal(auditorCalled, 1, "reload after user reset permits a fresh audit");
+
+			const afterNewFailure = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, runCompletionAuditor: auditor });
+			await afterNewFailure.handlers.get("session_start")?.({ reason: "start" }, afterNewFailure.ctx);
+			const restored = await (afterNewFailure.tools.get("update_goal")!.execute as any)("reset-3", { status: "complete" }, undefined, undefined, afterNewFailure.ctx);
+			assert.match(restored.content[0].text, /cooling down/i, "the new post-reset failure survives reload");
+			assert.equal(auditorCalled, 1);
+		} finally {
+			f.cleanup();
+		}
+	});
+
 	it("update_goal(complete) with settings.disabled skips the auditor and records audit_skipped", async () => {
 		const f = fixture();
 		let auditorCalled = 0;
@@ -433,6 +595,8 @@ describe("five-tool handler integration", () => {
 
 		it("displays every one of the nine persisted rows and reflects file values", async () => {
 			const f = fixture();
+			const previousGlobalSettingsFile = process.env.PI_GOAL_GLOBAL_SETTINGS_FILE;
+			process.env.PI_GOAL_GLOBAL_SETTINGS_FILE = path.join(f.cwd, "empty-global-settings.json");
 			try {
 				writeFileSync(settingsPath(f.cwd), JSON.stringify({
 					disableTasks: true, subtaskDepth: 3, provider: "anthropic", thinking_level: "high", disabled: true,
@@ -461,6 +625,8 @@ describe("five-tool handler integration", () => {
 				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0 (default)"));
 				assert.ok(lines.some((l) => l === "  max objective length (0 = none): 0 (default)"), "objective length row defaults to 0");
 			} finally {
+				if (previousGlobalSettingsFile === undefined) delete process.env.PI_GOAL_GLOBAL_SETTINGS_FILE;
+				else process.env.PI_GOAL_GLOBAL_SETTINGS_FILE = previousGlobalSettingsFile;
 				f.cleanup();
 			}
 		});
@@ -950,44 +1116,36 @@ describe("completion transaction hardening (follow-up Stage 3)", () => {
 });
 
 describe("capability parity (follow-up Stage 5.1-C)", () => {
-	it("update_goal(paused) pauses an active goal immediately with an agent ledger event", async () => {
+	it("update_goal(paused) leaves an active goal for user lifecycle commands", async () => {
 		const f = fixture();
 		try {
 			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 			await start(h);
 			const update = h.tools.get("update_goal")!;
 			const result = await (update.execute as any)("u-1", { status: "paused", reason: "Waiting on credentials", suggested_action: "Set FOO_API_KEY" }, new AbortController().signal, undefined, h.ctx);
-			assert.match(result.content[0].text, /Goal paused by the agent/);
-			assert.equal(result.terminate, true, "continuation stops");
+			assert.match(result.content[0].text, /goal remains active/i);
+			assert.notEqual(result.terminate, true, "agent pause request does not stop continuation");
 			const files = activeGoalFiles(f.cwd);
 			assert.equal(files.length, 1, "goal file remains open");
 			const goal = parseGoalFile(path.join(f.cwd, ".pi", "goals", files[0]!))!;
-			assert.equal(goal.status, "paused");
-			assert.equal(goal.autoContinue, false);
-			assert.equal(goal.stopReason, "agent");
-			assert.equal(goal.pauseReason, "Waiting on credentials");
-			assert.equal(goal.pauseSuggestedAction, "Set FOO_API_KEY");
-			const paused = ledgerEvents(f.cwd).filter((e) => e.type === "goal_paused");
-			assert.equal(paused.length, 1, "exactly one goal_paused event");
-			assert.equal((paused[0] as any).source, "agent", "source agent recorded");
-			assert.equal((paused[0] as any).reason, "Waiting on credentials");
+			assert.equal(goal.status, "active");
+			assert.equal(goal.autoContinue, true);
+			assert.equal(ledgerEvents(f.cwd).filter((e) => e.type === "goal_paused").length, 0);
 		} finally {
 			f.cleanup();
 		}
 	});
 
-	it("update_goal(paused) requires a reason and applies only to an active goal", async () => {
+	it("update_goal(paused) never changes lifecycle state", async () => {
 		const f = fixture();
 		try {
 			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 			await start(h);
 			const update = h.tools.get("update_goal")!;
 			const noReason = await (update.execute as any)("u-2", { status: "paused" }, new AbortController().signal, undefined, h.ctx);
-			assert.match(noReason.content[0].text, /requires a "reason"/);
-			assert.equal(activeGoalFiles(f.cwd).length, 1, "goal unchanged");
+			assert.match(noReason.content[0].text, /goal remains active/i);
 			await (update.execute as any)("u-3", { status: "paused", reason: "First pause" }, new AbortController().signal, undefined, h.ctx);
-			const second = await (update.execute as any)("u-4", { status: "paused", reason: "Again" }, new AbortController().signal, undefined, h.ctx);
-			assert.match(second.content[0].text, /applies only to an active goal/);
+			assert.equal(parseGoalFile(path.join(f.cwd, ".pi", "goals", activeGoalFiles(f.cwd)[0]!))?.status, "active");
 		} finally {
 			f.cleanup();
 		}

@@ -12,6 +12,12 @@ const adapters = new Map([
 
 nodeModule.registerHooks({
 	resolve(specifier, context, nextResolve) {
+		// The host-loader integration imports real package submodules. Keep the
+		// lightweight stubs for project extensions, but do not feed them back into
+		// the packages' own real modules.
+		if (specifier.startsWith("@earendil-works/") && context.parentURL?.includes("/node_modules/@earendil-works/")) {
+			return nextResolve(specifier, context);
+		}
 		const url = adapters.get(specifier);
 		return url ? { url, shortCircuit: true } : nextResolve(specifier, context);
 	},

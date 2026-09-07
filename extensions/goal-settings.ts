@@ -792,8 +792,13 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		defaultValue: 0,
 		envVar: "PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS",
 	}));
+	const envNetworkRecoveryMaxDelayMs = envInt("PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS");
 	const networkRecoveryMaxDelayMs = track("networkRecovery.maxDelayMs", resolveLeaf<number>({
-		envValue: envInt("PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS"),
+		// Keep environment settings consistent with file settings: zero would
+		// create a rapid retry loop rather than a backoff.
+		envValue: envNetworkRecoveryMaxDelayMs !== undefined && envNetworkRecoveryMaxDelayMs >= 1_000
+			? envNetworkRecoveryMaxDelayMs
+			: undefined,
 		projectValue: project.layer.networkRecovery?.maxDelayMs,
 		globalValue: global.layer.networkRecovery?.maxDelayMs,
 		defaultValue: DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS,

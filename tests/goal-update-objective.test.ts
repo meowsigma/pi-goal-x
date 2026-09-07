@@ -316,5 +316,5 @@ test("goal evolution instruction mentions /goal-tweak instead of updatedObjectiv
 	const goalText = goalPrompt(goal);
 	assert.ok(!goalText.includes("updatedObjective"), "goalPrompt must NOT reference updatedObjective");
 	assert.ok(goalText.includes("immutable"), "goalPrompt must mention the goal is immutable");
-	assert.ok(goalText.includes("/goal-tweak"), "goalPrompt must instruct user to run /goal-tweak");
+	assert.ok(goalText.includes("record any required scope change as NOT PROVEN"), "goalPrompt must preserve autonomous no-question recovery");
 });

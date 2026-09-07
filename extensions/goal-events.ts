@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, InputSource } from "@earendil-works/pi-coding-agent";
 import {
 	GOAL_EVENT_ENTRY,
 	assistantTurnTokens,
@@ -107,10 +107,12 @@ export function registerGoalEvents(core: GoalCore): void {
 	let noProgressScopeGoalId: string | null = null;
 	let noProgressScopeEpoch = 0;
 	let delegatedWakeThisRun: DelegatedWakeKind | null = null;
+	let pendingInputSource: InputSource | null = null;
 	const pendingAsyncDelegations = new Set<string>();
 	const progressEvidence = new GoalProgressEvidenceTracker();
 	const recordMeaningfulWorkAttempt = (ctx: ExtensionContext, toolName: string): void => {
 		core.goalWorkToolCalledThisTurn = true;
+		if (toolName !== "update_goal") core.goalWorkToolProductiveThisTurn = true;
 		// Issue #26: record a meaningful work attempt against armed Oracle advice.
 		const focusedId = core.focusedGoalId;
 		if (!focusedId || !hasPendingOracleAdviceForFocusedGoal(focusedId)) return;
@@ -128,6 +130,12 @@ export function registerGoalEvents(core: GoalCore): void {
 		} catch { /* best-effort ledger append */ }
 	};
 
+	pi.on("input", (event) => {
+		// The SDK's input source is the provenance boundary: interactive and RPC
+		// are user-originated, while extension prompts include NQA/background wakes.
+		pendingInputSource = event.source;
+	});
+
 	pi.on("context", async (event) => {
 		const ownership = delegatedOwnershipFromMessages(event.messages);
 		if (ownership) delegatedWakeThisRun = ownership;
@@ -141,6 +149,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		// progress once per run so work from an earlier tool turn survives the
 		// final text-only provider turn and reaches the no-progress coach.
 		core.goalWorkToolCalledThisTurn = false;
+		core.goalWorkToolProductiveThisTurn = false;
+		core.goalWorkToolDeniedThisTurn = false;
 		if (delegatedWakeThisRun !== "awaiting") delegatedWakeThisRun = null;
 		pendingAsyncDelegations.clear();
 		progressEvidence.beginAgentRun();
@@ -296,11 +306,13 @@ export function registerGoalEvents(core: GoalCore): void {
 		// If the assistant ended a turn without queuing more tool calls, push a continuation right away.
 		// #4: only queue if some real work was done this turn — otherwise the model is
 		// just chatting and we should not keep firing turns on noise.
+		const productiveRun = core.goalWorkToolCalledThisTurn
+			&& (!core.goalWorkToolDeniedThisTurn || core.goalWorkToolProductiveThisTurn);
 		if (
 			!isToolUseAssistantMessage(message)
 			&& core.state.goal?.status === "active"
 			&& core.state.goal.autoContinue
-			&& core.goalWorkToolCalledThisTurn
+			&& productiveRun
 		) {
 			core.queueContinuation(ctx);
 		}
@@ -354,6 +366,29 @@ export function registerGoalEvents(core: GoalCore): void {
 				core.setGoal({ ...current, status: "active", autoContinue: true, stopReason: undefined, pauseReason: undefined, pauseSuggestedAction: undefined }, ctx);
 			}
 		}
+		if (core.state.goal?.status === "active" && core.state.goal.autoContinue) {
+			const auditHistory = readGoalLedger(ctx).events.filter((entry) =>
+				(entry.type === "audit_result" || entry.type === "audit_retry_reset") && entry.goalId === core.state.goal!.id,
+			);
+			let lastReset = -1;
+			for (let index = auditHistory.length - 1; index >= 0; index -= 1) {
+				if (auditHistory[index]?.type === "audit_retry_reset") {
+					lastReset = index;
+					break;
+				}
+			}
+			const auditResults = auditHistory.slice(lastReset + 1).filter((entry) => entry.type === "audit_result");
+			const latestResult = auditResults.at(-1);
+			if (latestResult?.type === "audit_result" && latestResult.verdict === "error") {
+				let attempts = 0;
+				for (let index = auditResults.length - 1; index >= 0; index -= 1) {
+					const entry = auditResults[index];
+					if (!entry || entry.type !== "audit_result" || entry.verdict !== "error") break;
+					attempts += 1;
+				}
+				core.runtime.restoreAuditRetry(ctx, core.state.goal, attempts, latestResult.at);
+			}
+		}
 		core.beginAccounting();
 		noProgressScopeGoalId = core.state.goal?.id ?? null;
 		noProgressScopeEpoch = core.continuationEpoch;
@@ -400,8 +435,13 @@ export function registerGoalEvents(core: GoalCore): void {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		core.advanceTurnSeq();
-		const currentSystemPrompt = () => ctx.getSystemPrompt?.() || event.systemPrompt;
+		// event.systemPrompt is the SDK's current-turn chain. ctx.getSystemPrompt()
+		// is the previous effective prompt and would accumulate stale lifecycle frames.
+		const currentSystemPrompt = () => event.systemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
+		const inputSource = pendingInputSource;
+		pendingInputSource = null;
+		const explicitUserInput = inputSource === "interactive" || inputSource === "rpc";
 		// Several prompt enrichments may need the same ledger snapshot. Keep one
 		// local read for this hook instead of repeatedly traversing the cached
 		// ledger when rejection and post-compaction steering overlap.
@@ -430,13 +470,20 @@ export function registerGoalEvents(core: GoalCore): void {
 				};
 			}
 			core.runtime.setCheckpoint(null);
-		} else {
-			// A user-driven turn — clear any queued continuation so we don't
-			// double-fire after the user's own message returns. Also reset the
-			// autoContinue nudge state and no-progress coach so the user always
-			// gets a fresh autonomous recovery chain.
+		} else if (explicitUserInput) {
+			// Only the SDK's interactive/RPC input provenance is user-owned. An
+			// extension-originated prompt (NQA, a tool, or a background wake) must
+			// not reset audit admission or compete with its recovery lease.
 			core.runtime.setCheckpoint(null);
 			core.clearContinuationState();
+			if (core.state.goal) {
+				core.runtime.clearAuditRetry(core.state.goal.id);
+				try {
+					core.goalService.appendEvents(ctx, [{ type: "audit_retry_reset", goalId: core.state.goal.id, reason: "user_input", at: nowIso() }]);
+				} catch {
+					// A reset marker is best effort; the in-memory admission is still cleared.
+				}
+			}
 			networkErrorRecoveryAfterSettleFor = null;
 			consecutiveNoProgressTurns = 0;
 			noProgressRecoveryAttempt = 0;
@@ -489,13 +536,13 @@ export function registerGoalEvents(core: GoalCore): void {
 				// Ledger read failure should not break the prompt
 			}
 			return {
-				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish the paused goal and the objective is already satisfied based on available evidence, you may call update_goal({status: "complete"}). To abandon a goal, the user runs /goal-clear. Do not report the goal blocked in response to a pause.`,
+				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work while this lifecycle state is paused. If an explicit incoming instruction resumes completion and the objective is already satisfied based on available evidence, you may call update_goal({status: "complete"}). Do not report the goal blocked in response to a pause.`,
 			};
 		}
 		if (core.state.goal.status === "blocked") {
 			const current = core.state.goal;
 			return {
-				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL BLOCKED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}\n\nBlocker: ${current.pauseReason ?? "(unknown)"}\n\nThe goal is blocked. Do not autonomously continue substantive work or treat it as active. Preserve the blocker and yield to the user; only a user-owned lifecycle action may resume or revise this goal.`,
+				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL BLOCKED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}\n\nBlocker: ${current.pauseReason ?? "(unknown)"}\n\nThe goal is blocked. Do not autonomously continue substantive work or treat it as active. Preserve the blocker; only an explicit lifecycle transition may resume or revise this goal.`,
 			};
 		}
 		// Token-budget-limited goals get one-time wrap-up steering: summarize,
@@ -617,7 +664,10 @@ export function registerGoalEvents(core: GoalCore): void {
 		// A successful provider response is not necessarily productive. Without
 		// this gate, a model can emit the same status-only answer every few
 		// seconds and agent_end will keep queuing checkpoints forever.
-		if (core.goalWorkToolCalledThisTurn) {
+		const productiveRun = core.goalWorkToolCalledThisTurn
+			&& (!core.goalWorkToolDeniedThisTurn || core.goalWorkToolProductiveThisTurn);
+		const continuationRun = !core.goalWorkToolDeniedThisTurn || core.goalWorkToolProductiveThisTurn;
+		if (productiveRun) {
 			consecutiveNoProgressTurns = 0;
 			noProgressRecoveryAttempt = 0;
 		} else {
@@ -629,7 +679,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		// can poll a stale busy context for minutes on pi 0.84. agent_settled is
 		// available in both supported SDK lines (0.83 and 0.84) and is the first
 		// point where pi guarantees no automatic work remains.
-		continuationAfterSettleFor = core.state.goal.id;
+		continuationAfterSettleFor = continuationRun ? core.state.goal.id : null;
 	});
 
 	pi.on("agent_settled", async (_event, ctx) => {
@@ -663,6 +713,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		pendingInputSource = null;
+		core.runtime.disposeAuditRetryTimers();
 		continuationAfterSettleFor = null;
 		networkErrorRecoveryAfterSettleFor = null;
 		consecutiveNoProgressTurns = 0;

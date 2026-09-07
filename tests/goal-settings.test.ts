@@ -307,6 +307,11 @@ test("loadGoalSettings: networkRecovery defaults to unbounded and honors file + 
 			{ maxAttempts: 10, maxDelayMs: 20_000 },
 			"env vars override file",
 		);
+		assert.equal(
+			loadGoalSettings(dir, { PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS: "0" }).networkRecovery?.maxDelayMs,
+			80_000,
+			"zero env delay falls back to the safe default",
+		);
 	});
 	assert.deepEqual(loadGoalSettings("/tmp/does-not-exist", {}).networkRecovery, {
 		maxAttempts: 0,

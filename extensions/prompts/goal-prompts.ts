@@ -192,8 +192,8 @@ function lifecyclePolicyBlock(): string {
 	return [
 		"[OUTCOMES]",
 		"- Only request completion with update_goal({status: \"complete\"}) when every requirement is satisfied. There is no paperwork field: the independent auditor derives the requirements from the objective and any verification contract and inspects the actual workspace evidence. Approval archives; rejection keeps the goal open with feedback.",
-		"- Report a blocker with update_goal({status: \"blocked\"}) ONLY after the SAME blocker recurs on three consecutive goal turns. Do not block on the first or second occurrence — keep trying concrete next steps. A user pause is a distinct state controlled by the user (/goal-pause, Esc).",
-		"- update_goal accepts only complete or blocked. The goal objective is immutable — never edit it yourself; propose changes and ask the user to run /goal-tweak.",
+		"- Do not use update_goal to pause, block, abandon, or clear the goal. Keep working on safe independent work and report obstacles; lifecycle transitions are outside this tool's authority.",
+		"- The goal objective is immutable — never edit it yourself; record any required scope change as NOT PROVEN and continue safe independent work.",
 		"- Tasks: update_goal_task updates one task without stopping the turn (complete requires evidence for contracted tasks; skipped requires a reason; pending reopens a skipped task). set_goal_tasks restructures the tree with confirmation.",
 	].join("\n");
 }
@@ -340,7 +340,7 @@ export function unfocusedOpenGoalsPrompt(openGoalCount: number): string {
 		"[PI GOAL UNFOCUSED]",
 		`${openGoalCount} open pi goal${openGoalCount === 1 ? "" : "s"} exist, but this session has no focused goal.`,
 		"Do not choose or switch focus autonomously. Focus is human-owned intent.",
-		"Ask the user to run /goal-focus, /goal-list, or /goal-resume before doing goal work.",
+		"Do not choose or switch focus autonomously; continue only when an authoritative focused goal is available.",
 	].join("\n");
 }
 

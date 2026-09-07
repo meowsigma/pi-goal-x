@@ -88,6 +88,15 @@ function createHarness(cwd: string) {
 	} as unknown as ExtensionContext & { abort: () => void };
 
 	piGoalExtension(mockPi as never);
+	const beforeAgentStart = handlers["before_agent_start"];
+	if (beforeAgentStart) {
+		handlers["before_agent_start"] = async (event, ctx) => {
+			if (typeof event.prompt === "string" && event.prompt.startsWith("user typed")) {
+				await handlers["input"]?.({ type: "input", text: event.prompt, source: "interactive" }, ctx);
+			}
+			return beforeAgentStart(event, ctx);
+		};
+	}
 
 	return {
 		handlers,
@@ -348,9 +357,10 @@ test("provider-error guard: normal work turn still queues a continuation", async
 		}, h.ctx);
 
 		await h.handlers["turn_start"]!({}, h.ctx);
-		await h.handlers["tool_call"]!({ toolName: "bash", args: { command: "ls" } }, h.ctx);
-		await h.handlers["tool_execution_end"]!({}, h.ctx);
+		await h.handlers["tool_call"]!({ toolCallId: "bash-1", toolName: "bash", args: { command: "ls" } }, h.ctx);
+		await h.handlers["tool_execution_end"]!({ toolCallId: "bash-1", toolName: "bash", result: "file.txt", isError: false }, h.ctx);
 		await h.handlers["turn_end"]!({ message: { role: "assistant", content: [{ type: "text", text: "done" }] } }, idleCtx(h.ctx));
+		await new Promise((resolve) => setTimeout(resolve, 80));
 
 		assert.equal(await countCheckpoints(h), 1, "normal work turn must queue a continuation");
 	} finally {

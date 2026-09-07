@@ -141,7 +141,7 @@ export function normalizeGoalEventDetails(value: unknown): GoalEventDetails {
 }
 
 export interface GoalAuditEventDetails {
-	phase: "started" | "approved" | "rejected" | "skipped";
+	phase: "started" | "approved" | "rejected" | "error" | "skipped";
 	goalId: string;
 	auditor?: string;
 }
@@ -167,7 +167,7 @@ export function renderGoalEvent(message: { details?: GoalEventDetails }, options
 
 export function renderGoalAuditEvent(message: { content?: unknown; details?: GoalAuditEventDetails }, _options: { expanded: boolean }, theme: Theme): Text {
 	const phase = message.details?.phase ?? "started";
-	const label = phase === "approved" ? "approved" : phase === "rejected" ? "rejected" : phase === "skipped" ? "skipped" : "started";
+	const label = phase === "approved" ? "approved" : phase === "rejected" ? "rejected" : phase === "error" ? "unavailable" : phase === "skipped" ? "skipped" : "started";
 	const content = typeof message.content === "string" ? message.content : `Goal audit ${label}.`;
 	return new Text(
 		theme.fg("customMessageLabel", `Goal audit ${label}`) + "\n" + theme.fg("customMessageText", content),

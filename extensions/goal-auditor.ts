@@ -40,11 +40,21 @@ export type AuditorProgressCallback = (progress: AuditorProgress) => void;
 
 export interface GoalAuditorResult {
 	approved: boolean;
+	/** True only for an explicit final <disapproved/> verdict. */
 	disapproved: boolean;
 	output: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
+	/** Provider, protocol, or cancellation failure; never a rejection verdict. */
 	error?: string;
+}
+
+const MAX_AUDITOR_ERROR_CHARS = 500;
+const MAX_AUDITOR_OUTPUT_CHARS = 12_000;
+
+function boundedDiagnostic(value: unknown): string {
+	const text = value instanceof Error ? value.message : String(value ?? "Unknown auditor failure");
+	return text.trim().slice(0, MAX_AUDITOR_ERROR_CHARS) || "Unknown auditor failure";
 }
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
@@ -116,7 +126,6 @@ export function labelForReadOnlyTool(toolName: string): string {
 		case "grep": return "Searching content...";
 		case "find": return "Locating files...";
 		case "ls": return "Listing directory...";
-		case "bash": return "Running verification commands...";
 		default: return `Inspecting (${toolName})...`;
 	}
 }
@@ -163,7 +172,7 @@ export function buildGoalAuditorPrompt(args: {
 		"You are the independent completion auditor for pi-goal.",
 		"The executor claims the goal is complete. Your job is to decide whether the user's objective is actually satisfied.",
 		"Be skeptical and semantic. Do not approve from paperwork, intent, file count, word count, build success, or a plausible summary alone.",
-		"Use read/grep/find/ls/bash as needed to inspect real artifacts. Do not mutate files or run destructive commands.",
+		"Use read/grep/find/ls as needed to inspect real artifacts. These tools are read-only; do not attempt to mutate files.",
 		"If the work is only an alpha scaffold, generated template, shallow draft, proxy milestone, or lacks the user-facing value requested, disapprove.",
 		"If any explicit requirement is missing, weakly verified, contradicted, or not inspectable with the available evidence, disapprove.",
 		"Return a concise audit report. The final line MUST be exactly one of:",
@@ -231,7 +240,7 @@ function makeAuditorResourceLoader(): ResourceLoader {
 		getThemes: () => ({ themes: [], diagnostics: [] }),
 		getAgentsFiles: () => ({ agentsFiles: [] }),
 		getSystemPrompt: () => [
-			"You are a read-only completion auditor running in an isolated pi agent session.",
+			"You are a read-only completion auditor running in an isolated pi agent session with read-only inspection tools.",
 			"Inspect the repository and decide whether the claimed goal completion is genuinely satisfied.",
 			"Never modify files. Never approve unless the actual user objective is complete.",
 		].join("\n"),
@@ -324,15 +333,17 @@ export async function runGoalCompletionAuditor(args: {
 	createSession?: typeof createAgentSession;
 }): Promise<GoalAuditorResult> {
 	if (args.signal?.aborted) {
-		return { approved: false, disapproved: true, output: "", model: modelLabel(args.ctx.model), error: "Auditor aborted." };
+		return { approved: false, disapproved: false, output: "", model: modelLabel(args.ctx.model), error: "Auditor aborted." };
 	}
 	const config = args.settings ?? loadGoalSettings(args.ctx.cwd);
 	const resolved = resolveAuditorModel(args.ctx, config);
 	const model = resolved.model;
 	const thinkingLevel = config.thinkingLevel;
 	const outputParts: string[] = [];
+	let providerError: string | undefined;
+	let terminalFailure: string | undefined;
 	if (resolved.error) {
-		return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: resolved.error };
+		return { approved: false, disapproved: false, output: "", model: modelLabel(model), thinkingLevel, error: boundedDiagnostic(resolved.error) };
 	}
 	try {
 		const createSession = args.createSession ?? createAgentSession;
@@ -361,7 +372,7 @@ export async function runGoalCompletionAuditor(args: {
 				: { resourceLoader: makeAuditorResourceLoader() }),
 			sessionManager: SessionManager.inMemory(args.ctx.cwd),
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-			tools: ["read", "grep", "find", "ls", "bash"],
+			tools: ["read", "grep", "find", "ls"],
 		} as Parameters<typeof createAgentSession>[0]);
 		const unsubscribe = session.subscribe((event) => {
 			if (event.type === "agent_start") {
@@ -424,8 +435,28 @@ export async function runGoalCompletionAuditor(args: {
 				return;
 			}
 			if (event.type !== "message_end") return;
-			const message = event.message as { role?: string; content?: Array<{ type?: string; text?: string }> };
+			const message = event.message as {
+				role?: string;
+				content?: Array<{ type?: string; text?: string }>;
+				stopReason?: string;
+				errorMessage?: string;
+				rawStopReason?: string;
+			};
 			if (message.role !== "assistant") return;
+			// Provider failures may resolve session.prompt() normally. Capture the
+			// terminal message metadata before parsing text so a stale <approved/>
+			// from an earlier stream can never turn a failed audit into approval.
+			if (message.stopReason === "error" || !!message.errorMessage?.trim()) {
+				const detail = [message.errorMessage, message.rawStopReason, message.stopReason]
+					.filter((value): value is string => typeof value === "string" && !!value.trim())
+					.join(": ");
+				providerError = boundedDiagnostic(detail || "Auditor provider returned stopReason=error.");
+			}
+			if (message.stopReason === "aborted" && !args.signal?.aborted) {
+				terminalFailure = "Auditor aborted by provider.";
+			} else if (message.stopReason === "length") {
+				terminalFailure = "Auditor report was truncated before a verdict.";
+			}
 			for (const part of message.content ?? []) {
 				if (part.type === "text" && typeof part.text === "string") outputParts.push(part.text);
 			}
@@ -451,7 +482,7 @@ export async function runGoalCompletionAuditor(args: {
 		progress.percentage = 0;
 		emitProgress();
 		try {
-			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
+			if (args.signal?.aborted) return { approved: false, disapproved: false, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
 			await session.prompt(buildGoalAuditorPrompt(args));
 		} finally {
 			args.signal?.removeEventListener("abort", abortSession);
@@ -468,25 +499,48 @@ export async function runGoalCompletionAuditor(args: {
 		if (args.signal?.aborted) {
 			return {
 				approved: false,
-				disapproved: true,
-				output: outputParts.join("\n\n").trim(),
+				disapproved: false,
+				output: outputParts.join("\n\n").trim().slice(0, MAX_AUDITOR_OUTPUT_CHARS),
 				model: modelLabel(model),
 				thinkingLevel,
 				error: "Auditor aborted.",
 			};
 		}
-		const output = outputParts.join("\n\n").trim();
-		const decision = parseAuditorDecision(output);
+		const fullOutput = outputParts.join("\n\n").trim();
+		// Parse the complete report before truncating the display payload. A long
+		// but valid report must not be rejected for a marker beyond the UI cap;
+		// terminal failures always override an earlier marker.
+		const decision = parseAuditorDecision(fullOutput);
+		const output = fullOutput.slice(0, MAX_AUDITOR_OUTPUT_CHARS);
+		if (providerError || terminalFailure) {
+			return {
+				approved: false,
+				disapproved: false,
+				output,
+				model: modelLabel(model),
+				thinkingLevel,
+				error: providerError ?? terminalFailure,
+			};
+		}
+		if (!decision.approved && !decision.disapproved) {
+			return {
+				...decision,
+				output,
+				model: modelLabel(model),
+				thinkingLevel,
+				error: output ? "Auditor returned no valid verdict marker." : "Auditor returned an empty report.",
+			};
+		}
 		return { ...decision, output, model: modelLabel(model), thinkingLevel };
 	} catch (error) {
 		const isAborted = args.signal?.aborted || (error instanceof Error && error.name === "AbortError");
 		return {
 			approved: false,
-			disapproved: true,
-			output: outputParts.join("\n\n").trim(),
+			disapproved: false,
+			output: outputParts.join("\n\n").trim().slice(0, MAX_AUDITOR_OUTPUT_CHARS),
 			model: modelLabel(model),
 			thinkingLevel,
-			error: isAborted ? "Auditor aborted." : (error instanceof Error ? error.message : String(error)),
+			error: isAborted ? "Auditor aborted." : boundedDiagnostic(error),
 		};
 	}
 }

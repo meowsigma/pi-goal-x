@@ -897,7 +897,7 @@ test("a tweak confirmation resumes a paused goal (active, pause metadata cleared
 	}
 });
 
-test("a tweak confirmation resumes a blocked goal", async () => {
+test("a tweak confirmation keeps an agent-block request active", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-tweak-resume-blocked-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	try {
@@ -906,8 +906,8 @@ test("a tweak confirmation resumes a blocked goal", async () => {
 		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
 		const update = h.tools.get("update_goal")!;
 		const blockedResult = await (update.execute as any)("update-b", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
-		assert.ok(blockedResult?.terminate === true, "blocked terminates the turn");
-		assert.equal(firstGoal(cwd).status, "blocked", "goal blocked before the tweak");
+		assert.notEqual(blockedResult?.terminate, true, "agent block request must not terminate the turn");
+		assert.equal(firstGoal(cwd).status, "active", "agent block request leaves goal active");
 		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);
 		const pending = runProposal(h, proposalParams("Revised objective after block", { sisyphus: false }));
 		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
@@ -916,9 +916,7 @@ test("a tweak confirmation resumes a blocked goal", async () => {
 		assert.equal(after.status, "active", "blocked goal resumed by the tweak");
 		assert.equal(after.autoContinue, true, "resume re-arms auto-continuation");
 		assert.equal(after.stopReason, undefined, "stopReason cleared");
-		const resumed = ledgerEvents(cwd).filter((e) => e.type === "goal_resumed");
-		assert.equal(resumed.length, 1, "exactly one goal_resumed event");
-		assert.equal((resumed[0] as any).reason, "tweak", "resume reason is the tweak");
+		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_blocked").length, 0, "agent request did not block the goal");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}

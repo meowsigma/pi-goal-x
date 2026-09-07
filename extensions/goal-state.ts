@@ -75,6 +75,8 @@ export interface GoalCore {
 	exitGoalModal(): void;
 	auditAborted: boolean;
 	goalWorkToolCalledThisTurn: boolean;
+	goalWorkToolProductiveThisTurn: boolean;
+	goalWorkToolDeniedThisTurn: boolean;
 	tasksEnabled: boolean;
 	debugMode: boolean;
 	terminalInputUnsubscribe: (() => void) | null;
@@ -212,6 +214,7 @@ export function createGoalCore(
 		},
 		onFocusChanged: () => {
 			clearContinuationState();
+			runtime.disposeAuditRetryTimers();
 			clearActiveAccounting();
 		},
 		onDiagnostic: (diagnostic) => {
@@ -262,6 +265,8 @@ export function createGoalCore(
 	// steering reminders live in `runtime` (extensions/goal-runtime.ts);
 	// token/time accounting lives in `accounting` (extensions/goal-accounting.ts).
 	let goalWorkToolCalledThisTurn = false;
+	let goalWorkToolProductiveThisTurn = false;
+	let goalWorkToolDeniedThisTurn = false;
 
 	const runtime = new GoalRuntime({
 		sendFollowUp: (content, details) => {
@@ -973,6 +978,18 @@ export function createGoalCore(
 		},
 		set goalWorkToolCalledThisTurn(value: boolean) {
 			goalWorkToolCalledThisTurn = value;
+		},
+		get goalWorkToolProductiveThisTurn() {
+			return goalWorkToolProductiveThisTurn;
+		},
+		set goalWorkToolProductiveThisTurn(value: boolean) {
+			goalWorkToolProductiveThisTurn = value;
+		},
+		get goalWorkToolDeniedThisTurn() {
+			return goalWorkToolDeniedThisTurn;
+		},
+		set goalWorkToolDeniedThisTurn(value: boolean) {
+			goalWorkToolDeniedThisTurn = value;
 		},
 		get tasksEnabled() {
 			return tasksEnabled;

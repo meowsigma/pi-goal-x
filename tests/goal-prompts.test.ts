@@ -55,7 +55,8 @@ test("goalPrompt wraps objective as untrusted data and includes Sisyphus discipl
 	assert.match(prompt, /&lt;untrusted_objective&gt;x&lt;\/untrusted_objective&gt;/);
 	assert.match(prompt, /\[SISYPHUS STYLE goalId=/);
 	assert.match(prompt, /Follow the user's ordered plan faithfully/);
-	assert.match(prompt, /update_goal\(\{status: "blocked"\}\)/);
+	assert.match(prompt, /Do not use update_goal to pause, block, abandon, or clear/);
+	assert.doesNotMatch(prompt, /update_goal\(\{status: "blocked"\}\)/);
 });
 
 test("no-progress recovery resolves stale paused-status conflicts in favor of current active state", () => {
@@ -94,7 +95,7 @@ test("unfocused prompt keeps multi-goal focus human-owned", () => {
 	assert.match(prompt, /^\[PI GOAL UNFOCUSED\]/);
 	assert.match(prompt, /3 open pi goals/);
 	assert.match(prompt, /Do not choose or switch focus autonomously/);
-	assert.match(prompt, /\/goal-focus/);
+	assert.match(prompt, /continue only when an authoritative focused goal is available/);
 });
 
 test("taskListBlock renders correctly with mixed statuses", () => {

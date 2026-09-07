@@ -10,8 +10,8 @@
  *  - update_goal(complete) runs the audit WITHOUT a verification-summary
  *    parameter (audit from actual evidence); approval archives, rejection stays
  *    open;
- *  - update_goal(blocked) records a distinct agent-blocked state only from
- *    active, with the goal_blocked ledger event.
+ *  - update_goal blocked/paused requests are non-terminal and leave the active
+ *    goal untouched; user commands own lifecycle transitions.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -378,101 +378,24 @@ test("update_goal(complete) with a rejection keeps the goal open with feedback",
 	}
 });
 
-// ── update_goal(blocked) ─────────────────────────────────────────────────────
+// ── agent lifecycle outcomes ─────────────────────────────────────────────────
 
-test("update_goal(blocked) records a distinct agent-blocked state from active", async () => {
+test("agent update_goal blocked/paused requests leave the goal active", async () => {
 	const f = makeFixture();
 	try {
 		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 		await start(h);
 		const update = h.tools.get("update_goal")!;
-		const result = await (update.execute as any)("update-3", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
-		assert.ok(result.terminate === true, "blocked terminates the turn");
-		const active = activeGoalFiles(f.cwd);
-		assert.equal(active.length, 1, "goal remains in the active dir");
-		const parsed = parseGoalFile(path.join(f.cwd, ".pi", "goals", active[0]!));
-		assert.ok(parsed, "goal must parse");
-		assert.equal(parsed.status, "blocked", "status must be blocked");
-		assert.equal(parsed.stopReason, "agent", "stopReason agent");
-		const events = ledgerEvents(f.cwd);
-		const blocked = events.find((e) => e.type === "goal_blocked") as Record<string, unknown> | undefined;
-		assert.ok(blocked, "goal_blocked ledger event");
-		assert.equal(blocked!.source, "agent");
-		assert.ok(typeof blocked!.reason === "string" && (blocked!.reason as string).length > 0);
-	} finally {
-		f.cleanup();
-	}
-});
-
-test("update_goal(blocked) is rejected from a non-active goal", async () => {
-	const f = makeFixture({ pauseReason: "waiting on user" });
-	try {
-		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
-		await start(h);
-		const update = h.tools.get("update_goal")!;
-		const result = await (update.execute as any)("update-4", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
-		const text = result.content?.[0]?.text ?? "";
-		assert.ok(text.includes("applies only to an active goal"), `blocked must be rejected from paused, got: ${text}`);
-		const active = activeGoalFiles(f.cwd);
-		const parsed = parseGoalFile(path.join(f.cwd, ".pi", "goals", active[0]!));
-		assert.equal(parsed?.status, "paused", "goal unchanged");
-		assert.equal(ledgerEvents(f.cwd).filter((e) => e.type === "goal_blocked").length, 0, "no goal_blocked event");
-	} finally {
-		f.cleanup();
-	}
-});
-
-test("update_goal(blocked) surfaces an apply failure instead of claiming success (#22)", async () => {
-	const f = makeFixture();
-	try {
-		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
-		await start(h);
-		// Simulate a failed mutation (lock contention / revision conflict).
-		const service = h.core.goalService;
-		const originalApply = service.apply.bind(service);
-		service.apply = () => ({ ok: false, message: "simulated conflict: goal modified by another process" });
-		try {
-			const update = h.tools.get("update_goal")!;
-			const result = await (update.execute as any)("update-3", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
+		for (const status of ["blocked", "paused"]) {
+			const result = await (update.execute as any)(`update-${status}`, { status, reason: "test" }, undefined, undefined, h.ctx);
 			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("simulated conflict"), `must surface the mutation message, got: ${text}`);
-			assert.ok(text.includes("NOT marked blocked"), `must not claim the goal is blocked, got: ${text}`);
-			assert.ok(result.terminate !== true, "must not terminate the turn so the agent can retry");
-		} finally {
-			service.apply = originalApply;
-		}
-		// The goal on disk is untouched: still active, no blocked event.
-		const active = activeGoalFiles(f.cwd);
-		const parsed = parseGoalFile(path.join(f.cwd, ".pi", "goals", active[0]!));
-		assert.equal(parsed?.status, "active", "goal must remain active");
-		assert.equal(ledgerEvents(f.cwd).filter((e) => e.type === "goal_blocked").length, 0, "no goal_blocked event");
-	} finally {
-		f.cleanup();
-	}
-});
-
-test("update_goal(paused) surfaces an apply failure instead of claiming success (#22)", async () => {
-	const f = makeFixture();
-	try {
-		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
-		await start(h);
-		const service = h.core.goalService;
-		const originalApply = service.apply.bind(service);
-		service.apply = () => ({ ok: false, message: "simulated lock contention" });
-		try {
-			const update = h.tools.get("update_goal")!;
-			const result = await (update.execute as any)("update-paused", { status: "paused", reason: "waiting on user input" }, undefined, undefined, h.ctx);
-			const text = result.content?.[0]?.text ?? "";
-			assert.ok(text.includes("simulated lock contention"), `must surface the mutation message, got: ${text}`);
-			assert.ok(text.includes("NOT paused"), `must not claim the goal is paused, got: ${text}`);
-			assert.ok(result.terminate !== true, "must not terminate the turn so the agent can retry");
-		} finally {
-			service.apply = originalApply;
+			assert.match(text, /goal remains active/i);
+			assert.notEqual(result.terminate, true);
 		}
 		const active = activeGoalFiles(f.cwd);
 		const parsed = parseGoalFile(path.join(f.cwd, ".pi", "goals", active[0]!));
-		assert.equal(parsed?.status, "active", "goal must remain active");
-		assert.equal(ledgerEvents(f.cwd).filter((e) => e.type === "goal_paused").length, 0, "no goal_paused event");
+		assert.equal(parsed?.status, "active");
+		assert.equal(ledgerEvents(f.cwd).filter((e) => e.type === "goal_blocked" || e.type === "goal_paused").length, 0);
 	} finally {
 		f.cleanup();
 	}

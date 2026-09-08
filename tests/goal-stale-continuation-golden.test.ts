@@ -463,22 +463,25 @@ test("a first successful no-progress turn waits for settlement and receives reco
 	}
 });
 
-test("three consecutive no-progress turns keep auto-continue with escalating coach prompts", async () => {
+test("two consecutive no-progress turns invoke review instead of a hot checkpoint loop", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
 		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
 
-		for (let attempt = 1; attempt <= 3; attempt += 1) {
+		for (let attempt = 1; attempt <= 2; attempt += 1) {
 			await h.handlers["turn_start"]!({}, h.ctx);
 			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-			assert.equal(await countCheckpoints(h), attempt);
-			const checkpoint = latestCheckpointContent(h);
-			const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
-			assert.match(next.systemPrompt ?? "", new RegExp(`NO-PROGRESS RECOVERY ${attempt}/`));
-			if (attempt >= 3) assert.match(next.systemPrompt ?? "", /dual-sided packet/);
+			if (attempt === 1) {
+				assert.equal(await countCheckpoints(h), 1);
+				const checkpoint = latestCheckpointContent(h);
+				const next = await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx) as { systemPrompt?: string };
+				assert.match(next.systemPrompt ?? "", /NO-PROGRESS RECOVERY 1\//);
+			} else {
+				assert.equal(await countCheckpoints(h), 1, "the second empty cycle is reviewed, not requeued");
+			}
 		}
 
 		assert.equal(h.notifications.some((notice) => /circuit breaker stopped/.test(notice.message)), false);
@@ -689,7 +692,7 @@ test("a subagent progress wake suppresses the parent breaker without crediting s
 		await runEmpty("user typed: continue");
 		assert.equal(await countCheckpoints(h), 1);
 		await runEmpty(latestCheckpointContent(h) ?? "");
-		assert.equal(await countCheckpoints(h), 2, "two local empty runs consume bounded recovery");
+		assert.equal(await countCheckpoints(h), 1, "the second local empty run invokes review without a third checkpoint");
 
 		const progress = {
 			role: "custom",
@@ -698,7 +701,7 @@ test("a subagent progress wake suppresses the parent breaker without crediting s
 			details: { reason: "progress_update" },
 		};
 		await runDelegatedWake(progress.customType, progress.content, progress.details);
-		assert.equal(await countCheckpoints(h), 2, "an active child wake relies on the next native notification");
+		assert.equal(await countCheckpoints(h), 1, "an active child wake relies on the next native notification");
 		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 
 		for (let run = 1; run <= 3; run += 1) {
@@ -716,7 +719,7 @@ test("a subagent progress wake suppresses the parent breaker without crediting s
 			await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 			await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 		}
-		assert.equal(await countCheckpoints(h), 2, "status polling must not race an active child");
+		assert.equal(await countCheckpoints(h), 1, "status polling must not race an active child");
 		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 	} finally {
 		// temp dir cleanup is best-effort.
@@ -815,18 +818,41 @@ test("repeated observational shell output does not reset the no-progress circuit
 		await runObservation(1);
 		assert.equal(await countCheckpoints(h), 1, "the first diagnostic observation is useful");
 
-		for (let run = 2; run <= 3; run += 1) {
+		for (let run = 2; run <= 4; run += 1) {
 			await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
 			await runObservation(run);
-			assert.equal(await countCheckpoints(h), run, `repeated observation ${run} uses bounded recovery`);
+			assert.equal(await countCheckpoints(h), 2, `repeated observation ${run} does not reset or hot-loop the review threshold`);
 		}
-
-		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: checkpoint, systemPromptOptions: {} }, h.ctx);
-		await runObservation(4);
-		assert.equal(await countCheckpoints(h), 4, "unchanged observations keep auto-continue with coach prompts instead of halting");
 		assert.equal(h.notifications.some((notice) => notice.message.includes("No-progress circuit breaker stopped")), false);
 	} finally {
 		// temp dir cleanup is best-effort.
+	}
+});
+
+test("changing standalone clock output does not earn progress across settled cycles", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	const command = "date -u '+%Y-%m-%d %H:%M:%S UTC'";
+	async function runClock(run: number): Promise<void> {
+		await h.handlers["agent_start"]?.({}, h.ctx);
+		await h.handlers["turn_start"]!({}, h.ctx);
+		const toolCallId = `clock-${run}`;
+		await h.handlers["tool_call"]!({ toolCallId, toolName: "bash", args: { command } }, h.ctx);
+		await h.handlers["tool_execution_end"]!({ toolCallId, toolName: "bash", result: `2026-09-07 00:00:0${run} UTC`, isError: false }, h.ctx);
+		await h.handlers["turn_end"]!({ message: { role: "assistant", stopReason: "toolUse" } }, idleCtx(h.ctx));
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+	}
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: continue", systemPromptOptions: {} }, h.ctx);
+		await runClock(1);
+		assert.equal(await countCheckpoints(h), 1, "the first standalone clock probe receives only the normal first recovery checkpoint");
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "clock continuation", systemPromptOptions: {} }, h.ctx);
+		await runClock(2);
+		assert.equal(await countCheckpoints(h), 1, "changing clock output still reaches review rather than another checkpoint");
+	} finally {
+		// The review recovery wake is unref'd and needs no test teardown.
 	}
 });
 

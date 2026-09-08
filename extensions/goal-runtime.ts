@@ -9,14 +9,17 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GoalCheckpointDetailsV2, GoalRecord } from "./goal-record.ts";
+import type { GoalCheckpointDetailsV2, GoalContinuationState, GoalRecord } from "./goal-record.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { POST_STOP_ALLOWED_TOOLS } from "./goal-tool-names.ts";
 import { networkErrorBackoffPlan, type NetworkErrorBackoffPlan, type NetworkErrorRecoveryPolicy } from "./network-error-backoff.ts";
 
 export const CONTINUATION_IDLE_RETRY_MS = 50;
+const DEFERRED_WAKE_MAX_MS = 2_147_000_000;
+const EXECUTION_RECOVERY_DELAYS_MS = [5_000, 30_000, 120_000, 600_000] as const;
 const AUDIT_RETRY_DELAYS_MS = [2_000, 5_000, 15_000] as const;
 const AUDIT_RETRY_MAX_ATTEMPTS = AUDIT_RETRY_DELAYS_MS.length;
+const PROGRESS_REVIEW_MAX_FAILURES = 3;
 
 export interface AuditRetryAdmission {
 	allowed: boolean;
@@ -33,6 +36,12 @@ export interface AuditRetryPlan {
 
 const POST_STOP_ALLOWED = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 
+export interface GoalRuntimeTimers {
+	setTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
+	clearTimeout(timer: ReturnType<typeof setTimeout>): void;
+	now(): number;
+}
+
 export interface GoalRuntimeHooks {
 	/** Dispatch a hidden follow-up checkpoint message (pi.sendMessage + triggerTurn). */
 	sendFollowUp(content: string, details: Record<string, unknown>): void;
@@ -40,6 +49,12 @@ export interface GoalRuntimeHooks {
 	getGoal(): GoalRecord | null;
 	/** Whether a checkpointed goal id is still actionable (active + autoContinue). */
 	isActionable(goalId: string | null | undefined): boolean;
+	/** Authoritative write used before a deferred wake is armed. */
+	persistGoal?(goal: GoalRecord, ctx: ExtensionContext): boolean;
+	/** Dispatch a due review/recovery wake; optional for focused runtime tests. */
+	onDeferredWake?(ctx: ExtensionContext, goal: GoalRecord): void;
+	/** Surface a failed authoritative wake retirement without dispatching it. */
+	onDeferredWakePersistenceFailure?(ctx: ExtensionContext, goal: GoalRecord, message: string): void;
 }
 
 export class GoalRuntime {
@@ -57,6 +72,10 @@ export class GoalRuntime {
 	private auditRetryWakeGeneration = new Map<string, number>();
 	/** One-shot continuation lease that pivots an audit-only turn to independent work. */
 	private auditRecoveryLeases = new Map<string, { pending: boolean; issued: boolean; promptDelivered: boolean }>();
+	private progressReviewInFlight = new Set<string>();
+	private progressReviewPending = new Set<string>();
+	private deferredWakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private deferredWakeGeneration = new Map<string, number>();
 
 	// ── turn-stop guard ──────────────────────────────────────────────────
 	private turnSeq = 0;
@@ -73,9 +92,15 @@ export class GoalRuntime {
 	private postBudgetReminderPending = false;
 
 	private readonly hooks: GoalRuntimeHooks;
+	private readonly timers: GoalRuntimeTimers;
 
-	constructor(hooks: GoalRuntimeHooks) {
+	constructor(hooks: GoalRuntimeHooks, timers: Partial<GoalRuntimeTimers> = {}) {
 		this.hooks = hooks;
+		this.timers = {
+			setTimeout: timers.setTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
+			clearTimeout: timers.clearTimeout ?? ((timer) => clearTimeout(timer)),
+			now: timers.now ?? (() => Date.now()),
+		};
 	}
 
 	// ── continuation scheduling ──────────────────────────────────────────
@@ -89,10 +114,29 @@ export class GoalRuntime {
 	/** Clear the pending timer but keep the queued marker (used at session shutdown). */
 	clearContinuationTimer(): void {
 		if (this.continuationTimer) {
-			clearTimeout(this.continuationTimer);
+			this.timers.clearTimeout(this.continuationTimer);
 			this.continuationTimer = null;
 		}
 		this.continuationScheduledFor = null;
+	}
+
+	/** Request one whole-goal review at the next settled lifecycle boundary. */
+	requestProgressReview(goalId: string): void { this.progressReviewPending.add(goalId); }
+	consumeProgressReviewRequest(goalId: string): boolean {
+		if (!this.progressReviewPending.has(goalId)) return false;
+		this.progressReviewPending.delete(goalId);
+		return true;
+	}
+	beginProgressReview(goalId: string): boolean {
+		if (this.progressReviewInFlight.has(goalId)) return false;
+		this.progressReviewInFlight.add(goalId);
+		return true;
+	}
+	endProgressReview(goalId: string): void { this.progressReviewInFlight.delete(goalId); }
+	isProgressReviewInFlight(goalId: string): boolean { return this.progressReviewInFlight.has(goalId); }
+	/** Review-provider exhaustion is independent of ordinary execution progress. */
+	isProgressReviewExhausted(goal: GoalRecord): boolean {
+		return (goal.continuation?.reviewFailures ?? 0) > PROGRESS_REVIEW_MAX_FAILURES;
 	}
 
 	/** Whether a continuation is queued or scheduled for this goal id. */
@@ -106,7 +150,9 @@ export class GoalRuntime {
 	 * already-queued/scheduled dedup (used right after creation/resume).
 	 */
 	queueContinuation(ctx: ExtensionContext, goal: GoalRecord, force = false): void {
-		if (goal.status !== "active" || !goal.autoContinue) return;
+		// A durable wait/recovery lease is the sole continuation owner until its
+		// due callback retires it. Reload and ordinary checkpoints must not wake it early.
+		if (goal.status !== "active" || !goal.autoContinue || goal.continuation?.wake) return;
 		const goalId = goal.id;
 		if (!force && this.continuationPendingFor(goalId)) return;
 		this.clearContinuationTimer();
@@ -117,7 +163,7 @@ export class GoalRuntime {
 			return;
 		}
 		this.continuationScheduledFor = goalId;
-		this.continuationTimer = setTimeout(() => this.sendQueuedContinuation(ctx, goalId), delay);
+		this.continuationTimer = this.timers.setTimeout(() => this.sendQueuedContinuation(ctx, goalId), delay);
 		this.continuationTimer.unref?.();
 	}
 
@@ -137,7 +183,7 @@ export class GoalRuntime {
 		const state = this.auditRetryByGoal.get(goalId);
 		if (!state) return { allowed: true, maxAttempts: AUDIT_RETRY_MAX_ATTEMPTS };
 		if (state.exhausted) return { allowed: false, attempt: state.attempt, maxAttempts: AUDIT_RETRY_MAX_ATTEMPTS };
-		const retryAfterMs = Math.max(0, state.nextAt - Date.now());
+		const retryAfterMs = Math.max(0, state.nextAt - this.timers.now());
 		return retryAfterMs > 0
 			? { allowed: false, retryAfterMs, attempt: state.attempt, maxAttempts: AUDIT_RETRY_MAX_ATTEMPTS }
 			: { allowed: true, attempt: state.attempt, maxAttempts: AUDIT_RETRY_MAX_ATTEMPTS };
@@ -147,7 +193,7 @@ export class GoalRuntime {
 		if (this.auditRetryTimers.has(goal.id)) return;
 		const generation = (this.auditRetryWakeGeneration.get(goal.id) ?? 0) + 1;
 		this.auditRetryWakeGeneration.set(goal.id, generation);
-		const timer = setTimeout(() => {
+		const timer = this.timers.setTimeout(() => {
 			if (this.auditRetryWakeGeneration.get(goal.id) !== generation) return;
 			this.auditRetryTimers.delete(goal.id);
 			if (!this.hooks.isActionable(goal.id)) return;
@@ -210,7 +256,7 @@ export class GoalRuntime {
 			return null;
 		}
 		const delayMs = AUDIT_RETRY_DELAYS_MS[attempt - 1]!;
-		this.auditRetryByGoal.set(goal.id, { attempt, nextAt: Date.now() + delayMs, exhausted: false });
+		this.auditRetryByGoal.set(goal.id, { attempt, nextAt: this.timers.now() + delayMs, exhausted: false });
 		this.scheduleAuditWake(ctx, goal, delayMs);
 		return { attempt, maxAttempts: AUDIT_RETRY_MAX_ATTEMPTS, delayMs };
 	}
@@ -230,12 +276,110 @@ export class GoalRuntime {
 
 	/** Dispose audit wake timers without resetting durable attempt admission. */
 	disposeAuditRetryTimers(): void {
+		for (const [goalId, timer] of this.deferredWakeTimers) {
+			this.timers.clearTimeout(timer);
+			this.deferredWakeGeneration.set(goalId, (this.deferredWakeGeneration.get(goalId) ?? 0) + 1);
+		}
+		this.deferredWakeTimers.clear();
 		for (const [goalId, timer] of this.auditRetryTimers) {
-			clearTimeout(timer);
+			this.timers.clearTimeout(timer);
 			this.auditRetryWakeGeneration.set(goalId, (this.auditRetryWakeGeneration.get(goalId) ?? 0) + 1);
 		}
 		this.auditRetryTimers.clear();
 	}
+
+	/** Persist and arm one goal-owned deferred wake. */
+	scheduleDeferredWake(ctx: ExtensionContext, goal: GoalRecord, state: GoalContinuationState): boolean {
+		if (goal.status !== "active" || !goal.autoContinue || !state.wake) return false;
+		if (this.deferredWakeTimers.has(goal.id)) return false;
+		if (!this.hooks.persistGoal || !this.hooks.persistGoal({ ...goal, continuation: state }, ctx)) return false;
+		this.armDeferredWake(ctx, { ...goal, continuation: state });
+		return true;
+	}
+
+	private armDeferredWake(ctx: ExtensionContext, goal: GoalRecord): void {
+		const wake = goal.continuation?.wake;
+		if (!wake || this.deferredWakeTimers.has(goal.id)) return;
+		const generation = (this.deferredWakeGeneration.get(goal.id) ?? 0) + 1;
+		this.deferredWakeGeneration.set(goal.id, generation);
+		const timer = this.timers.setTimeout(() => {
+			if (this.deferredWakeGeneration.get(goal.id) !== generation) return;
+			this.deferredWakeTimers.delete(goal.id);
+			if (!this.hooks.isActionable(goal.id)) return;
+			const current = this.hooks.getGoal();
+			if (!current || current.id !== goal.id || current.continuation?.scope !== goal.continuation?.scope || current.continuation?.wake?.id !== wake.id) return;
+			const remaining = Date.parse(wake.at) - this.timers.now();
+			if (remaining > 0) {
+				// Node timers cap one interval at ~24.8 days. A long wait is still
+				// one lease: re-arm the remaining interval instead of dispatching at
+				// the cap and pretending the criterion is due.
+				this.armDeferredWake(ctx, current);
+				return;
+			}
+			const retired = { ...current, continuation: current.continuation ? { ...current.continuation, wake: undefined } : undefined };
+			// Retirement is the durable lease handoff. Dispatching before it is
+			// persisted can leave the wake live on disk and duplicate work after a
+			// reload. Keep the wake intact and fail closed on write failure.
+			if (!this.hooks.persistGoal || !this.hooks.persistGoal(retired, ctx)) {
+				this.hooks.onDeferredWakePersistenceFailure?.(ctx, current, "Deferred wake retirement was not persisted; the wake remains durable and the recheck was not dispatched.");
+				return;
+			}
+			if (wake.kind === "review_recovery") this.requestProgressReview(goal.id);
+			this.hooks.onDeferredWake?.(ctx, retired);
+			this.queueContinuation(ctx, retired, true);
+		}, Math.min(Math.max(0, Date.parse(wake.at) - this.timers.now()), DEFERRED_WAKE_MAX_MS));
+		timer.unref?.();
+		this.deferredWakeTimers.set(goal.id, timer);
+	}
+
+	restoreDeferredWake(ctx: ExtensionContext, goal: GoalRecord): void {
+		if (goal.status === "active" && goal.autoContinue && goal.continuation?.wake) this.armDeferredWake(ctx, goal);
+	}
+
+	cancelDeferredWake(goalId: string): void {
+		const timer = this.deferredWakeTimers.get(goalId);
+		if (timer) this.timers.clearTimeout(timer);
+		this.deferredWakeTimers.delete(goalId);
+		this.deferredWakeGeneration.set(goalId, (this.deferredWakeGeneration.get(goalId) ?? 0) + 1);
+	}
+
+	retainReviewInstruction(ctx: ExtensionContext, goal: GoalRecord, scope: string, instruction: string): boolean {
+		if (!this.hooks.persistGoal) return false;
+		return this.hooks.persistGoal({ ...goal, continuation: { scope, instruction: instruction.slice(0, 2_000), executionRetries: goal.continuation?.executionRetries ?? 0, reviewFailures: goal.continuation?.reviewFailures ?? 0, wake: goal.continuation?.wake } }, ctx);
+	}
+
+	/** Meaningful work clears advice but preserves independent review admission state. */
+	clearRetainedReviewInstruction(ctx: ExtensionContext, goal: GoalRecord): void {
+		const continuation = goal.continuation;
+		if (!continuation || continuation.wake || !this.hooks.persistGoal) return;
+		if (continuation.reviewFailures > 0) {
+			this.hooks.persistGoal({ ...goal, continuation: { ...continuation, executionRetries: 0 } }, ctx);
+			return;
+		}
+		this.hooks.persistGoal({ ...goal, continuation: undefined }, ctx);
+	}
+
+	scheduleExecutionRecovery(ctx: ExtensionContext, goal: GoalRecord, scope: string, instruction: string, reviewFailures = goal.continuation?.reviewFailures ?? 0): boolean {
+		const attempt = Math.min((goal.continuation?.executionRetries ?? 0) + 1, EXECUTION_RECOVERY_DELAYS_MS.length);
+		const wakeAt = new Date(this.timers.now() + EXECUTION_RECOVERY_DELAYS_MS[attempt - 1]!).toISOString();
+		return this.scheduleDeferredWake(ctx, goal, { scope, instruction: instruction.slice(0, 2_000), executionRetries: attempt, reviewFailures, wake: { id: `${goal.id}-recovery-${Date.now().toString(36)}`, at: wakeAt, kind: "execution_recovery", reason: "review advice was not yet executed", evidence: [instruction.slice(0, 500)] } });
+	}
+
+	recordProgressReviewFailure(ctx: ExtensionContext, goal: GoalRecord, error: string, scope: string): void {
+		const failures = (goal.continuation?.reviewFailures ?? 0) + 1;
+		const diagnostic = error.trim().slice(0, 500) || "unknown review infrastructure failure";
+		if (failures > 3) {
+			// Review admission is exhausted independently of ordinary execution. Keep
+			// the diagnostic and pivot to bounded quiet execution recovery rather than
+			// stranding the active goal with no owner.
+			const instruction = `Independent review exhausted after ${failures} failures (${diagnostic}). Continue safe independent work; preserve every unmet contract and do not claim completion.`;
+			this.scheduleExecutionRecovery(ctx, goal, scope, instruction, failures);
+			return;
+		}
+		const delay = [5_000, 30_000, 120_000][failures - 1] ?? 600_000;
+		this.scheduleDeferredWake(ctx, goal, { scope, instruction: "Retry the independent whole-goal review quietly; preserve all unmet contracts.", executionRetries: goal.continuation?.executionRetries ?? 0, reviewFailures: failures, wake: { id: `${goal.id}-review-${Date.now().toString(36)}`, at: new Date(Date.now() + delay).toISOString(), kind: "review_recovery", reason: diagnostic, evidence: [diagnostic] } });
+	}
+	clearProgressReviewFailure(goalId: string): void { this.cancelDeferredWake(goalId); }
 
 	/** Clear audit failure state after a user-requested reset or valid verdict. */
 	clearAuditRetry(goalId: string): void {
@@ -265,7 +409,7 @@ export class GoalRuntime {
 		const plan = networkErrorBackoffPlan(this.networkErrorRetryAttempt + 1, policy);
 		if (!plan) return null;
 		this.networkErrorRetryAttempt = plan.attempt;
-		this.networkErrorRetryTimer = setTimeout(() => {
+		this.networkErrorRetryTimer = this.timers.setTimeout(() => {
 			this.networkErrorRetryTimer = null;
 			if (!this.hooks.isActionable(goal.id)) return;
 			const currentGoal = this.hooks.getGoal();
@@ -278,7 +422,7 @@ export class GoalRuntime {
 
 	/** Cancel and forget all goal-level network-error recovery state. */
 	clearNetworkErrorBackoff(): void {
-		if (this.networkErrorRetryTimer) clearTimeout(this.networkErrorRetryTimer);
+		if (this.networkErrorRetryTimer) this.timers.clearTimeout(this.networkErrorRetryTimer);
 		this.networkErrorRetryTimer = null;
 		this.networkErrorRetryGoalId = null;
 		this.networkErrorRetryAttempt = 0;
@@ -308,7 +452,7 @@ export class GoalRuntime {
 
 		if (!ready) {
 			this.continuationScheduledFor = scheduledGoalId;
-			this.continuationTimer = setTimeout(() => this.sendQueuedContinuation(ctx, scheduledGoalId), CONTINUATION_IDLE_RETRY_MS);
+			this.continuationTimer = this.timers.setTimeout(() => this.sendQueuedContinuation(ctx, scheduledGoalId), CONTINUATION_IDLE_RETRY_MS);
 			this.continuationTimer.unref?.();
 			return;
 		}

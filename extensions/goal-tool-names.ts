@@ -61,9 +61,61 @@ const NON_PROGRESS_TOOL_NAMES = new Set([
 	"bg_status",
 ]);
 
+/**
+ * Only a standalone read-only date invocation is non-progress; compound
+ * commands and date-setting invocations remain evidence.
+ */
+export function isStandaloneClockProbe(toolName: string, input: unknown): boolean {
+	if (toolName !== "bash" || !input || typeof input !== "object") return false;
+	const command = (input as Record<string, unknown>).command;
+	if (typeof command !== "string") return false;
+
+	// This deliberately handles only whitespace and simple quoting. It is not a
+	// shell parser: escapes, operators, substitutions, and other shell syntax
+	// make the command ineligible for the clock-only classification.
+	const words: string[] = [];
+	let word = "";
+	let quote: "'" | '"' | null = null;
+	let quoted = false;
+	for (let index = 0; index < command.length; index += 1) {
+		const character = command[index]!;
+		if (quote) {
+			if (character === quote) quote = null;
+			else word += character;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			quoted = true;
+		} else if (/\s/.test(character)) {
+			if (word || quoted) {
+				words.push(word);
+				word = "";
+				quoted = false;
+			}
+		} else if (character === "\\" || /[;&|<>$`(){}*?!#]/.test(character)) {
+			return false;
+		} else {
+			word += character;
+		}
+	}
+	if (quote) return false;
+	if (word || quoted) words.push(word);
+
+	if (words.length < 1 || words.length > 3 || words[0] !== "date") return false;
+	const argumentsOnly = words.slice(1);
+	let format: string | undefined;
+	for (const argument of argumentsOnly) {
+		if (argument === "-u" || argument === "--utc") continue;
+		if (format !== undefined || !/^\+[A-Za-z0-9%_./,: -]+$/.test(argument)) return false;
+		format = argument;
+	}
+	return true;
+}
+
 /** Host tools that are never progress, including polling that must not reset the breaker. */
 export function isGoalProgressToolName(toolName: string, input?: unknown): boolean {
-	if (NON_PROGRESS_TOOL_NAMES.has(toolName)) return false;
+	if (NON_PROGRESS_TOOL_NAMES.has(toolName) || isStandaloneClockProbe(toolName, input)) return false;
 	if (toolName === "subagent") {
 		const action = input && typeof input === "object" ? (input as Record<string, unknown>).action : undefined;
 		if (typeof action === "string") {
@@ -117,12 +169,39 @@ export function countTrailingNoProgressRuns(entries: readonly unknown[], current
 
 	const runs: string[][] = [];
 	let tools: string[] = [];
+	const calls = new Map<string, { toolName: string; input: unknown }>();
+	const assistantToolCalls = (message: Record<string, unknown>): Array<Record<string, unknown>> => {
+		const content = Array.isArray(message.content) ? message.content : [];
+		const nested = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+		return [...content, ...nested].filter((item): item is Record<string, unknown> => {
+			if (!item || typeof item !== "object") return false;
+			const raw = item as Record<string, unknown>;
+			return raw.type === "toolCall" || raw.type === "tool_call" || (typeof raw.name === "string" && ("arguments" in raw || "input" in raw));
+		});
+	};
 	for (let index = firstRelevantEntry; index < entries.length; index += 1) {
 		const entry = entries[index];
 		const message = entryMessage(entry);
 		if (!message) continue;
-		const toolName = typeof message.toolName === "string" ? message.toolName : undefined;
-		if (message.role === "toolResult" && toolName) tools.push(toolName);
+		if (message.role === "assistant") {
+			for (const call of assistantToolCalls(message)) {
+				const callId = typeof call.id === "string" ? call.id : typeof call.toolCallId === "string" ? call.toolCallId : undefined;
+				const callName = typeof call.name === "string" ? call.name : typeof call.toolName === "string" ? call.toolName : undefined;
+				if (callId && callName) calls.set(callId, { toolName: callName, input: call.arguments ?? call.input ?? call.args });
+			}
+		}
+		const resultToolName = typeof message.toolName === "string" ? message.toolName : undefined;
+		if (message.role === "toolResult") {
+			const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : undefined;
+			const call = toolCallId ? calls.get(toolCallId) : undefined;
+			const toolName = resultToolName ?? call?.toolName;
+			if (toolName) {
+				// Without a paired assistant call/arguments, retain progress credit: the
+				// history does not prove this was a clock-only probe.
+				if (!call || call.toolName !== toolName || !isStandaloneClockProbe(call.toolName, call.input)) tools.push(toolName);
+			}
+			if (toolCallId) calls.delete(toolCallId);
+		}
 		if (message.role !== "assistant") continue;
 		const stop = message.stopReason;
 		if (stop === "error" || stop === "aborted" || stop === "toolUse") continue;

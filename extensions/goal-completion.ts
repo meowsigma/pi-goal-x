@@ -14,7 +14,9 @@ import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 import type { GoalCore } from "./goal-state.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
+import { goalReviewScope } from "./goal-review.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
+import { collectLatestUserDecisions } from "./goal-user-decisions.ts";
 
 // update_goal(complete) execution path: validates the completable state,
 // runs the independent auditor (or the disabled/legacy-skip branches), and
@@ -22,9 +24,12 @@ import type { GoalMutationOutcome } from "./goal-service.ts";
 // requirements from the objective and any verification contract and inspects
 // actual workspace evidence. An optional completion_summary is forwarded as an
 // UNTRUSTED executor claim — never evidence and never an approval bypass.
-export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContext, completionSummary?: string): Promise<AgentToolResult<unknown>> {
+export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContext, completionSummary?: string, guard?: { scope?: string; userDecisionEpoch?: number; userDecisions?: string }): Promise<AgentToolResult<unknown>> {
 	const { pi } = core;
-	core.reconcileFocusedGoalFromDisk(ctx);
+	const reconciledBeforeCompletion = core.reconcileFocusedGoalFromDisk(ctx);
+	if (guard && !reconciledBeforeCompletion) {
+		return { content: [{ type: "text", text: "Goal completion cancelled because authoritative goal state could not be reconciled." }], details: goalDetails(core.state.goal) };
+	}
 
 	// -- Completion --
 	const completionGate = validateGoalCompletion({ goal: core.state.goal, runningGoalId: core.runningGoalId });
@@ -41,6 +46,11 @@ export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContex
 	if (!disableTasksSettings) {
 		const taskWarning = core.state.goal.taskList ? taskCompletionBlockWarning(core.state.goal.taskList) : null;
 		if (taskWarning) {
+			// A blocked completion request is not productive work, but it is useful
+			// evidence that the whole goal needs an independent review. Keep the
+			// unchanged task gate and ask the settled lifecycle to review it.
+			core.goalWorkToolDeniedThisTurn = true;
+			core.runtime.requestProgressReview(core.state.goal.id);
 			return {
 				content: [{ type: "text", text: taskWarning }],
 				details: goalDetails(core.state.goal),
@@ -49,6 +59,12 @@ export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContex
 	}
 
 	const auditTarget = mergeGoalPromptFromDisk(ctx, core.state.goal);
+	if (guard?.scope && goalReviewScope(auditTarget, guard.userDecisions ?? "") !== guard.scope) {
+		return { content: [{ type: "text", text: "Goal completion cancelled because the reviewed objective or contracts changed." }], details: goalDetails(core.state.goal) };
+	}
+	if (guard?.userDecisionEpoch !== undefined && core.userDecisionEpoch !== guard.userDecisionEpoch) {
+		return { content: [{ type: "text", text: "Goal completion cancelled because new user input superseded the review." }], details: goalDetails(core.state.goal) };
+	}
 	const completionFocus = core.focusedOperationToken(auditTarget.id);
 	const auditAdmission = core.runtime.auditRetryAdmission(auditTarget.id);
 	if (!auditAdmission.allowed) {
@@ -262,6 +278,9 @@ if (settings.disabled === true) {
 	// (recent lifecycle + task evidence) so it does not re-derive session facts.
 	const ledger = readGoalLedger(ctx).events;
 	const warmTail = latestEventsForGoal(ledger, auditTarget.id, 8);
+	// Decisions are a separate, source-labelled context for the auditor. They
+	// are never folded into the executor claim or used as an approval bypass.
+	const userDecisions = guard?.userDecisions ?? collectLatestUserDecisions(ctx.sessionManager?.getBranch?.() ?? [], auditTarget.id);
 	const warmContext = warmTail.length > 0
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
 		: null;
@@ -273,6 +292,7 @@ if (settings.disabled === true) {
 		completionSummary: completionSummary?.trim() || undefined,
 		settings: loadGoalSettings(ctx.cwd),
 		warmContext,
+		userDecisions,
 		signal: completionAuditController.signal,
 		onProgress: (progress) => {
 			core.auditProgress = {
@@ -286,7 +306,9 @@ if (settings.disabled === true) {
 	if (core.auditAbortController === completionAuditController) core.auditAbortController = null;
 	// Clear auditor progress display
 	core.stopAuditAnimation();
-	if (!core.isFocusedOperationCurrent(completionFocus)) {
+	if (!core.isFocusedOperationCurrent(completionFocus)
+		|| (guard?.userDecisionEpoch !== undefined && core.userDecisionEpoch !== guard.userDecisionEpoch)
+		|| (guard?.scope && goalReviewScope(mergeGoalPromptFromDisk(ctx, core.state.goal!), guard.userDecisions ?? "") !== guard.scope)) {
 		core.auditProgress = null;
 		core.goalWidgetComponentRef.current?.invalidate();
 		return core.focusedOperationCancelledResult("Goal completion", completionFocus);

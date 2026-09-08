@@ -38,6 +38,17 @@ test("completed background output is evidence once, while status polling is nonp
 	assert.equal(tracker.observeResult("status", { status: "running" }, false), false);
 });
 
+test("standalone clock probes never count even when their output changes", () => {
+	const tracker = new GoalProgressEvidenceTracker();
+	const command = "date -u '+%Y-%m-%d %H:%M:%S UTC'";
+	tracker.beginAgentRun();
+	assert.equal(tracker.observeCall("clock-1", "bash", { command }), false);
+	assert.equal(tracker.observeResult("clock-1", "2026-09-07 00:00:00 UTC", false), false);
+	tracker.beginAgentRun();
+	assert.equal(tracker.observeCall("clock-2", "bash", { command }), false);
+	assert.equal(tracker.observeResult("clock-2", "2026-09-07 00:00:01 UTC", false), false);
+});
+
 test("failed observations never count as progress", () => {
 	const tracker = new GoalProgressEvidenceTracker();
 	tracker.observeCall("failed", "bash", { command: "git status --short" });

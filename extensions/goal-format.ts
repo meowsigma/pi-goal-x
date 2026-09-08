@@ -74,6 +74,12 @@ export function detailedSummary(goal: GoalRecord | null): string {
 	if (goal.stopReason) lines.push(`Stop reason: ${goal.stopReason}`);
 	if (goal.pauseReason) lines.push(`Agent pause reason: ${goal.pauseReason}`);
 	if (goal.pauseSuggestedAction) lines.push(`Agent suggests: ${goal.pauseSuggestedAction}`);
+	if (goal.continuation?.wake) {
+		lines.push(`Scheduled recheck: ${goal.continuation.wake.at} UTC — ${goal.continuation.wake.reason}`);
+		lines.push("Wake owner: pi-goal (in-process; overdue work is recovered when Pi returns).");
+	} else if (goal.continuation?.instruction) {
+		lines.push(`Retained review action: ${goal.continuation.instruction}`);
+	}
 	return lines.join("\n");
 }
 

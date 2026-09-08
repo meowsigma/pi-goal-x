@@ -43,6 +43,7 @@ import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { GOAL_WIDGET_KEY, GoalWidgetComponent, liveDisplayGoal, makeGoalWidgetFactory, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import type { AuditVerdict } from "./widgets/auditor-dashboard-model.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
+import { runGoalProgressReviewer } from "./goal-review.ts";
 
 
 
@@ -54,18 +55,26 @@ import { runGoalCompletionAuditor } from "./goal-auditor.ts";
  */
 export interface GoalCore {
 	pi: ExtensionAPI;
-	dependencies: { runCompletionAuditor?: typeof runGoalCompletionAuditor };
+	dependencies: {
+		runCompletionAuditor?: typeof runGoalCompletionAuditor;
+		runProgressReviewer?: typeof runGoalProgressReviewer;
+	};
 	state: { goal: GoalRecord | null };
 	readonly goalsById: Map<string, GoalRecord>;
 	readonly focusedGoalId: string | null;
 	readonly focusRevision: number;
 	/** Monotonic session marker epoch used to scope continuation coaching. */
 	readonly continuationEpoch: number;
+	/** User-origin input epoch used to invalidate in-flight autonomous review effects. */
+	readonly userDecisionEpoch: number;
+	markUserDecision(): void;
 	hasExplicitSessionFocus: boolean;
 	runningGoalId: string | null;
 	auditProgress: AuditorWidgetProgress | null;
 	auditAnimationTimer: ReturnType<typeof setInterval> | null;
 	auditAbortController: AbortController | null;
+	/** Independent progress review cancellation; never shares the Escape audit bypass path. */
+	reviewAbortController: AbortController | null;
 	/** §15.4: finished audit result card shown briefly before the dashboard returns. */
 	auditResult: { verdict: AuditVerdict; report: string; at: string } | null;
 	setAuditResult(verdict: AuditVerdict, report: string): void;
@@ -114,7 +123,7 @@ export interface GoalCore {
 	removeFocusedGoal(ctx: ExtensionContext, reason: GoalFocusReason): void;
 	beginAccounting(): void;
 	goalForDisplay(): GoalRecord | null;
-	accountProgress(ctx: ExtensionContext, opts?: { completedTurnTokens?: number }): void;
+	accountProgress(ctx: ExtensionContext, opts?: { completedTurnTokens?: number; goalId?: string; operationToken?: { goalId: string; revision: number } }): void;
 	syncGoalPromptFromDisk(ctx: ExtensionContext): boolean;
 	persist(ctx?: ExtensionContext): void;
 	refreshGoalDisplayFromDisk(ctx: ExtensionContext): void;
@@ -138,12 +147,13 @@ export interface GoalCore {
 
 export function createGoalCore(
 	pi: ExtensionAPI,
-	dependencies: { runCompletionAuditor?: typeof runGoalCompletionAuditor } = {},
+	dependencies: { runCompletionAuditor?: typeof runGoalCompletionAuditor; runProgressReviewer?: typeof runGoalProgressReviewer } = {},
 ): GoalCore {
 	let goalsById = new Map<string, GoalRecord>();
 	let focusedGoalId: string | null = null;
 	let focusRevision = 0;
 	let continuationEpoch = 0;
+	let userDecisionEpoch = 0;
 	let hasExplicitSessionFocus = false;
 
 	function assignFocusedGoalId(next: string | null): void {
@@ -213,6 +223,8 @@ export function createGoalCore(
 			if (goal.status !== "active") clearActiveAccounting();
 		},
 		onFocusChanged: () => {
+			reviewAbortController?.abort();
+			reviewAbortController = null;
 			clearContinuationState();
 			runtime.disposeAuditRetryTimers();
 			clearActiveAccounting();
@@ -250,6 +262,7 @@ export function createGoalCore(
 		auditResult = null;
 	}
 	let auditAbortController: AbortController | null = null;
+	let reviewAbortController: AbortController | null = null;
 	let auditAborted = false;
 
 	let goalModalDepth = 0;
@@ -282,6 +295,30 @@ export function createGoalCore(
 		},
 		getGoal: () => state.goal,
 		isActionable: (goalId) => isActionableContinuationGoal(goalId),
+		persistGoal: (goal, ctx) => {
+			const outcome = goalService.apply(ctx, {
+				reconcile: false,
+				focusToken: focusedOperationToken(goal.id),
+				mutate: () => ({ ...goal, updatedAt: nowIso() }),
+			});
+			return outcome.ok;
+		},
+		onDeferredWake: (ctx, goal) => {
+			// Keep the in-memory authoritative goal aligned with the retired durable
+			// lease before the next checkpoint/review admission check.
+			if (state.goal?.id === goal.id) {
+				state.goal = goal;
+				updateUI(ctx);
+			}
+		},
+		onDeferredWakePersistenceFailure: (_ctx, goal, message) => {
+			pi.sendMessage({
+				customType: "pi-goal-review-result",
+				content: `${message} This recheck remains NOT PROVEN and will be recovered when the goal is reloaded.`,
+				display: true,
+				details: goalDetails(goal),
+			}, { triggerTurn: false });
+		},
 	});
 	const accounting = new GoalAccounting();
 
@@ -402,6 +439,10 @@ export function createGoalCore(
 		return goalService.reconcileFocused(ctx, opts);
 	}
 
+	function markUserDecision(): void {
+		userDecisionEpoch += 1;
+	}
+
 	function appendFocusEntry(goalId: string | null, reason: GoalFocusReason): void {
 		continuationEpoch += 1;
 		hasExplicitSessionFocus = true;
@@ -469,7 +510,9 @@ export function createGoalCore(
 		return liveDisplayGoal(state.goal, accounting);
 	}
 
-	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number } = {}): void {
+	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number; goalId?: string; operationToken?: { goalId: string; revision: number } } = {}): void {
+		if (opts.goalId && state.goal?.id !== opts.goalId) return;
+		if (opts.operationToken && !isFocusedOperationCurrent(opts.operationToken)) return;
 		// Skip disk reconciliation for complete goals — they are pending archival at turn_end.
 		if (state.goal?.activePath && state.goal?.status !== "complete" && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true })) return;
 		if (!state.goal || state.goal.status !== "active" || !accounting.isActiveFor(state.goal.id)) {
@@ -754,6 +797,7 @@ export function createGoalCore(
 		}
 		clearStoppedRuntimeState();
 		runningGoalId = null;
+		if (state.goal?.status === "active" && state.goal.autoContinue) runtime.restoreDeferredWake(ctx, state.goal);
 		updateUI(ctx);
 	}
 
@@ -768,6 +812,7 @@ export function createGoalCore(
 		if (focusReason && focusChanged) appendFocusEntry(focusedGoalId, focusReason);
 		if (!state.goal || (state.goal.status !== "active") || !state.goal.autoContinue) {
 			clearContinuationState();
+			if (previousGoalId) runtime.cancelDeferredWake(previousGoalId);
 		}
 		if (!state.goal || state.goal.status === "paused" || state.goal.status === "complete") {
 			clearActiveAccounting();
@@ -809,6 +854,7 @@ export function createGoalCore(
 				: [],
 		});
 		if (result.ok) {
+			runtime.cancelDeferredWake(result.goal?.id ?? state.goal?.id ?? "");
 			// setGoal() glue: a stopped goal can no longer queue continuations or
 			// accrue time, and the UI must reflect the new status immediately.
 			clearContinuationState();
@@ -821,7 +867,10 @@ export function createGoalCore(
 	function pauseActiveGoal(ctx: ExtensionContext): void {
 		if (!state.goal || state.goal.status !== "active") return;
 		const pausedGoalId = state.goal.id;
+		reviewAbortController?.abort();
+		reviewAbortController = null;
 		runtime.clearAuditRecovery(pausedGoalId);
+		runtime.cancelDeferredWake(pausedGoalId);
 		// User-initiated pause (Esc / aborted turn). Clear any stale agent pause reason.
 		state.goal = { ...state.goal, autoContinue: false, pauseReason: undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);
@@ -924,6 +973,10 @@ export function createGoalCore(
 		get continuationEpoch() {
 			return continuationEpoch;
 		},
+		get userDecisionEpoch() {
+			return userDecisionEpoch;
+		},
+		markUserDecision,
 		get hasExplicitSessionFocus() {
 			return hasExplicitSessionFocus;
 		},
@@ -961,6 +1014,12 @@ export function createGoalCore(
 		},
 		set auditAbortController(value: AbortController | null) {
 			auditAbortController = value;
+		},
+		get reviewAbortController() {
+			return reviewAbortController;
+		},
+		set reviewAbortController(value: AbortController | null) {
+			reviewAbortController = value;
 		},
 		get goalModalDepth() {
 			return goalModalDepth;

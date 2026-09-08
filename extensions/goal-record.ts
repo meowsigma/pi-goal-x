@@ -31,6 +31,22 @@ export interface GoalUsage {
 	activeSeconds: number;
 }
 
+export interface GoalContinuationWake {
+	id: string;
+	at: string;
+	kind: "external_wait" | "execution_recovery" | "review_recovery";
+	reason: string;
+	evidence: string[];
+}
+
+export interface GoalContinuationState {
+	scope: string;
+	instruction: string;
+	executionRetries: number;
+	reviewFailures: number;
+	wake?: GoalContinuationWake;
+}
+
 export interface GoalRecord {
 	id: string;
 	objective: string;
@@ -66,6 +82,8 @@ export interface GoalRecord {
 	taskList?: GoalTaskList;
 	/** Plain-text description of what verification evidence is required before completing this goal. */
 	verificationContract?: string;
+	/** Durable autonomous review/recheck state. Absent on historical records. */
+	continuation?: GoalContinuationState;
 }
 
 export interface GoalStateEntry {
@@ -185,6 +203,9 @@ export function cloneGoal(goal: GoalRecord): GoalRecord {
 		taskList: goal.taskList
 			? { ...goal.taskList, tasks: goal.taskList.tasks.map(cloneGoalTask) }
 			: undefined,
+		continuation: goal.continuation
+			? { ...goal.continuation, wake: goal.continuation.wake ? { ...goal.continuation.wake, evidence: [...goal.continuation.wake.evidence] } : undefined }
+			: undefined,
 	};
 }
 
@@ -301,6 +322,32 @@ export function validateTokenBudgetInput(value: unknown): { ok: true; value: num
 	return { ok: true, value };
 }
 
+function normalizeContinuation(value: unknown): GoalContinuationState | undefined {
+	const raw = asRecord(value);
+	if (!raw || typeof raw.scope !== "string" || !raw.scope.trim() || typeof raw.instruction !== "string" || !raw.instruction.trim()) return undefined;
+	const evidence = Array.isArray(raw.evidence) ? raw.evidence.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()).slice(0, 8) : [];
+	const state: GoalContinuationState = {
+		scope: raw.scope.trim().slice(0, 200),
+		instruction: raw.instruction.trim().slice(0, 2_000),
+		executionRetries: typeof raw.executionRetries === "number" && Number.isSafeInteger(raw.executionRetries) ? Math.max(0, raw.executionRetries) : 0,
+		reviewFailures: typeof raw.reviewFailures === "number" && Number.isSafeInteger(raw.reviewFailures) ? Math.max(0, raw.reviewFailures) : 0,
+	};
+	const wake = asRecord(raw.wake);
+	const wakeEvidence = wake && Array.isArray(wake.evidence)
+		? wake.evidence.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()).slice(0, 8)
+		: [];
+	// Overdue wakes are valid (they are recovered immediately on return), but a
+	// malformed timestamp/evidence must never be surfaced as a scheduled wake.
+	const wakeAt = wake && typeof wake.at === "string" ? wake.at : "";
+	const parsedWakeAt = Date.parse(wakeAt);
+	const utcShape = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(wakeAt);
+	const validUtc = utcShape && Number.isFinite(parsedWakeAt) && new Date(parsedWakeAt).toISOString().slice(0, 19) === wakeAt.slice(0, 19);
+	if (wake && typeof wake.id === "string" && wake.id.trim() && validUtc && (wake.kind === "external_wait" || wake.kind === "execution_recovery" || wake.kind === "review_recovery") && typeof wake.reason === "string" && wake.reason.trim() && wakeEvidence.length > 0) {
+		state.wake = { id: wake.id.trim().slice(0, 120), at: new Date(wakeAt).toISOString(), kind: wake.kind, reason: wake.reason.trim().slice(0, 500), evidence: wakeEvidence };
+	}
+	return state;
+}
+
 export function normalizePositiveSafeInteger(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : undefined;
 }
@@ -373,5 +420,6 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		taskList,
 		currentTaskId,
 		verificationContract: typeof raw.verificationContract === "string" ? raw.verificationContract : undefined,
+		...(normalizeContinuation(raw.continuation) ? { continuation: normalizeContinuation(raw.continuation) } : {}),
 	};
 }

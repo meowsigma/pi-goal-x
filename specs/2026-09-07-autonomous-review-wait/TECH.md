@@ -4,7 +4,7 @@
 
 **Goal:** Replace unbounded ordinary status checkpoints with actual whole-goal review and goal-owned autonomous rechecks.
 
-**Architecture:** Keep the five model tools and the existing GoalCore/GoalService/GoalRuntime boundaries. Add a progress-review flow using the proven isolated completion-auditor session machinery, without the completion task gate. Persist deferred continuation state in the authoritative goal record, not solely best-effort ledger events. GoalRuntime owns its timer and all normal continuation admission; final approval remains in runGoalCompletionFlow.
+**Architecture:** Keep the five model tools and the existing GoalCore/GoalService/GoalRuntime boundaries. Add a progress-review flow using the proven isolated completion-auditor session machinery, without the completion task gate. Persist deferred continuation state in the authoritative goal record, not solely best-effort ledger events. GoalRuntime owns its timer and all normal continuation admission; final approval remains in runGoalCompletionFlow. Deferred wake retirement is a durable lease handoff: dispatch occurs only after the authoritative write succeeds; a failed retirement retains the persisted wake and emits a bounded diagnostic without dispatch.
 
 **Tech stack:** Existing TypeScript, Node timers/crypto, Pi SDK, TypeBox, node:test and existing loader fixtures. No new dependency or scheduler.
 
@@ -43,7 +43,7 @@ The review session uses the completion auditor's explicitly configured model (or
 
 ### Current authority and evidence
 
-Collect bounded goal-scoped branch evidence from the last matching focus boundary and real user-origin messages, plus genuine paired ask_user dialog call/results where their origin is available. Retain entry/call ids and delimit source data. Never promote assistant prose, background notifications, or a forged/unpaired tool result to user authority. Render all task verification contracts and evidence, not titles alone. Provide the current goal file and session reference for read-only inspection when bounded context omits material detail. The original objective and later user amendments are distinct sources; do not silently rewrite or weaken either.
+Collect bounded goal-scoped branch evidence from the last matching focus boundary and native input-handler decision records. The current host API provides no verifiable paired ask_user provenance, so dialog ids alone are rejected rather than treated as authority. Validate the owned record version/kind/source/goal/focus shape; ordinary role:user provenance, synthetic user-message text, assistant prose, background notifications, and forged/unpaired tool results are not authority. Retain source labels and delimit decision data from task/evidence context. Render all task verification contracts and evidence, not titles alone. Provide the current goal file and session reference for read-only inspection when bounded context omits material detail. Arbitrary loaded extensions share full Node/PiAPI privileges and can alter goals or forge owned records; this is a trusted-extension boundary, not cryptographic isolation. The original objective and later user amendments are distinct sources; do not silently rewrite or weaken either.
 
 ### Durable state and receipt
 

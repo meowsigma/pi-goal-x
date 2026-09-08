@@ -44,6 +44,8 @@
     ".tests/goal-record.test.ts",
     ".tests/goal-recovery.test.ts",
     ".tests/goal-refresh.test.ts",
+    ".tests/goal-review.test.ts",
+    ".tests/goal-runtime-review-recovery.test.ts",
     ".tests/goal-service.test.ts",
     ".tests/goal-session-health.test.ts",
     ".tests/goal-settings-race.test.ts",

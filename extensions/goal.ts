@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
+import { runGoalProgressReviewer } from "./goal-review.ts";
 import { registerGoalCommands } from "./goal-commands.ts";
 import { registerGoalEvents } from "./goal-events.ts";
 import {
@@ -21,7 +22,7 @@ import { registerGoalTools } from "./goal-tools.ts";
  */
 export default function goalExtension(
 	pi: ExtensionAPI,
-	dependencies: { runCompletionAuditor?: typeof runGoalCompletionAuditor } = {},
+	dependencies: { runCompletionAuditor?: typeof runGoalCompletionAuditor; runProgressReviewer?: typeof runGoalProgressReviewer } = {},
 ): void {
 	pi.registerMessageRenderer<GoalEventDetails>(GOAL_EVENT_ENTRY, renderGoalEvent);
 	pi.registerMessageRenderer<GoalAuditEventDetails>(GOAL_AUDIT_ENTRY, renderGoalAuditEvent);

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isMeaningfulProgressToolCall } from "./goal-format.ts";
+import { isStandaloneClockProbe } from "./goal-tool-names.ts";
 
 const OBSERVATIONAL_TOOL_NAMES = new Set(["bash", "read", "grep", "find", "ls", "bg_logs"]);
 const MAX_OBSERVATIONS = 64;
@@ -49,7 +50,7 @@ export class GoalProgressEvidenceTracker {
 	}
 
 	observeCall(toolCallId: unknown, toolName: string, input: unknown): boolean {
-		if (!isMeaningfulProgressToolCall(toolName, input)) return false;
+		if (isStandaloneClockProbe(toolName, input) || !isMeaningfulProgressToolCall(toolName, input)) return false;
 		if (!OBSERVATIONAL_TOOL_NAMES.has(toolName)) {
 			this.lastResultByInvocation.clear();
 			return true;

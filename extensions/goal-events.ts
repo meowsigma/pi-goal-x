@@ -32,6 +32,7 @@ import {
 import {
 	goalPrompt,
 	noProgressRecoveryPrompt,
+	scheduledWaitPrompt,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
 	untrustedObjectiveBlock,
@@ -39,7 +40,11 @@ import {
 import { rehydrateDraft } from "./goal-drafting.ts";
 import { syncTerminalInputPause } from "./goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
-import type { GoalMutationOutcome } from "./goal-service.ts";
+import { runGoalProgressReviewFlow } from "./goal-review.ts";
+import { archiveCompletedGoal } from "./goal-archive.ts";
+import { collectLatestUserDecisions, GOAL_USER_DECISION_ENTRY } from "./goal-user-decisions.ts";
+
+export { collectLatestUserDecisions } from "./goal-user-decisions.ts";
 
 /**
  * Issue #30: provider-context checkpoint compaction (pure helper).
@@ -53,6 +58,7 @@ import type { GoalMutationOutcome } from "./goal-service.ts";
  * result. Audit events, user messages, assistant messages, and tool results
  * pass through untouched.
  */
+
 export function compactGoalCheckpointContext(
 	messages: readonly unknown[],
 	currentGoal: GoalRecord | null,
@@ -101,15 +107,30 @@ export function compactGoalCheckpointContext(
 export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
 	let continuationAfterSettleFor: string | null = null;
+	let reviewAfterSettleFor: string | null = null;
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
+	let executionRecoveryAfterSettleFor: string | null = null;
 	let consecutiveNoProgressTurns = 0;
 	let noProgressRecoveryAttempt = 0;
 	let noProgressScopeGoalId: string | null = null;
 	let noProgressScopeEpoch = 0;
 	let delegatedWakeThisRun: DelegatedWakeKind | null = null;
 	let pendingInputSource: InputSource | null = null;
+	let pendingInputText = "";
 	const pendingAsyncDelegations = new Set<string>();
+	const explicitWaitOverride = (text: string): boolean => {
+		const normalized = text.trim();
+		if (!normalized) return false;
+		// Status/polling and ambiguous prose must not discard a durable wait.
+		// Only unmistakable lifecycle or scope commands supersede its lease.
+		if (/[?？]/u.test(normalized) || /\b(?:not|never|don't|don’t|do\s+not)\b/iu.test(normalized)) return false;
+		return /^\/goal-(?:resume|pause|cancel|clear|focus|unfocus|tweak|budget)(?:\s|$)/iu.test(normalized)
+			|| /^(?:please\s+)?(?:resume|pause|cancel|stop|abort|focus|unfocus)(?:\s+(?:(?:the|this|my)\s+)?(?:goal|work|task))?(?:\s+now)?[.!]?$/iu.test(normalized)
+			|| /^(?:please\s+)?(?:tweak|revise|change|replace|retarget)\s+(?:(?:the|this|my)\s+)?(?:goal|objective|scope|task|requirement|criteria)\b/iu.test(normalized)
+			|| /^(?:please\s+)?(?:increase|raise|change|reset|remove)\s+(?:(?:the|this|my)\s+)?(?:budget|token limit)\b/iu.test(normalized);
+	};
 	const progressEvidence = new GoalProgressEvidenceTracker();
+	const latestUserDecisions = (ctx: ExtensionContext, goalId: string): string => collectLatestUserDecisions(ctx.sessionManager?.getBranch?.() ?? [], goalId);
 	const recordMeaningfulWorkAttempt = (ctx: ExtensionContext, toolName: string): void => {
 		core.goalWorkToolCalledThisTurn = true;
 		if (toolName !== "update_goal") {
@@ -138,6 +159,25 @@ export function registerGoalEvents(core: GoalCore): void {
 		// The SDK's input source is the provenance boundary: interactive and RPC
 		// are user-originated, while extension prompts include NQA/background wakes.
 		pendingInputSource = event.source;
+		pendingInputText = event.text;
+		const goal = core.state.goal;
+		if (goal && core.focusedGoalId === goal.id && (event.source === "interactive" || event.source === "rpc") && event.text.trim()) {
+			core.markUserDecision();
+			try {
+				core.pi.appendEntry(GOAL_USER_DECISION_ENTRY, {
+					version: 1,
+					goalId: goal.id,
+					focusEpoch: core.continuationEpoch,
+					focusGoalId: goal.id,
+					source: event.source,
+					kind: "message",
+					text: event.text.slice(0, 2_000),
+				});
+			} catch {
+				// Provenance is fail-closed: an unrecorded input is never inferred
+				// from the ordinary user transcript by the reviewer.
+			}
+		}
 	});
 
 	pi.on("context", async (event) => {
@@ -244,65 +284,11 @@ export function registerGoalEvents(core: GoalCore): void {
 		}
 		core.refreshGoalDisplayFromDisk(ctx);
 
-		// Archive a goal that was marked complete but whose archival was deferred
-		// so the agent could see/recognize the audit result first.
-		// This runs after the agent's turn ends — the agent has now seen the result.
+		// Completion can happen from the post-settlement reviewer, so the
+		// deferred archival operation is shared with the normal turn_end path.
 		if (core.state.goal?.status === "complete" && !core.state.goal?.archivedPath) {
-			const completedGoal = core.state.goal;
-			let archiveResult: GoalMutationOutcome;
-			try {
-				archiveResult = core.goalService.apply(ctx, {
-					reconcile: false,
-					archive: true,
-					commitFocused: false,
-					mutate: () => completedGoal,
-					ledger: (written) => [{
-						type: "goal_completed",
-						goalId: completedGoal.id,
-						archivePath: written.archivedPath,
-						at: nowIso(),
-					}],
-				});
-			} catch (err) {
-				// The archive write throws on failure (e.g. unwritable archived
-				// directory); surface it as a typed outcome (follow-up Stage 3).
-				archiveResult = { ok: false, message: err instanceof Error ? err.message : String(err) };
-			}
-			if (archiveResult.ok) {
-				core.goalsById.delete(completedGoal.id);
-				core.assignFocusedGoalId(null);
-				core.appendFocusEntry(null, "completed");
-				// §16.6: append the dedicated goal_archived event (the completion
-				// transaction keeps goal_completed for compatibility) and emit the
-				// real archive path.
-				try {
-					core.goalService.appendEvents(ctx, [{
-						type: "goal_archived",
-						goalId: completedGoal.id,
-						archivePath: archiveResult.goal?.archivedPath ?? "",
-						at: nowIso(),
-					}]);
-				} catch {
-					// Best-effort; the archive itself already succeeded.
-				}
-				const path = archiveResult.goal?.archivedPath ?? "";
-				ctx.ui.notify(path ? `Goal archived.\nFile: ${path}` : "Goal archived.", "info");
-			} else {
-				// §16.6 failure behavior: never claim success, keep the complete
-				// record recoverable at its active path, and write a diagnostic
-				// ledger event when possible.
-				const remainingPath = completedGoal.activePath ?? "(unknown)";
-				ctx.ui.notify(`Failed to archive completed goal: ${archiveResult.message}. The complete record remains at ${remainingPath}.`, "warning");
-				try {
-					core.goalService.appendEvents(ctx, [{
-						type: "goal_archive_failed",
-						goalId: completedGoal.id,
-						message: archiveResult.message ?? "archive write failed",
-						at: nowIso(),
-					}]);
-				} catch {
-					// Diagnostic write is best-effort.
-				}
+			if (!archiveCompletedGoal(core, ctx)) {
+				ctx.ui.notify(`Failed to archive completed goal. The complete record remains at ${core.state.goal.activePath ?? "(unknown)"}.`, "warning");
 			}
 			core.updateUI(ctx);
 		}
@@ -444,7 +430,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		const currentSystemPrompt = () => event.systemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 		const inputSource = pendingInputSource;
+		const inputText = pendingInputText;
 		pendingInputSource = null;
+		pendingInputText = "";
 		const explicitUserInput = inputSource === "interactive" || inputSource === "rpc";
 		// Several prompt enrichments may need the same ledger snapshot. Keep one
 		// local read for this hook instead of repeatedly traversing the cached
@@ -475,12 +463,25 @@ export function registerGoalEvents(core: GoalCore): void {
 			}
 			core.runtime.setCheckpoint(null);
 		} else if (explicitUserInput) {
+			const waitingGoal = core.state.goal;
+			const preserveWait = Boolean(waitingGoal?.continuation?.wake) && !explicitWaitOverride(inputText);
+			core.reviewAbortController?.abort();
 			// Only the SDK's interactive/RPC input provenance is user-owned. An
 			// extension-originated prompt (NQA, a tool, or a background wake) must
-			// not reset audit admission or compete with its recovery lease.
+			// not reset audit admission or compete with its recovery lease. Ordinary
+			// status questions retain the durable wait; clear it only for an explicit
+			// lifecycle/scope override.
 			core.runtime.setCheckpoint(null);
-			core.clearContinuationState();
-			if (core.state.goal) {
+			if (!preserveWait) core.clearContinuationState();
+			if (!preserveWait && waitingGoal?.continuation?.wake) {
+				core.runtime.cancelDeferredWake(waitingGoal.id);
+				core.goalService.apply(ctx, {
+					reconcile: false,
+					focusToken: core.focusedOperationToken(waitingGoal.id),
+					mutate: (current) => ({ ...current, continuation: undefined, updatedAt: nowIso() }),
+				});
+			}
+			if (core.state.goal && !preserveWait) {
 				core.runtime.clearAuditRetry(core.state.goal.id);
 				try {
 					core.goalService.appendEvents(ctx, [{ type: "audit_retry_reset", goalId: core.state.goal.id, reason: "user_input", at: nowIso() }]);
@@ -569,6 +570,9 @@ export function registerGoalEvents(core: GoalCore): void {
 			};
 		}
 		const activeGoal = core.state.goal;
+		if (activeGoal.continuation?.wake) {
+			return { systemPrompt: `${currentSystemPrompt()}\n\n${scheduledWaitPrompt(activeGoal)}` };
+		}
 		const settings = loadGoalSettings(ctx.cwd);
 		let prompt = goalPrompt(activeGoal, settings);
 		// F5: [GOAL STALLED] steering note when the detector fired.
@@ -586,6 +590,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		}
 		if (core.runtime.consumeAuditRecoveryPrompt(activeGoal.id)) {
 			prompt = `${prompt}\n\n[AUDIT RECOVERY PIVOT goalId=${activeGoal.id}]\nThe completion auditor is unavailable or exhausted. Do not request completion again during this cooldown/exhaustion window. Continue with an independently actionable pending task now; preserve the unmet completion criteria and record evidence. A NOT PROVEN criterion is not success, and task skipping is allowed only for explicit user direction or a hard contradiction.`;
+		}
+		if (activeGoal.continuation?.instruction) {
+			prompt = `${prompt}\n\n[RETAINED GOAL REVIEW ACTION goalId=${activeGoal.id}]\n${activeGoal.continuation.instruction}\nExecute this action or a stronger evidence-backed alternative; do not merely report status.`;
 		}
 		if (noProgressRecoveryAttempt > 0) {
 			prompt = `${prompt}\n\n${noProgressRecoveryPrompt(noProgressRecoveryAttempt)}`;
@@ -613,6 +620,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		const endedGoalId = core.runningGoalId;
 		core.runningGoalId = null;
 		continuationAfterSettleFor = null;
+		reviewAfterSettleFor = null;
+		executionRecoveryAfterSettleFor = null;
 		networkErrorRecoveryAfterSettleFor = null;
 
 		// Account for any tokens from aborted in-flight assistant messages so
@@ -677,6 +686,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (productiveRun) {
 			consecutiveNoProgressTurns = 0;
 			noProgressRecoveryAttempt = 0;
+			core.runtime.clearRetainedReviewInstruction(ctx, core.state.goal);
 		} else {
 			consecutiveNoProgressTurns += 1;
 			noProgressRecoveryAttempt = consecutiveNoProgressTurns;
@@ -687,10 +697,49 @@ export function registerGoalEvents(core: GoalCore): void {
 		// available in both supported SDK lines (0.83 and 0.84) and is the first
 		// point where pi guarantees no automatic work remains.
 		const auditRecoveryRun = core.runtime.hasAuditRecoveryLease(core.state.goal.id);
-		continuationAfterSettleFor = continuationRun || auditRecoveryRun ? core.state.goal.id : null;
+		const explicitReviewRequest = core.runtime.consumeProgressReviewRequest(core.state.goal.id);
+		const reviewExhausted = core.runtime.isProgressReviewExhausted?.(core.state.goal) ?? false;
+		const retainedReviewAction = core.state.goal.continuation?.instruction && !core.state.goal.continuation.wake;
+		if (retainedReviewAction && !productiveRun && !explicitReviewRequest && !auditRecoveryRun) {
+			// The same actionable advice was already delivered once. Do not buy the
+			// identical review again when it is ignored; recover quietly instead.
+			executionRecoveryAfterSettleFor = core.state.goal.id;
+			continuationAfterSettleFor = null;
+		} else if ((explicitReviewRequest || consecutiveNoProgressTurns >= 2) && !productiveRun && !auditRecoveryRun && !reviewExhausted) {
+			// Two complete empty cycles are the review threshold, not permission to
+			// buy another ordinary checkpoint. Review is invoked at settlement.
+			reviewAfterSettleFor = core.state.goal.id;
+			// The request was consumed above. Do not re-add it after this settled
+			// review: ignored advice must enter quiet execution recovery, not buy
+			// the same independent review on every empty lifecycle cycle.
+			continuationAfterSettleFor = null;
+		} else if ((explicitReviewRequest || consecutiveNoProgressTurns >= 2) && !productiveRun && !auditRecoveryRun && reviewExhausted) {
+			// Provider exhaustion is not reset by empty or productive executor
+			// turns. Retained continuation state owns any quiet safe-work recovery.
+			executionRecoveryAfterSettleFor = core.state.goal.id;
+			continuationAfterSettleFor = null;
+		} else {
+			continuationAfterSettleFor = continuationRun || auditRecoveryRun ? core.state.goal.id : null;
+		}
 	});
 
 	pi.on("agent_settled", async (_event, ctx) => {
+		const reviewGoalId = reviewAfterSettleFor;
+		reviewAfterSettleFor = null;
+		const executionRecoveryGoalId = executionRecoveryAfterSettleFor;
+		executionRecoveryAfterSettleFor = null;
+		if (reviewGoalId && core.isActionableContinuationGoal(reviewGoalId)) {
+			await runGoalProgressReviewFlow(core, ctx, { reason: "Two consecutive settled runs produced no meaningful work.", latestUserDecisions: latestUserDecisions(ctx, reviewGoalId) });
+			return;
+		}
+		if (executionRecoveryGoalId && core.isActionableContinuationGoal(executionRecoveryGoalId)) {
+			const current = core.state.goal;
+			const continuation = current?.id === executionRecoveryGoalId ? current.continuation : undefined;
+			if (current && continuation && !continuation.wake) {
+				core.runtime.scheduleExecutionRecovery(ctx, current, continuation.scope, continuation.instruction);
+			}
+			return;
+		}
 		const goalId = continuationAfterSettleFor;
 		continuationAfterSettleFor = null;
 		const networkErrorGoalId = networkErrorRecoveryAfterSettleFor;

@@ -210,6 +210,8 @@ test("buildGoalAuditorPrompt demands semantic approval markers", () => {
 	assert.ok(prompt.includes("<executor_claim>"), "untrusted executor claim section present");
 	assert.ok(prompt.includes("UNTRUSTED"), "claim is marked untrusted");
 	assert.ok(prompt.includes("(no claim provided)"), "absent claim renders explicitly");
+	assert.ok(prompt.includes("<user_decisions>"), "dedicated user-decision context is always rendered");
+	assert.ok(prompt.includes("(none available)"), "absent user decisions render explicitly");
 	assert.ok(!prompt.includes("<test_evidence>"), "should not contain deprecated <test_evidence>");
 	assert.ok(prompt.includes("4. Explain missing or weak evidence"));
 	assert.ok(prompt.includes("5. End with exactly <approved/>"));
@@ -229,12 +231,17 @@ test("buildGoalAuditorPrompt renders a completion summary as an untrusted claim"
 
 test("buildGoalAuditorPrompt renders verification contract when goal has one", () => {
 	const prompt = buildGoalAuditorPrompt({
-		goal: goal({ verificationContract: "Run npm test (0 failures), grep for remaining references, re-read requirements" }),
+		goal: goal({
+			verificationContract: "Run npm test (0 failures), grep for remaining references, re-read requirements",
+			taskList: { blockCompletion: true, proposedAt: "2026-05-12T00:00:00.000Z", tasks: [{ id: "verify", title: "Verify output", status: "pending", verificationContract: "Check the complete output", evidence: "Observed output" }] },
+		}),
 		detailedSummary: "Goal: test",
 	});
 	assert.ok(prompt.includes("<verification_contract>"));
 	assert.ok(prompt.includes("Run npm test (0 failures)"));
 	assert.ok(prompt.includes("grep for remaining references"));
+	assert.ok(prompt.includes("Check the complete output"), "task verification contract reaches the final auditor");
+	assert.ok(prompt.includes("Observed output"), "task evidence reaches the final auditor");
 	assert.ok(prompt.includes("</verification_contract>"));
 	// The contract checklist step appears when verificationContract is present
 	assert.ok(prompt.includes("3. Verify that the executor has satisfied every item in the <verification_contract>"));

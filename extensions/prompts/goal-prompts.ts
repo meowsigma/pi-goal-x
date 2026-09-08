@@ -246,6 +246,21 @@ export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	return cachedPrompt(goal, settings, "goal", () => buildGoalPrompt(goal, settings));
 }
 
+/** Authoritative prompt branch for a durable future wake. */
+export function scheduledWaitPrompt(goal: GoalRecord): string {
+	const wake = goal.continuation?.wake;
+	if (!wake) return goalPrompt(goal);
+	return [
+		`[PI GOAL SCHEDULED WAIT goalId=${goal.id}]`,
+		"Status: ACTIVE and incomplete; the persisted goal-owned wait is authoritative.",
+		`Wake: ${wake.at} UTC · ${wake.reason} · id=${wake.id}`,
+		`Recorded recheck action: ${goal.continuation?.instruction ?? "inspect the dependency and continue the goal"}`,
+		"The future wake owns continuation until its due time. Do not do substantive work, request completion, pause the goal, or enqueue another continuation early.",
+		"Ordinary status questions and lifecycle polling do not cancel this wait. Only an explicit resume, scope change, pause, cancel, budget, or focus action may supersede it.",
+		"At or after the wake, inspect actual state before claiming progress; a due time is not evidence that the dependency succeeded.",
+	].join("\n");
+}
+
 function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	const taskBlock = taskListBlock(goal, settings);
 	const contractBlock = verificationContractBlock(goal, settings);

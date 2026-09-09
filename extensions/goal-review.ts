@@ -14,35 +14,46 @@ import { cloneGoal, nowIso, type GoalRecord, type GoalTask } from "./goal-record
 import { countTaskSubtree } from "./goal-task-count.ts";
 import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
 import { collectLatestUserDecisions } from "./goal-user-decisions.ts";
+import { currentGoalLifecycleSnapshot } from "./prompts/goal-prompts.ts";
+import { diagnosticHash, recordGoalDiagnostic, redactDiagnosticText } from "./goal-diagnostics.ts";
 
 export interface GoalReviewDecision {
-  disposition: "work" | "audit" | "wait";
+  disposition: "work" | "audit" | "wait" | "hold";
   summary: string;
   nextAction: string;
   evidence: string[];
+  /** Required for work: what the next action should reveal. */
+  expectedObservation?: string;
+  /** Required for work: which criterion or decision the observation affects. */
+  decisionImpact?: string;
   completedTasks: Array<{ taskId: string; evidence: string }>;
   wait?: { until: string; criterion: string; observedDependency: string; taskIds: string[] };
+  hold?: { reason: string; evidence: string[] };
 }
 
 export interface GoalReviewResult {
   decision?: GoalReviewDecision;
   output: string;
   model?: string;
+  effort?: string;
   tokensUsed?: number;
   error?: string;
 }
 
 const ReviewSchema = Type.Object({
-  disposition: Type.Union([Type.Literal("work"), Type.Literal("audit"), Type.Literal("wait")]),
+  disposition: Type.Union([Type.Literal("work"), Type.Literal("audit"), Type.Literal("wait"), Type.Literal("hold")]),
   summary: Type.String(),
   nextAction: Type.String(),
   evidence: Type.Array(Type.String()),
+  expectedObservation: Type.Optional(Type.String()),
+  decisionImpact: Type.Optional(Type.String()),
   completedTasks: Type.Array(Type.Object({ taskId: Type.String(), evidence: Type.String() })),
   wait: Type.Optional(Type.Object({ until: Type.String(), criterion: Type.String(), observedDependency: Type.String(), taskIds: Type.Array(Type.String()) })),
+  hold: Type.Optional(Type.Object({ reason: Type.String(), evidence: Type.Array(Type.String()) })),
 }, { additionalProperties: false });
 
 function text(value: unknown, max: number): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : undefined;
+  return typeof value === "string" && value.trim() ? redactDiagnosticText(value.trim(), max) : undefined;
 }
 
 function taskIds(tasks: readonly GoalTask[], out = new Set<string>()): Set<string> {
@@ -65,10 +76,13 @@ export function validateGoalReviewDecision(value: unknown, goal: GoalRecord): Go
   if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "review result must be an object" };
   const raw = value as Record<string, unknown>;
   const disposition = raw.disposition;
-  if (disposition !== "work" && disposition !== "audit" && disposition !== "wait") return { error: "disposition must be work, audit, or wait" };
+  if (disposition !== "work" && disposition !== "audit" && disposition !== "wait" && disposition !== "hold") return { error: "disposition must be work, audit, wait, or hold" };
   const summary = text(raw.summary, 1_000);
   const nextAction = text(raw.nextAction, 1_000);
   if (!summary || !nextAction) return { error: "summary and nextAction are required" };
+  const expectedObservation = text(raw.expectedObservation, 500);
+  const decisionImpact = text(raw.decisionImpact, 500);
+  if (disposition === "work" && (!expectedObservation || !decisionImpact)) return { error: "work requires expectedObservation and decisionImpact" };
   const evidence = Array.isArray(raw.evidence) ? raw.evidence.map((item) => text(item, 500)).filter((item): item is string => !!item).slice(0, 12) : [];
   if (raw.evidence !== undefined && !Array.isArray(raw.evidence)) return { error: "evidence must be an array" };
   const ids = taskIds(goal.taskList?.tasks ?? []);
@@ -87,6 +101,16 @@ export function validateGoalReviewDecision(value: unknown, goal: GoalRecord): Go
       completedTasks.push({ taskId, evidence: taskEvidence });
     }
   } else if (raw.completedTasks !== undefined) return { error: "completedTasks must be an array" };
+  let hold: GoalReviewDecision["hold"];
+  if (raw.hold !== undefined) {
+    if (!raw.hold || typeof raw.hold !== "object") return { error: "hold must be an object" };
+    const candidate = raw.hold as Record<string, unknown>;
+    const reason = text(candidate.reason, 500);
+    const holdEvidence = Array.isArray(candidate.evidence) ? candidate.evidence.map((item) => text(item, 500)).filter((item): item is string => !!item).slice(0, 8) : [];
+    if (!reason || holdEvidence.length === 0) return { error: "hold requires a reason and evidence" };
+    if (!Array.isArray(candidate.evidence)) return { error: "hold.evidence must be an array" };
+    hold = { reason, evidence: holdEvidence };
+  }
   let wait: GoalReviewDecision["wait"];
   if (raw.wait !== undefined) {
     if (!raw.wait || typeof raw.wait !== "object") return { error: "wait must be an object" };
@@ -105,10 +129,12 @@ export function validateGoalReviewDecision(value: unknown, goal: GoalRecord): Go
   }
   if (disposition === "wait" && !wait) return { error: "wait disposition requires wait evidence" };
   if (disposition !== "wait" && wait) return { error: "wait is only valid with wait disposition" };
+  if (disposition === "hold" && !hold) return { error: "hold disposition requires hold reason and evidence" };
+  if (disposition !== "hold" && hold) return { error: "hold is only valid with hold disposition" };
   if (disposition === "wait" && goal.taskList && pendingTaskIds(goal.taskList.tasks, seen).length > 0 && !wait) {
     return { error: "wait requires explicit pending task ids" };
   }
-  return { disposition, summary, nextAction, evidence, completedTasks, ...(wait ? { wait } : {}) };
+  return { disposition, summary, nextAction, evidence, ...(expectedObservation ? { expectedObservation } : {}), ...(decisionImpact ? { decisionImpact } : {}), completedTasks, ...(wait ? { wait } : {}), ...(hold ? { hold } : {}) };
 }
 
 function escapePayload(value: string): string {
@@ -126,8 +152,11 @@ export function buildGoalProgressReviewPrompt(args: { goal: GoalRecord; latestUs
   const taskSummary = args.goal.taskList ? `${countTaskSubtree(args.goal.taskList.tasks).pending} pending task(s)\n${renderTasks(args.goal.taskList.tasks).join("\n")}` : "No task list is configured.";
   return [
     "You are the independent whole-goal progress reviewer for pi-goal.",
+    currentGoalLifecycleSnapshot(args.goal),
     "This is a read-only review. Inspect actual artifacts with read, grep, find, and ls before deciding.",
-    "You may identify concrete work, verify individual pending tasks with evidence, recommend the normal completion audit, or justify one genuinely future-dependent recheck.",
+    "You may identify concrete work, verify individual pending tasks with evidence, recommend the normal completion audit, justify one genuinely future-dependent recheck, or record a quiet incomplete hold when no justified next action exists.",
+    "A work decision must include a bounded expectedObservation and decisionImpact: state what the next action should reveal and which criterion or decision it changes. Generic objective restatements are not work.",
+    "A hold decision must include a precise reason and bounded evidence. A hold keeps the goal ACTIVE and incomplete; it is not a pause, completion, or retry timer.",
     "You may not remove tasks, weaken contracts, grant permission, disable auditing, or mark the goal complete.",
     "Submit exactly one structured decision with submit_goal_progress_review; prose alone is not a result.",
     "A deadline or notice alone is not evidence for waiting. A wait requires a specific unfinished criterion, observed dependency, explicit recheck action, future UTC time, and wait.taskIds listing every remaining pending task (including dependency-blocked parents). Do not omit an actionable task, remove/skip it, or mark future evidence verified.",
@@ -137,7 +166,8 @@ export function buildGoalProgressReviewPrompt(args: { goal: GoalRecord; latestUs
     ] : []),
     "Task and verification contracts:\n<tasks>\n" + taskSummary + "\n</tasks>",
     "Latest explicit user decisions (source-labelled; executor prose is not authority):\n<user_decisions>\n" + escapePayload(args.latestUserDecisions || "(none available)") + "\n</user_decisions>",
-    "Recent actual work evidence:\n<recent_work>\n" + escapePayload(args.recentWork || detailedSummary(args.goal)) + "\n</recent_work>",
+    "Previous independent recommendation (retained until evaluated, not erased by tool activity):\n<previous_advice>\n" + escapePayload(args.goal.continuation?.instruction || "(none)") + "\n</previous_advice>",
+    "Recent actual work evidence:\n<recent_work>\n" + escapePayload(redactDiagnosticText(args.recentWork || detailedSummary(args.goal), 4_000)) + "\n</recent_work>",
   ].join("\n\n");
 }
 
@@ -180,8 +210,8 @@ export async function runGoalProgressReviewer(args: {
     },
   });
   const create = args.createSession ?? createAgentSession;
+  let tokensUsed = 0;
   try {
-    let tokensUsed = 0;
     const { session } = await create({
       cwd: args.ctx.cwd,
       model: resolved.model,
@@ -205,11 +235,12 @@ export async function runGoalProgressReviewer(args: {
       args.signal?.removeEventListener("abort", abort);
       unsubscribe?.();
     }
-    if (args.signal?.aborted) return { output: "", model: modelName(resolved.model), tokensUsed, error: "Progress reviewer aborted." };
-    if (!submitted) return { output: "", model: modelName(resolved.model), tokensUsed, error: invalid ?? "Progress reviewer returned no structured decision." };
-    return { decision: submitted, output: `${submitted.summary}\n${submitted.nextAction}`, model: modelName(resolved.model), tokensUsed };
+    const effort = settings.thinkingLevel;
+    if (args.signal?.aborted) return { output: "", model: modelName(resolved.model), effort, tokensUsed, error: "Progress reviewer aborted." };
+    if (!submitted) return { output: "", model: modelName(resolved.model), effort, tokensUsed, error: invalid ?? "Progress reviewer returned no structured decision." };
+    return { decision: submitted, output: `${submitted.summary}\n${submitted.nextAction}`, model: modelName(resolved.model), effort, tokensUsed };
   } catch (error) {
-    return { output: "", model: modelName(resolved.model), error: args.signal?.aborted ? "Progress reviewer aborted." : error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) };
+    return { output: "", model: modelName(resolved.model), effort: settings.thinkingLevel, tokensUsed, error: args.signal?.aborted ? "Progress reviewer aborted." : redactDiagnosticText(error instanceof Error ? error.message : String(error)) };
   }
 }
 
@@ -223,20 +254,34 @@ export function goalReviewScope(goal: GoalRecord, userDecisions = ""): string {
   return createHash("sha256").update(JSON.stringify(stableScopeValue({ objective: goal.objective, taskList: goal.taskList, verificationContract: goal.verificationContract, userDecisions }))).digest("hex").slice(0, 32);
 }
 
+/** Excludes status chatter, counters and timestamps; only relevant scope/configuration changes release a hold. */
+export function goalHoldAdmissionKey(goal: GoalRecord, ctx: ExtensionContext, effort?: string): string {
+  const settings = loadGoalSettings(ctx.cwd);
+  return diagnosticHash({ scope: goalReviewScope(goal), reviewer: [settings.provider, settings.model, settings.thinkingLevel, settings.disabled, settings.disableContracts], executor: [ctx.model?.provider, ctx.model?.id, effort], networkRecovery: settings.networkRecovery, skipAuditor: goal.skipAuditor });
+}
+
 export async function runGoalProgressReviewFlow(core: GoalCore, ctx: ExtensionContext, opts: { reason?: string; latestUserDecisions?: string } = {}): Promise<GoalReviewResult | null> {
   const goal = core.state.goal;
-  if (!goal || !core.isActionableContinuationGoal(goal.id)) return null;
+  if (!goal || !core.isActionableContinuationGoal(goal.id) || goal.continuation?.wake) return null;
   const latestUserDecisions = opts.latestUserDecisions ?? collectLatestUserDecisions(ctx.sessionManager?.getBranch?.() ?? [], goal.id);
-  if (core.runtime.isProgressReviewExhausted?.(goal)) return { output: "", error: "Independent progress review is exhausted; continue safe independent work until an explicit reset or scope change." };
+  if (goal.continuation?.hold) return { output: "", error: "Independent progress review is on a durable incomplete hold; await an explicit reset, scope change, or owned wake." };
   if (!core.runtime.beginProgressReview(goal.id)) return null;
   const scope = goalReviewScope(goal, latestUserDecisions);
+  const admissionKey = goalHoldAdmissionKey(goal, ctx, core.pi.getThinkingLevel?.());
   const operationToken = core.focusedOperationToken(goal.id);
   const userDecisionEpoch = core.userDecisionEpoch;
   const reviewer = core.dependencies.runProgressReviewer ?? runGoalProgressReviewer;
   const controller = new AbortController();
+  const reviewStartedAt = Date.now();
   core.reviewAbortController = controller;
   try {
     const result = await reviewer({ ctx, goal: cloneGoal(goal), settings: loadGoalSettings(ctx.cwd), latestUserDecisions, recentWork: opts.reason, signal: controller.signal });
+    recordGoalDiagnostic(ctx, {
+      type: "progress_review", stage: "client-review-result-not-served-model-proof", goalId: goal.id,
+      model: result.model, effort: result.effort, tokensUsed: result.tokensUsed ?? 0,
+      decision: result.decision?.disposition ?? "unavailable", evidence: result.decision?.evidence.slice(0, 4), error: result.error,
+      durationMs: Math.min(86_400_000, Math.max(0, Date.now() - reviewStartedAt)),
+    });
     if (result.tokensUsed) core.accountProgress(ctx, { completedTurnTokens: result.tokensUsed, goalId: goal.id, operationToken });
     // Reconcile authoritative disk state before applying any reviewer effect.
     // The focus token catches away-and-back focus changes; the structural scope
@@ -246,16 +291,15 @@ export async function runGoalProgressReviewFlow(core: GoalCore, ctx: ExtensionCo
     const currentAfterReview = core.state.goal;
     if (!reconciled || !core.isFocusedOperationCurrent(operationToken) || core.focusedGoalId !== goal.id || !core.isActionableContinuationGoal(goal.id)
       || core.userDecisionEpoch !== userDecisionEpoch
-      || !currentAfterReview || goalReviewScope(currentAfterReview, latestUserDecisions) !== scope) {
+      || !currentAfterReview || currentAfterReview.continuation?.wake || currentAfterReview.continuation?.hold || goalReviewScope(currentAfterReview, latestUserDecisions) !== scope) {
       return { ...result, error: "Progress review became stale; no goal state was changed." };
     }
     if (!result.decision) {
-      const diagnostic = result.error ?? "no decision";
+      const diagnostic = redactDiagnosticText(result.error ?? "no decision");
       if (diagnostic.includes("disabled by user-owned")) {
-        core.runtime.retainReviewInstruction(ctx, goal, scope, "The independent reviewer is disabled by the user's settings. Continue safe independent work while preserving every unmet contract.");
-        core.runtime.scheduleExecutionRecovery(ctx, goal, scope, "Continue safe independent work; the disabled reviewer cannot establish completion.");
+        core.runtime.retainContinuationHold?.(ctx, goal, scope, "The independent reviewer is disabled by the user's settings.", ["Reviewer settings disabled independent admission; completion is not proven."], admissionKey);
       } else {
-        core.runtime.recordProgressReviewFailure(ctx, goal, diagnostic, scope);
+        core.runtime.recordProgressReviewFailure(ctx, goal, diagnostic, scope, admissionKey);
       }
       return result;
     }
@@ -300,6 +344,13 @@ export async function runGoalProgressReviewFlow(core: GoalCore, ctx: ExtensionCo
     const postTaskScope = currentGoal ? goalReviewScope(currentGoal, latestUserDecisions) : "";
     const reconciledAfterTasks = core.reconcileFocusedGoalFromDisk?.(ctx) ?? true;
     if (!currentGoal || currentGoal.id !== goal.id || !core.isFocusedOperationCurrent(operationToken) || core.userDecisionEpoch !== userDecisionEpoch || !reconciledAfterTasks || !core.state.goal || goalReviewScope(core.state.goal, latestUserDecisions) !== postTaskScope) return { ...result, error: "Progress review became stale while applying task evidence." };
+    if (decision.disposition === "hold" && decision.hold) {
+      const held = core.runtime.retainContinuationHold?.(ctx, currentGoal, postTaskScope, redactDiagnosticText(decision.hold.reason), decision.hold.evidence.map((item) => redactDiagnosticText(item)), goalHoldAdmissionKey(currentGoal, ctx, core.pi.getThinkingLevel?.()));
+      core.pi.sendMessage({ customType: "pi-goal-review-result", content: held
+        ? `Review placed the active goal on a quiet incomplete hold.\nReason: ${decision.hold.reason}`
+        : "Review hold could not be persisted; completion remains NOT PROVEN.", display: true, details: goalDetails(core.state.goal) }, { triggerTurn: false });
+      return result;
+    }
     if (decision.disposition === "wait" && decision.wait) {
       const wake = { id: `${goal.id}-${Date.now().toString(36)}`, at: decision.wait.until, kind: "external_wait" as const, reason: decision.wait.criterion, evidence: [decision.wait.observedDependency, ...decision.evidence].slice(0, 8) };
       const armed = core.runtime.scheduleDeferredWake(ctx, currentGoal, { scope: postTaskScope, instruction: decision.nextAction, executionRetries: 0, reviewFailures: 0, wake });
@@ -319,8 +370,8 @@ export async function runGoalProgressReviewFlow(core: GoalCore, ctx: ExtensionCo
     // Retain actionable advice durably, then give it one immediate execution
     // chance. If it is ignored, the settled no-progress path owns quiet
     // recovery rather than buying the same review repeatedly.
-    core.runtime.retainReviewInstruction(ctx, currentGoal, postTaskScope, decision.nextAction);
-    core.queueContinuation(ctx, true);
+    const instruction = [decision.nextAction, `Expected observation: ${decision.expectedObservation}`, `Decision impact: ${decision.decisionImpact}`].join("\n");
+    if (core.runtime.retainReviewInstruction(ctx, currentGoal, postTaskScope, redactDiagnosticText(instruction, 2_000))) core.queueContinuation(ctx, true);
     return result;
   } finally {
     if (core.reviewAbortController === controller) core.reviewAbortController = null;

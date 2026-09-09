@@ -339,6 +339,33 @@ export function noProgressRecoveryPrompt(attempt: number): string {
 	return content.length > MAX_PROMPT_FRAGMENT_CHARS ? `${content.slice(0, MAX_PROMPT_FRAGMENT_CHARS)}\n…[prompt truncated]` : content;
 }
 
+/** Fresh lifecycle frame appended immediately before provider use. Historical
+ * transcript/checkpoint text cannot establish the current goal state. */
+export function currentGoalLifecycleSnapshot(goal: GoalRecord | null): string {
+	if (!goal) return '<pi_goal_lifecycle_snapshot v="1" status="unfocused" continuation="stopped" auto_continue="false"/>';
+	const continuation = goal.status !== "active" || !goal.autoContinue ? "stopped" : goal.continuation?.wake
+		? `scheduled-wait:${goal.continuation.wake.at}`
+		: goal.continuation?.hold
+			? "hold"
+			: "ready";
+	return `<pi_goal_lifecycle_snapshot v="1" goal_id="${escapeXmlAttribute(goal.id)}" status="${goal.status}" continuation="${continuation}" auto_continue="${goal.autoContinue}" revision="${goal.revision ?? 0}"/>`;
+}
+
+/** Active-but-held goals remain incomplete and must not be converted to pause
+ * or synthetic retry activity. */
+export function continuationHoldPrompt(goal: GoalRecord): string {
+	const hold = goal.continuation?.hold;
+	if (!hold) return goalPrompt(goal);
+	return [
+		`[PI GOAL ACTIVE goalId=${goal.id}]`,
+		`[PI GOAL CONTINUATION HOLD goalId=${goal.id}]`,
+		"Status: ACTIVE and incomplete; no justified automatic next action is admitted.",
+		`Hold reason: ${hold.reason}`,
+		`Hold evidence: ${hold.evidence.join(" | ")}`,
+		"This is a quiet continuation hold, not a pause, completion, or retry timer. Preserve the objective and wait for a genuine user instruction, changed scope/configuration, or owned external wake before acting.",
+	].join("\n");
+}
+
 export function staleContinuationPrompt(staleGoalId: string, current: GoalRecord | null): string {
 	const currentLine = current
 		? `Current goal: ${current.id} (${statusLabel(current)}) - ${truncateText(current.objective)}`

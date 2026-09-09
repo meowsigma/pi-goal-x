@@ -16,7 +16,6 @@ import { networkErrorBackoffPlan, type NetworkErrorBackoffPlan, type NetworkErro
 
 export const CONTINUATION_IDLE_RETRY_MS = 50;
 const DEFERRED_WAKE_MAX_MS = 2_147_000_000;
-const EXECUTION_RECOVERY_DELAYS_MS = [5_000, 30_000, 120_000, 600_000] as const;
 const AUDIT_RETRY_DELAYS_MS = [2_000, 5_000, 15_000] as const;
 const AUDIT_RETRY_MAX_ATTEMPTS = AUDIT_RETRY_DELAYS_MS.length;
 const PROGRESS_REVIEW_MAX_FAILURES = 3;
@@ -136,7 +135,7 @@ export class GoalRuntime {
 	isProgressReviewInFlight(goalId: string): boolean { return this.progressReviewInFlight.has(goalId); }
 	/** Review-provider exhaustion is independent of ordinary execution progress. */
 	isProgressReviewExhausted(goal: GoalRecord): boolean {
-		return (goal.continuation?.reviewFailures ?? 0) > PROGRESS_REVIEW_MAX_FAILURES;
+		return (goal.continuation?.reviewFailures ?? 0) >= PROGRESS_REVIEW_MAX_FAILURES;
 	}
 
 	/** Whether a continuation is queued or scheduled for this goal id. */
@@ -152,7 +151,7 @@ export class GoalRuntime {
 	queueContinuation(ctx: ExtensionContext, goal: GoalRecord, force = false): void {
 		// A durable wait/recovery lease is the sole continuation owner until its
 		// due callback retires it. Reload and ordinary checkpoints must not wake it early.
-		if (goal.status !== "active" || !goal.autoContinue || goal.continuation?.wake) return;
+		if (goal.status !== "active" || !goal.autoContinue || goal.continuation?.wake || goal.continuation?.hold) return;
 		const goalId = goal.id;
 		if (!force && this.continuationPendingFor(goalId)) return;
 		this.clearContinuationTimer();
@@ -290,9 +289,10 @@ export class GoalRuntime {
 
 	/** Persist and arm one goal-owned deferred wake. */
 	scheduleDeferredWake(ctx: ExtensionContext, goal: GoalRecord, state: GoalContinuationState): boolean {
-		if (goal.status !== "active" || !goal.autoContinue || !state.wake) return false;
+		if (goal.status !== "active" || !goal.autoContinue || goal.continuation?.hold || !state.wake) return false;
 		if (this.deferredWakeTimers.has(goal.id)) return false;
 		if (!this.hooks.persistGoal || !this.hooks.persistGoal({ ...goal, continuation: state }, ctx)) return false;
+		this.cancelContinuationFor(goal.id);
 		this.armDeferredWake(ctx, { ...goal, continuation: state });
 		return true;
 	}
@@ -333,7 +333,15 @@ export class GoalRuntime {
 	}
 
 	restoreDeferredWake(ctx: ExtensionContext, goal: GoalRecord): void {
-		if (goal.status === "active" && goal.autoContinue && goal.continuation?.wake) this.armDeferredWake(ctx, goal);
+		if (goal.status !== "active" || !goal.autoContinue || !goal.continuation?.wake) return;
+		if (goal.continuation.wake.kind !== "external_wait") {
+			// Historical reviewer/execution recovery wakes are not allowed to revive
+			// timer-driven activity after reload. Preserve their bounded evidence as
+			// an incomplete hold instead.
+			this.retainContinuationHold(ctx, goal, goal.continuation.scope, "Historical automatic recovery was suppressed; no justified retry remains.", goal.continuation.wake.evidence);
+			return;
+		}
+		this.armDeferredWake(ctx, goal);
 	}
 
 	cancelDeferredWake(goalId: string): void {
@@ -348,36 +356,39 @@ export class GoalRuntime {
 		return this.hooks.persistGoal({ ...goal, continuation: { scope, instruction: instruction.slice(0, 2_000), executionRetries: goal.continuation?.executionRetries ?? 0, reviewFailures: goal.continuation?.reviewFailures ?? 0, wake: goal.continuation?.wake } }, ctx);
 	}
 
-	/** Meaningful work clears advice but preserves independent review admission state. */
-	clearRetainedReviewInstruction(ctx: ExtensionContext, goal: GoalRecord): void {
-		const continuation = goal.continuation;
-		if (!continuation || continuation.wake || !this.hooks.persistGoal) return;
-		if (continuation.reviewFailures > 0) {
-			this.hooks.persistGoal({ ...goal, continuation: { ...continuation, executionRetries: 0 } }, ctx);
-			return;
-		}
-		this.hooks.persistGoal({ ...goal, continuation: undefined }, ctx);
+	/** Persist an ACTIVE, incomplete hold without arming a retry timer. */
+	retainContinuationHold(ctx: ExtensionContext, goal: GoalRecord, scope: string, reason: string, evidence: string[], admissionKey?: string): boolean {
+		if (!this.hooks.persistGoal || goal.status !== "active" || !goal.autoContinue || goal.continuation?.wake?.kind === "external_wait") return false;
+		const boundedEvidence = evidence.filter((item) => item.trim()).map((item) => item.trim().slice(0, 500)).slice(0, 8);
+		if (boundedEvidence.length === 0) return false;
+		const persisted = this.hooks.persistGoal({ ...goal, continuation: {
+			scope: scope.slice(0, 200),
+			instruction: reason.trim().slice(0, 2_000),
+			executionRetries: goal.continuation?.executionRetries ?? 0,
+			reviewFailures: goal.continuation?.reviewFailures ?? 0,
+			hold: { reason: reason.trim().slice(0, 500), evidence: boundedEvidence, at: new Date(this.timers.now()).toISOString(), ...(admissionKey ? { admissionKey } : {}) },
+		} }, ctx);
+		if (persisted) { this.cancelContinuationFor(goal.id); this.cancelDeferredWake(goal.id); }
+		return persisted;
 	}
 
-	scheduleExecutionRecovery(ctx: ExtensionContext, goal: GoalRecord, scope: string, instruction: string, reviewFailures = goal.continuation?.reviewFailures ?? 0): boolean {
-		const attempt = Math.min((goal.continuation?.executionRetries ?? 0) + 1, EXECUTION_RECOVERY_DELAYS_MS.length);
-		const wakeAt = new Date(this.timers.now() + EXECUTION_RECOVERY_DELAYS_MS[attempt - 1]!).toISOString();
-		return this.scheduleDeferredWake(ctx, goal, { scope, instruction: instruction.slice(0, 2_000), executionRetries: attempt, reviewFailures, wake: { id: `${goal.id}-recovery-${Date.now().toString(36)}`, at: wakeAt, kind: "execution_recovery", reason: "review advice was not yet executed", evidence: [instruction.slice(0, 500)] } });
+	/** Compatibility no-op: tool activity never clears retained strategic advice.
+	 * A subsequent independent review replaces or resolves the advice. */
+	clearRetainedReviewInstruction(_ctx: ExtensionContext, _goal: GoalRecord): void {}
+
+	/** Compatibility entry point: ignored advice is now a durable hold, never a timer. */
+	scheduleExecutionRecovery(ctx: ExtensionContext, goal: GoalRecord, scope: string, instruction: string): boolean {
+		return this.retainContinuationHold(ctx, goal, scope, "The reviewed next action was not executed; no justified automatic retry remains.", [instruction]);
 	}
 
-	recordProgressReviewFailure(ctx: ExtensionContext, goal: GoalRecord, error: string, scope: string): void {
+	recordProgressReviewFailure(ctx: ExtensionContext, goal: GoalRecord, error: string, scope: string, admissionKey?: string): void {
 		const failures = (goal.continuation?.reviewFailures ?? 0) + 1;
 		const diagnostic = error.trim().slice(0, 500) || "unknown review infrastructure failure";
-		if (failures > 3) {
-			// Review admission is exhausted independently of ordinary execution. Keep
-			// the diagnostic and pivot to bounded quiet execution recovery rather than
-			// stranding the active goal with no owner.
-			const instruction = `Independent review exhausted after ${failures} failures (${diagnostic}). Continue safe independent work; preserve every unmet contract and do not claim completion.`;
-			this.scheduleExecutionRecovery(ctx, goal, scope, instruction, failures);
-			return;
-		}
-		const delay = [5_000, 30_000, 120_000][failures - 1] ?? 600_000;
-		this.scheduleDeferredWake(ctx, goal, { scope, instruction: "Retry the independent whole-goal review quietly; preserve all unmet contracts.", executionRetries: goal.continuation?.executionRetries ?? 0, reviewFailures: failures, wake: { id: `${goal.id}-review-${Date.now().toString(36)}`, at: new Date(Date.now() + delay).toISOString(), kind: "review_recovery", reason: diagnostic, evidence: [diagnostic] } });
+		// There is no retry owner after this call. Say so durably on the first
+		// outage rather than imply two invisible future retries will occur.
+		this.retainContinuationHold(ctx, { ...goal, continuation: {
+			...(goal.continuation ?? { scope, instruction: "", executionRetries: 0, reviewFailures: 0 }), reviewFailures: failures,
+		} }, scope, "Independent review is unavailable; no automatic retry is scheduled.", [diagnostic], admissionKey);
 	}
 	clearProgressReviewFailure(goalId: string): void { this.cancelDeferredWake(goalId); }
 
@@ -401,7 +412,7 @@ export class GoalRuntime {
 	 * turn or any user-owned cancellation path.
 	 */
 	scheduleNetworkErrorRetry(ctx: ExtensionContext, goal: GoalRecord, policy?: NetworkErrorRecoveryPolicy): NetworkErrorBackoffPlan | null {
-		if (goal.status !== "active" || !goal.autoContinue || this.networkErrorRetryTimer) return null;
+		if (goal.status !== "active" || !goal.autoContinue || goal.continuation?.hold || goal.continuation?.wake || this.networkErrorRetryTimer) return null;
 		if (this.networkErrorRetryGoalId !== goal.id) {
 			this.networkErrorRetryGoalId = goal.id;
 			this.networkErrorRetryAttempt = 0;
@@ -418,6 +429,10 @@ export class GoalRuntime {
 		}, plan.delayMs);
 		this.networkErrorRetryTimer.unref?.();
 		return plan;
+	}
+
+	networkErrorRetryPendingFor(goalId: string): boolean {
+		return this.networkErrorRetryGoalId === goalId && this.networkErrorRetryTimer !== null;
 	}
 
 	/** Cancel and forget all goal-level network-error recovery state. */
@@ -437,7 +452,8 @@ export class GoalRuntime {
 	private sendQueuedContinuation(ctx: ExtensionContext, scheduledGoalId: string): void {
 		this.continuationTimer = null;
 		this.continuationScheduledFor = null;
-		if (!this.hooks.isActionable(scheduledGoalId)) {
+		const admittedGoal = this.hooks.getGoal();
+		if (!this.hooks.isActionable(scheduledGoalId) || admittedGoal?.continuation?.hold || admittedGoal?.continuation?.wake) {
 			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
 			return;
 		}

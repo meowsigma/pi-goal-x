@@ -47,7 +47,11 @@ Open goals are stored in `.pi/goals/`. Their objectives, tasks, status, and prog
 
 ### Auto-continuation safety
 
-Active goals continue after meaningful work. If a model instead ends a turn without meaningful tool work, pi-goal-x supplies escalating recovery coaching: research and attempt a new route first, then write an evidence-backed dual-sided packet for the current task at attempt three and continue independent tasks. Empty turns never open a circuit breaker or stop the goal; polling and unchanged observations remain non-progress signals.
+Active goals admit justified work, an owned future wait, or a durable **ACTIVE/incomplete hold**. Independent progress review requires a concrete next action, expected observation and decision impact; tool calls, repeated advice and status edits are not proof of progress. Holds preserve the objective and contracts without manufacturing activity, pausing the goal, or claiming completion. Status questions preserve holds. Genuine new instructions, relevant scope/configuration changes, and fresh matched goal/session-owned terminal receipts can re-admit review; foreign, duplicate and user-role notification text cannot.
+
+Each model request receives a replaced authoritative lifecycle frame. A bounded reconciliation handles unproductive present-tense false-paused claims without overriding genuine pause, budgets, unfocus or an owned future wake. Reviewer outages, terminal provider refusals and exhaustion of a configured transient retry cap retain an honest quiet hold. Progress review never replaces the independent final completion audit.
+
+Read-only diagnostics use a bounded 64-entry/256-KiB `.pi/goals/diagnostics.json` ring. Source hashes are initialization snapshots; request hashes and selected route/effort are hook-stage observations, not proof of final wire payload, remote served-model identity, historical loaded code or model compliance. Common credential formats are redacted and full payloads/headers are omitted; this is not a guarantee against arbitrary unlabeled secrets.
 
 ### Multiple open goals
 

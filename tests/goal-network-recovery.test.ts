@@ -120,6 +120,8 @@ function fixtureCwd(): { cwd: string; goal: GoalRecord } {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-network-recovery-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	writeFileSync(path.join(cwd, ".pi", "goals", "active_goal_fixture.md"), FIXTURE_GOAL);
+	// Opt-in unbounded policy must not depend on a developer's saved retry cap.
+	writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ networkRecovery: { maxAttempts: 0 } }));
 	const parsed = createGoal(
 		{ objective: "Golden fixture goal objective", autoContinue: true, sisyphus: false },
 		Date.UTC(2026, 7, 3, 9, 0, 0),
@@ -426,7 +428,7 @@ test("lifecycle: unbounded recovery keeps retrying past the old 5-attempt cap", 
 	}
 });
 
-test("lifecycle: configured bounded cap exhausts with a resume hint instead of retrying", async () => {
+test("lifecycle: configured bounded cap exhausts into an honest quiet hold instead of retrying", async () => {
 	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS = "2";
 	process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS = "1000";
 	const { cwd, goal } = fixtureCwd();
@@ -455,8 +457,8 @@ test("lifecycle: configured bounded cap exhausts with a resume hint instead of r
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 		assert.match(
 			lastNotification(h),
-			/persisted after all recovery attempts\. The goal remains active/,
-			"exhaustion must stop the loop with a resume hint",
+			/ACTIVE and incomplete on a quiet hold/,
+			"exhaustion must stop the loop with an honest hold",
 		);
 		assert.equal(await countCheckpoints(h), checkpointsBeforeExhaustion, "exhausted recovery must not deliver a continuation");
 	} finally {

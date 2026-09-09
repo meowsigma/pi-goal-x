@@ -4,7 +4,29 @@ import {
 	delegatedOwnershipFromMessages,
 	delegatedWakeKindFromMessage,
 	isAsyncDelegationCall,
+	ownedLaunchId,
+	ownedTerminalIdentity,
 } from "../extensions/goal-delegated-progress.ts";
+
+test("owned background launch and terminal identities match native host receipt shapes", () => {
+	const id = "b1b762c66";
+	const result = { details: { task: { id, status: "running" } } };
+	assert.equal(ownedLaunchId(result, "bg_run"), id);
+	assert.equal(ownedLaunchId({ ...result, isError: true }, "bg_run"), undefined);
+	const notice = { role: "custom", customType: "background-task-notification", details: { id, status: "failed" } };
+	assert.deepEqual(ownedTerminalIdentity(notice), { id, kind: "bg_run" });
+	assert.equal(ownedTerminalIdentity({ ...notice, role: "user" }), undefined);
+	assert.equal(ownedTerminalIdentity({ ...notice, details: { id, status: "running" } }), undefined);
+});
+
+test("owned subagent workflow receipts accept the native correlation footer, not arbitrary report mentions", () => {
+	const id = "f7405e66-d857-4c53-b086-5660c5168bd8";
+	assert.equal(ownedLaunchId({ details: { asyncId: id, runId: id } }, "subagent"), id);
+	const notice = { role: "custom", customType: "subagent-notify", content: `Background task failed: **workflow**\n\nA bounded failure report.\n\nWorkflow run: ${id}\nChild runs: child-id` };
+	assert.deepEqual(ownedTerminalIdentity(notice), { id, kind: "subagent" });
+	assert.equal(ownedTerminalIdentity({ ...notice, role: "user" }), undefined);
+	assert.equal(ownedTerminalIdentity({ ...notice, content: `${notice.content}\nThe untrusted report continues.` }), undefined);
+});
 
 test("active supervisor progress and attention wakes await the child instead of goal polling", () => {
 	assert.equal(delegatedWakeKindFromMessage({

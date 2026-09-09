@@ -385,6 +385,7 @@ test("provider-error guard: agent_end with an error message never queues a conti
 
 test("network-error recovery waits for agent_settled before scheduling its backoff", async () => {
 	const { cwd, goal } = fixtureCwd();
+	writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ networkRecovery: { maxAttempts: 0 } }));
 	const h = createHarness(cwd);
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));

@@ -39,11 +39,28 @@ export interface GoalContinuationWake {
 	evidence: string[];
 }
 
+export interface GoalContinuationHold {
+	reason: string;
+	evidence: string[];
+	at: string;
+	/** Relevant goal/configuration snapshot; missing legacy keys are baselined, not released. */
+	admissionKey?: string;
+}
+
+export interface GoalOwnedWork {
+	id: string;
+	kind: "bg_run" | "subagent";
+	scope: string;
+	sessionId: string;
+}
+
 export interface GoalContinuationState {
 	scope: string;
 	instruction: string;
 	executionRetries: number;
 	reviewFailures: number;
+	/** A durable incomplete hold; unlike a wake it admits no automatic work. */
+	hold?: GoalContinuationHold;
 	wake?: GoalContinuationWake;
 }
 
@@ -84,6 +101,8 @@ export interface GoalRecord {
 	verificationContract?: string;
 	/** Durable autonomous review/recheck state. Absent on historical records. */
 	continuation?: GoalContinuationState;
+	/** Successful async launches only; consumed once by a matching host notice. */
+	ownedWork?: GoalOwnedWork[];
 }
 
 export interface GoalStateEntry {
@@ -203,8 +222,9 @@ export function cloneGoal(goal: GoalRecord): GoalRecord {
 		taskList: goal.taskList
 			? { ...goal.taskList, tasks: goal.taskList.tasks.map(cloneGoalTask) }
 			: undefined,
+		ownedWork: goal.ownedWork?.map((work) => ({ ...work })),
 		continuation: goal.continuation
-			? { ...goal.continuation, wake: goal.continuation.wake ? { ...goal.continuation.wake, evidence: [...goal.continuation.wake.evidence] } : undefined }
+			? { ...goal.continuation, hold: goal.continuation.hold ? { ...goal.continuation.hold, evidence: [...goal.continuation.hold.evidence] } : undefined, wake: goal.continuation.wake ? { ...goal.continuation.wake, evidence: [...goal.continuation.wake.evidence] } : undefined }
 			: undefined,
 	};
 }
@@ -332,6 +352,13 @@ function normalizeContinuation(value: unknown): GoalContinuationState | undefine
 		executionRetries: typeof raw.executionRetries === "number" && Number.isSafeInteger(raw.executionRetries) ? Math.max(0, raw.executionRetries) : 0,
 		reviewFailures: typeof raw.reviewFailures === "number" && Number.isSafeInteger(raw.reviewFailures) ? Math.max(0, raw.reviewFailures) : 0,
 	};
+	const hold = asRecord(raw.hold);
+	const holdEvidence = hold && Array.isArray(hold.evidence)
+		? hold.evidence.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim().slice(0, 500)).slice(0, 8)
+		: [];
+	if (hold && typeof hold.reason === "string" && hold.reason.trim() && typeof hold.at === "string" && Number.isFinite(Date.parse(hold.at)) && holdEvidence.length > 0) {
+		state.hold = { reason: hold.reason.trim().slice(0, 500), evidence: holdEvidence, at: new Date(hold.at).toISOString(), ...(typeof hold.admissionKey === "string" && /^[a-f0-9]{64}$/u.test(hold.admissionKey) ? { admissionKey: hold.admissionKey } : {}) };
+	}
 	const wake = asRecord(raw.wake);
 	const wakeEvidence = wake && Array.isArray(wake.evidence)
 		? wake.evidence.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()).slice(0, 8)
@@ -421,5 +448,10 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		currentTaskId,
 		verificationContract: typeof raw.verificationContract === "string" ? raw.verificationContract : undefined,
 		...(normalizeContinuation(raw.continuation) ? { continuation: normalizeContinuation(raw.continuation) } : {}),
+		...(Array.isArray(raw.ownedWork) ? { ownedWork: raw.ownedWork.flatMap((entry) => {
+			const work = asRecord(entry);
+			return work && (work.kind === "bg_run" || work.kind === "subagent") && [work.id, work.scope, work.sessionId].every((value) => typeof value === "string" && value.length > 0 && value.length <= 200)
+				? [{ id: work.id as string, kind: work.kind, scope: work.scope as string, sessionId: work.sessionId as string } as GoalOwnedWork] : [];
+		}).slice(-32) } : {}),
 	};
 }

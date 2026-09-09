@@ -40,7 +40,7 @@ const makeGoal = (): GoalRecord => ({
   continuation: { scope: "scope", instruction: "review", executionRetries: 0, reviewFailures: 0 },
 });
 
-test("review retry exhaustion retains diagnostics and schedules quiet execution recovery", () => {
+test("first review failure holds immediately and explicit repeated reports retain diagnostics", () => {
   let goal = makeGoal();
   const runtime = new GoalRuntime({
     sendFollowUp() {},
@@ -48,17 +48,19 @@ test("review retry exhaustion retains diagnostics and schedules quiet execution 
     isActionable: (id) => id === goal.id && goal.status === "active" && goal.autoContinue,
     persistGoal: (next) => { goal = next; return true; },
   });
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     runtime.recordProgressReviewFailure(ctx, goal, `provider failure ${attempt + 1}`, "scope");
-    runtime.disposeAuditRetryTimers();
+    assert.ok(goal.continuation?.hold, "even the first failure is an honest hold");
+    assert.equal(runtime.continuationPendingFor(goal.id), false);
   }
-  assert.equal(goal.continuation?.reviewFailures, 4);
-  assert.equal(goal.continuation?.wake?.kind, "execution_recovery");
-  assert.match(goal.continuation?.instruction ?? "", /provider failure 4/);
+  assert.equal(goal.continuation?.reviewFailures, 3);
+  assert.equal(goal.continuation?.wake, undefined);
+  assert.ok(goal.continuation?.hold);
+  assert.match(goal.continuation?.hold?.evidence.join(" ") ?? "", /provider failure 3/);
   runtime.disposeAuditRetryTimers();
 });
 
-test("productive work clears retained advice without clearing exhausted review admission", () => {
+test("activity does not clear retained advice or exhausted review admission", () => {
   let goal: GoalRecord = { ...makeGoal(), continuation: { ...makeGoal().continuation!, reviewFailures: 4, instruction: "Continue safe independent work." } };
   const runtime = new GoalRuntime({
     sendFollowUp() {}, getGoal: () => goal,

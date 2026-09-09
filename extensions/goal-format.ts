@@ -77,6 +77,9 @@ export function detailedSummary(goal: GoalRecord | null): string {
 	if (goal.continuation?.wake) {
 		lines.push(`Scheduled recheck: ${goal.continuation.wake.at} UTC — ${goal.continuation.wake.reason}`);
 		lines.push("Wake owner: pi-goal (in-process; overdue work is recovered when Pi returns).");
+	} else if (goal.continuation?.hold) {
+		lines.push(`Continuation hold: ${goal.continuation.hold.reason}`);
+		lines.push(`Hold evidence: ${goal.continuation.hold.evidence.join(" | ")}`);
 	} else if (goal.continuation?.instruction) {
 		lines.push(`Retained review action: ${goal.continuation.instruction}`);
 	}
@@ -258,9 +261,15 @@ const TRANSIENT_PROVIDER_ERROR_RE = new RegExp(
 	"i",
 );
 
-/** Quota/billing exhaustion is deterministic; retrying cannot fix it. */
+/** Terminal auth/credit/model failures must not re-enter Goal's separate backoff. */
 const NON_TRANSIENT_PROVIDER_ERROR_RE = new RegExp(
 	[
+		"\\b(?:401|403|unauthorized|forbidden|authentication[_\\s-]?failed|invalid[_\\s-]?api[_\\s-]?key|permission[_\\s-]?denied)\\b",
+		"\\b(?:run out of|out of|no) credits?\\b",
+		"\\b(?:not enough|insufficient|exhausted|depleted|no remaining) (?:credits?|balance)\\b",
+		"\\b402\\b|\\bpayment required\\b|\\bthis model was zai\\b",
+		"\\b(?:credits?|balance)(?: (?:are|is|have been))? (?:exhausted|depleted|insufficient)\\b",
+		"\\bmodel[_-]not[_-]found\\b|\\bmodel[^\\n]{0,100}\\b(?:retired|decommissioned|no longer available|does not exist|not available)\\b",
 		"\\binsufficient[_\\s]?quota\\b",
 		"\\bout of budget\\b",
 		"\\bquota exceeded\\b",
@@ -270,6 +279,13 @@ const NON_TRANSIENT_PROVIDER_ERROR_RE = new RegExp(
 	].join("|"),
 	"i",
 );
+
+/** Only provider error metadata is classified, never assistant prose/tool output. */
+export function isTerminalProviderError(message: unknown): boolean {
+	if (!isErrorAssistantMessage(message) && !isAbortedAssistantMessage(message)) return false;
+	const raw = asRecord(message);
+	return NON_TRANSIENT_PROVIDER_ERROR_RE.test([raw?.rawStopReason, raw?.errorMessage].filter((value): value is string => typeof value === "string").join(" "));
+}
 
 /** A transient provider failure is safe for the bounded goal backoff. */
 export function isNetworkErrorAssistantMessage(message: unknown): boolean {

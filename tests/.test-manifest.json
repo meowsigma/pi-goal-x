@@ -15,6 +15,7 @@
     ".tests/goal-core.test.ts",
     ".tests/goal-dashboard-golden.test.ts",
     ".tests/goal-dashboard-model.test.ts",
+    ".tests/goal-decision-lifecycle.test.ts",
     ".tests/goal-deferred-archival.test.ts",
     ".tests/goal-delegated-progress.test.ts",
     ".tests/goal-draft.test.ts",

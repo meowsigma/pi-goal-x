@@ -9,6 +9,7 @@ import {
 	hasNetworkErrorAssistantMessage,
 	isAbortedAssistantMessage,
 	isErrorAssistantMessage,
+	isTerminalProviderError,
 	isToolUseAssistantMessage,
 } from "./goal-format.ts";
 import { buildCompactionSummary, buildPostCompactionGoalDelta } from "./goal-compaction.ts";
@@ -17,7 +18,7 @@ import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from ".
 import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings, invalidateGoalSettingsCache } from "./goal-settings.ts";
 import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
-import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord } from "./goal-record.ts";
+import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord, type GoalOwnedWork } from "./goal-record.ts";
 import { goalSelectorLabel } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
@@ -27,12 +28,16 @@ import { GoalProgressEvidenceTracker } from "./goal-progress-evidence.ts";
 import {
 	delegatedOwnershipFromMessages,
 	isAsyncDelegationCall,
+	ownedLaunchId,
+	ownedTerminalIdentity,
 	type DelegatedWakeKind,
 } from "./goal-delegated-progress.ts";
 import {
 	goalPrompt,
 	noProgressRecoveryPrompt,
 	scheduledWaitPrompt,
+	continuationHoldPrompt,
+	currentGoalLifecycleSnapshot,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
 	untrustedObjectiveBlock,
@@ -40,7 +45,8 @@ import {
 import { rehydrateDraft } from "./goal-drafting.ts";
 import { syncTerminalInputPause } from "./goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
-import { runGoalProgressReviewFlow } from "./goal-review.ts";
+import { goalHoldAdmissionKey, goalReviewScope, runGoalProgressReviewFlow } from "./goal-review.ts";
+import { diagnosticHash, GOAL_SOURCE_HASH, recordGoalDiagnostic, redactDiagnosticText } from "./goal-diagnostics.ts";
 import { archiveCompletedGoal } from "./goal-archive.ts";
 import { collectLatestUserDecisions, GOAL_USER_DECISION_ENTRY } from "./goal-user-decisions.ts";
 
@@ -110,14 +116,46 @@ export function registerGoalEvents(core: GoalCore): void {
 	let reviewAfterSettleFor: string | null = null;
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
 	let executionRecoveryAfterSettleFor: string | null = null;
+	let providerRetryEnabled = false;
+	let providerRetryContext: ExtensionContext | undefined;
+	let providerRetryOwner: { retryId: number; goalId: string; epoch: number; scope: string; sessionId: string; ctx: ExtensionContext } | undefined;
+	pi.events?.on?.("pi-retry:state", (payload) => {
+		providerRetryEnabled = asRecord(payload)?.effectiveEnabled === true;
+		if (providerRetryEnabled) core.runtime.clearNetworkErrorBackoff();
+	});
+	pi.events?.on?.("pi-retry:started", (payload) => {
+		const retryId = asRecord(payload)?.retryId;
+		const goal = core.state.goal;
+		const ctx = providerRetryContext;
+		const sessionId = ctx?.sessionManager?.getSessionId?.();
+		if (typeof retryId !== "number" || !Number.isSafeInteger(retryId) || !goal || !ctx || !sessionId) return;
+		providerRetryOwner = { retryId, goalId: goal.id, epoch: core.continuationEpoch, scope: goalReviewScope(goal), sessionId, ctx };
+		core.runtime.clearNetworkErrorBackoff();
+	});
+	const providerRetrySettled = (payload: unknown): void => {
+		const result = asRecord(payload);
+		const owner = providerRetryOwner;
+		if (!owner || result?.retryId !== owner.retryId) return;
+		providerRetryOwner = undefined;
+		const goal = core.state.goal;
+		if (result.reason !== "bounded_recovery_exhausted" || !goal || goal.id !== owner.goalId || core.continuationEpoch !== owner.epoch || goalReviewScope(goal) !== owner.scope || providerRetryContext?.sessionManager?.getSessionId?.() !== owner.sessionId || goal.continuation?.hold || goal.continuation?.wake || !core.isActionableContinuationGoal(goal.id)) return;
+		core.runtime.retainContinuationHold(owner.ctx, goal, owner.scope, "Three non-traffic provider reissues exhausted; no automatic retry is scheduled.", ["The originating native retry owner exhausted its bounded admission."], goalHoldAdmissionKey(goal, owner.ctx, pi.getThinkingLevel?.()));
+		core.updateUI(owner.ctx);
+	};
+	pi.events?.on?.("pi-retry:completed", providerRetrySettled);
+	pi.events?.on?.("pi-retry:cancelled", providerRetrySettled);
+	pi.events?.emit?.("pi-retry:state-request", {});
 	let consecutiveNoProgressTurns = 0;
+	let toolCyclesSinceReview = 0;
+	const falsePausedReconciliationIssued = new Set<string>();
+	const recentReviewEvidence: string[] = [];
 	let noProgressRecoveryAttempt = 0;
 	let noProgressScopeGoalId: string | null = null;
 	let noProgressScopeEpoch = 0;
 	let delegatedWakeThisRun: DelegatedWakeKind | null = null;
 	let pendingInputSource: InputSource | null = null;
 	let pendingInputText = "";
-	const pendingAsyncDelegations = new Set<string>();
+	const pendingAsyncDelegations = new Map<string, Omit<GoalOwnedWork, "id"> & { goalId: string }>();
 	const explicitWaitOverride = (text: string): boolean => {
 		const normalized = text.trim();
 		if (!normalized) return false;
@@ -129,7 +167,32 @@ export function registerGoalEvents(core: GoalCore): void {
 			|| /^(?:please\s+)?(?:tweak|revise|change|replace|retarget)\s+(?:(?:the|this|my)\s+)?(?:goal|objective|scope|task|requirement|criteria)\b/iu.test(normalized)
 			|| /^(?:please\s+)?(?:increase|raise|change|reset|remove)\s+(?:(?:the|this|my)\s+)?(?:budget|token limit)\b/iu.test(normalized);
 	};
+	const explicitHoldInstruction = (text: string): boolean => explicitWaitOverride(text)
+		|| (!/[?？]/u.test(text) && !/\b(?:not|never|don't|don’t)\b/iu.test(text)
+			&& /^(?:please\s+)?(?:inspect|read|check|compare|evaluate|investigate|test|run|retry|use|implement|fix|continue|proceed)\b/iu.test(text.trim()));
 	const progressEvidence = new GoalProgressEvidenceTracker();
+	const rememberReviewEvidence = (entry: string): void => {
+		const bounded = redactDiagnosticText(entry.trim(), 600);
+		if (!bounded) return;
+		recentReviewEvidence.push(bounded);
+		while (recentReviewEvidence.length > 8) recentReviewEvidence.shift();
+	};
+	const assistantText = (message: unknown): string => {
+		const raw = asRecord(message);
+		if (raw?.role !== "assistant") return "";
+		if (typeof raw.content === "string") return raw.content;
+		return Array.isArray(raw.content) ? raw.content.filter((part) => asRecord(part)?.type === "text").map((part) => String(asRecord(part)?.text ?? "")).join("\n") : "";
+	};
+	const claimsPaused = (messages: unknown[]): boolean => {
+		// Inspect the final assistant text, not quoted history or old tool turns.
+		const last = [...messages].reverse().map(assistantText).find((text) => text.trim());
+		return Boolean(last?.split(/\r?\n/u).some((line) => {
+			if (/^\s*[>"'`]/u.test(line) || /[?？]/u.test(line)) return false;
+			if (/\b(?:not|never|no longer|was|were|previously|earlier|yesterday|historical|said|claimed|if|when)\b/iu.test(line)) return false;
+			return /\b(?:the\s+)?(?:goal|work|session)\s+(?:is|remains)\s+(?:currently\s+|still\s+)?paused\b/iu.test(line);
+		}));
+	};
+	const actualReviewEvidence = (reason?: string): string => [...recentReviewEvidence, reason ? `Review admission: ${reason}` : ""].filter(Boolean).join("\n").slice(-4_000);
 	const latestUserDecisions = (ctx: ExtensionContext, goalId: string): string => collectLatestUserDecisions(ctx.sessionManager?.getBranch?.() ?? [], goalId);
 	const recordMeaningfulWorkAttempt = (ctx: ExtensionContext, toolName: string): void => {
 		core.goalWorkToolCalledThisTurn = true;
@@ -153,6 +216,46 @@ export function registerGoalEvents(core: GoalCore): void {
 				at: nowIso(),
 			}]);
 		} catch { /* best-effort ledger append */ }
+	};
+
+	const refreshHeldAdmission = (ctx: ExtensionContext): void => {
+		const goal = core.state.goal;
+		const hold = goal?.continuation?.hold;
+		if (!goal || !core.isActionableContinuationGoal(goal.id)) return;
+		if (!hold && (goal.continuation?.wake || !core.runtime.isProgressReviewExhausted?.(goal))) return;
+		invalidateGoalSettingsCache();
+		const key = goalHoldAdmissionKey(goal, ctx, pi.getThinkingLevel?.());
+		if (!hold) {
+			core.runtime.retainContinuationHold(ctx, goal, goalReviewScope(goal), "Earlier independent reviews exhausted their admission; no automatic retry is scheduled.", ["Legacy review-exhaustion state was restored without a continuation owner."], key);
+			return;
+		}
+		if (hold.admissionKey === key) return;
+		const changed = Boolean(hold.admissionKey);
+		const outcome = core.goalService.apply(ctx, {
+			focusToken: core.focusedOperationToken(goal.id),
+			mutate: (current) => ({ ...current, continuation: changed ? undefined : { ...current.continuation!, hold: { ...hold, admissionKey: key } } }),
+		});
+		if (outcome.ok && changed) {
+			rememberReviewEvidence("Relevant goal scope or selected configuration changed; independently review the held work again.");
+			core.runtime.requestProgressReview(goal.id);
+		}
+	};
+	const consumeOwnedTerminal = (ctx: ExtensionContext, message: unknown): void => {
+		const terminal = ownedTerminalIdentity(message);
+		const goal = core.state.goal;
+		const sessionId = ctx.sessionManager?.getSessionId?.();
+		if (!terminal || !goal || !sessionId || !core.isActionableContinuationGoal(goal.id)) return;
+		const owned = goal.ownedWork?.find((work) => work.id === terminal.id && work.kind === terminal.kind && work.sessionId === sessionId && work.scope === goalReviewScope(goal));
+		if (!owned) return;
+		const held = Boolean(goal.continuation?.hold) && !goal.continuation?.wake;
+		const outcome = core.goalService.apply(ctx, {
+			focusToken: core.focusedOperationToken(goal.id),
+			mutate: (current) => ({ ...current, ownedWork: current.ownedWork?.filter((work) => work.id !== owned.id || work.kind !== owned.kind), ...(held ? { continuation: undefined } : {}) }),
+		});
+		if (!outcome.ok) return;
+		rememberReviewEvidence(`Owned ${owned.kind} ${owned.id} has a terminal receipt. Inspect its result; this does not prove criterion success.`);
+		delegatedWakeThisRun = "terminal";
+		if (held) core.runtime.requestProgressReview(goal.id);
 	};
 
 	pi.on("input", (event) => {
@@ -180,12 +283,26 @@ export function registerGoalEvents(core: GoalCore): void {
 		}
 	});
 
-	pi.on("context", async (event) => {
+	pi.on("context", async (event, ctx) => {
+		core.reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true });
 		const ownership = delegatedOwnershipFromMessages(event.messages);
 		if (ownership) delegatedWakeThisRun = ownership;
-		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
-		// Reference equality means no goal-event messages existed at all.
-		return messages === null ? undefined : { messages: messages as typeof event.messages };
+		consumeOwnedTerminal(ctx, event.messages.at(-1));
+		refreshHeldAdmission(ctx);
+		const snapshot = currentGoalLifecycleSnapshot(core.state.goal);
+		const messages = (compactGoalCheckpointContext(event.messages, core.state.goal) ?? event.messages)
+			.filter((message) => asRecord(message)?.customType !== "pi-goal-current-lifecycle");
+		recordGoalDiagnostic(ctx, { type: "request_context", stage: "context-hook-not-final-wire", lifecycle: snapshot, model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, effort: pi.getThinkingLevel?.(), promptHash: diagnosticHash(ctx.getSystemPrompt?.() ?? "") });
+		return { messages: [...messages, {
+			role: "custom", customType: "pi-goal-current-lifecycle", display: false, timestamp: Date.now(),
+			content: `${snapshot}\nThis is the current host-owned lifecycle frame. It supersedes historical prose and turn-start state. Only ACTIVE without a hold/wait and with auto-continuation enabled admits autonomous work; otherwise preserve the recorded lifecycle and continuation owner.`,
+		}] as typeof event.messages };
+	});
+
+	pi.on("before_provider_request", (event, ctx) => {
+		const payload = asRecord(event.payload);
+		const prompt = payload?.instructions ?? payload?.system ?? (Array.isArray(payload?.messages) ? payload.messages.filter((message) => ["system", "developer"].includes(String(asRecord(message)?.role))) : undefined);
+		recordGoalDiagnostic(ctx, { type: "provider_request", stage: "before_provider_request-hook-not-final-wire", lifecycle: currentGoalLifecycleSnapshot(core.state.goal), model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, effort: pi.getThinkingLevel?.(), payloadModel: typeof payload?.model === "string" ? payload.model : undefined, promptHash: prompt === undefined ? undefined : diagnosticHash(prompt) });
 	});
 
 	pi.on("agent_start", async () => {
@@ -210,6 +327,13 @@ export function registerGoalEvents(core: GoalCore): void {
 
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
 	pi.on("tool_call", async (event, ctx) => {
+		toolCyclesSinceReview += 1;
+		if (toolCyclesSinceReview >= 12 && core.state.goal?.status === "active" && core.state.goal.autoContinue && !core.state.goal.continuation?.wake && !core.state.goal.continuation?.hold) {
+			// Periodic review is admission at a settled boundary, not a stopping
+			// rule: productive tool cycles cannot postpone whole-goal inspection forever.
+			core.runtime.requestProgressReview(core.state.goal.id);
+		}
+		rememberReviewEvidence(`tool ${event.toolName} invoked`);
 		const stoppedGoalId = core.currentTurnStoppedGoalId();
 		// Post-stop in-turn block: after update_goal / set_goal_tasks (or a user
 		// lifecycle command) fires in this turn, block all subsequent tool calls
@@ -237,8 +361,10 @@ export function registerGoalEvents(core: GoalCore): void {
 		// observational tools are credited only after a changed successful result.
 		const eventRecord = asRecord(event);
 		const toolInput = eventRecord?.input ?? eventRecord?.args;
-		if (isAsyncDelegationCall(event.toolName, toolInput) && typeof eventRecord?.toolCallId === "string") {
-			pendingAsyncDelegations.add(eventRecord.toolCallId);
+		const launchGoal = core.state.goal;
+		const sessionId = ctx.sessionManager?.getSessionId?.();
+		if (isAsyncDelegationCall(event.toolName, toolInput) && typeof eventRecord?.toolCallId === "string" && launchGoal && sessionId && core.isActionableContinuationGoal(launchGoal.id)) {
+			pendingAsyncDelegations.set(eventRecord.toolCallId, { goalId: launchGoal.id, kind: event.toolName as "bg_run" | "subagent", scope: goalReviewScope(launchGoal), sessionId });
 		}
 		if (progressEvidence.observeCall(eventRecord?.toolCallId, event.toolName, toolInput)) {
 			recordMeaningfulWorkAttempt(ctx, event.toolName);
@@ -249,13 +375,34 @@ export function registerGoalEvents(core: GoalCore): void {
 	pi.on("tool_execution_end", async (event, ctx) => {
 		const eventRecord = asRecord(event);
 		const toolCallId = eventRecord?.toolCallId;
-		if (typeof toolCallId === "string" && pendingAsyncDelegations.delete(toolCallId) && eventRecord?.isError !== true) {
+		const launch = typeof toolCallId === "string" ? pendingAsyncDelegations.get(toolCallId) : undefined;
+		if (typeof toolCallId === "string") pendingAsyncDelegations.delete(toolCallId);
+		if (launch && eventRecord?.isError !== true && asRecord(eventRecord?.result)?.isError !== true) {
 			recordMeaningfulWorkAttempt(ctx, "subagent");
 			delegatedWakeThisRun = "awaiting";
+			const id = ownedLaunchId(eventRecord?.result, launch.kind);
+			if (id && core.isActionableContinuationGoal(launch.goalId)) core.goalService.apply(ctx, {
+				focusToken: core.focusedOperationToken(launch.goalId),
+				mutate: (current) => ({ ...current, ownedWork: [...(current.ownedWork ?? []).filter((work) => work.id !== id || work.kind !== launch.kind), { id, kind: launch.kind, scope: launch.scope, sessionId: launch.sessionId }].slice(-32) }),
+			});
 		}
 		if (progressEvidence.observeResult(toolCallId, eventRecord?.result, eventRecord?.isError)) {
 			recordMeaningfulWorkAttempt(ctx, typeof eventRecord?.toolName === "string" ? eventRecord.toolName : "observational-tool");
 		}
+		const outcomeName = typeof eventRecord?.toolName === "string" ? eventRecord.toolName : "tool";
+		let outcome = "(no output captured)";
+		try {
+			const rawOutcome = eventRecord?.result;
+			const rawContent = rawOutcome && typeof rawOutcome === "object" ? (rawOutcome as Record<string, unknown>).content : undefined;
+			const content = Array.isArray(rawContent)
+				? rawContent
+					.filter((part: unknown) => asRecord(part)?.type === "text")
+					.map((part: unknown) => String(asRecord(part)?.text ?? ""))
+					.join(" ")
+				: typeof rawOutcome === "string" ? rawOutcome : JSON.stringify(rawOutcome ?? "");
+			outcome = redactDiagnosticText(content, 400);
+		} catch { /* evidence capture is best effort */ }
+		rememberReviewEvidence(`${outcomeName} ${eventRecord?.isError === true ? "failed" : "completed"}: ${outcome}`);
 		core.touchGoalActivity(); // F5
 		core.accountProgress(ctx);
 	});
@@ -320,6 +467,10 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		providerRetryContext = ctx;
+		providerRetryOwner = undefined;
+		pi.events?.emit?.("pi-retry:state-request", {});
+		recordGoalDiagnostic(ctx, { type: "initialization", component: "pi-goal-x", stage: "source-snapshot-at-module-initialization", sourceHash: GOAL_SOURCE_HASH });
 		// NAF: the zero-op read caches are session-scoped — a new session always
 		// re-reads settings/pool/ledger fresh from disk (cross-process and
 		// hand-edited changes are picked up at the session boundary).
@@ -385,6 +536,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		const branch = ctx.sessionManager?.getBranch?.() ?? [];
 		consecutiveNoProgressTurns = countTrailingNoProgressRuns(branch, core.focusedGoalId);
 		if (consecutiveNoProgressTurns > 0) noProgressRecoveryAttempt = consecutiveNoProgressTurns;
+		refreshHeldAdmission(ctx);
 		core.queueContinuation(ctx, true);
 	});
 
@@ -406,6 +558,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		const compactBranch = ctx.sessionManager?.getBranch?.() ?? [];
 		consecutiveNoProgressTurns = countTrailingNoProgressRuns(compactBranch, core.focusedGoalId);
 		if (consecutiveNoProgressTurns > 0) noProgressRecoveryAttempt = consecutiveNoProgressTurns;
+		refreshHeldAdmission(ctx);
 		core.queueContinuation(ctx, true);
 	});
 
@@ -420,14 +573,17 @@ export function registerGoalEvents(core: GoalCore): void {
 		const treeBranch = ctx.sessionManager?.getBranch?.() ?? [];
 		consecutiveNoProgressTurns = countTrailingNoProgressRuns(treeBranch, core.focusedGoalId);
 		if (consecutiveNoProgressTurns > 0) noProgressRecoveryAttempt = consecutiveNoProgressTurns;
+		refreshHeldAdmission(ctx);
 		core.queueContinuation(ctx, true);
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		providerRetryContext = ctx;
 		core.advanceTurnSeq();
 		// event.systemPrompt is the SDK's current-turn chain. ctx.getSystemPrompt()
 		// is the previous effective prompt and would accumulate stale lifecycle frames.
-		const currentSystemPrompt = () => event.systemPrompt;
+		let effectiveSystemPrompt = event.systemPrompt;
+		const currentSystemPrompt = () => effectiveSystemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 		const inputSource = pendingInputSource;
 		const inputText = pendingInputText;
@@ -464,7 +620,8 @@ export function registerGoalEvents(core: GoalCore): void {
 			core.runtime.setCheckpoint(null);
 		} else if (explicitUserInput) {
 			const waitingGoal = core.state.goal;
-			const preserveWait = Boolean(waitingGoal?.continuation?.wake) && !explicitWaitOverride(inputText);
+			const preserveWait = waitingGoal?.continuation?.wake ? !explicitWaitOverride(inputText)
+				: Boolean(waitingGoal?.continuation?.hold) && !explicitHoldInstruction(inputText);
 			core.reviewAbortController?.abort();
 			// Only the SDK's interactive/RPC input provenance is user-owned. An
 			// extension-originated prompt (NQA, a tool, or a background wake) must
@@ -475,6 +632,14 @@ export function registerGoalEvents(core: GoalCore): void {
 			if (!preserveWait) core.clearContinuationState();
 			if (!preserveWait && waitingGoal?.continuation?.wake) {
 				core.runtime.cancelDeferredWake(waitingGoal.id);
+				core.goalService.apply(ctx, {
+					reconcile: false,
+					focusToken: core.focusedOperationToken(waitingGoal.id),
+					mutate: (current) => ({ ...current, continuation: undefined, updatedAt: nowIso() }),
+				});
+			} else if (!preserveWait && waitingGoal?.continuation?.hold) {
+				// A genuine new instruction re-admits review/work. Status queries do
+				// not reach this branch and therefore preserve the durable hold.
 				core.goalService.apply(ctx, {
 					reconcile: false,
 					focusToken: core.focusedOperationToken(waitingGoal.id),
@@ -509,11 +674,18 @@ export function registerGoalEvents(core: GoalCore): void {
 			if (openCount > 0) return { systemPrompt: `${currentSystemPrompt()}\n\n${unfocusedOpenGoalsPrompt(openCount)}` };
 			return;
 		}
-		const currentScopeGoalId = core.state.goal.id;
+		refreshHeldAdmission(ctx);
+		const currentScopeGoalId = core.state.goal!.id;
 		const currentScopeEpoch = core.continuationEpoch;
+		// This snapshot is derived from reconciled goal storage in this hook, not
+		// from prior assistant prose or checkpoint content.
+		effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${currentGoalLifecycleSnapshot(core.state.goal)}\nThe latest host-owned pi-goal-current-lifecycle context frame supersedes this turn-start snapshot if state changes during tools.`;
 		if (noProgressScopeGoalId !== currentScopeGoalId || noProgressScopeEpoch !== currentScopeEpoch) {
 			// A new goal, focus epoch, or successful tweak must not inherit the
 			// previous goal/revision's empty-turn coaching state.
+			toolCyclesSinceReview = 0;
+			recentReviewEvidence.length = 0;
+			falsePausedReconciliationIssued.clear();
 			consecutiveNoProgressTurns = 0;
 			noProgressRecoveryAttempt = 0;
 		}
@@ -572,6 +744,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		const activeGoal = core.state.goal;
 		if (activeGoal.continuation?.wake) {
 			return { systemPrompt: `${currentSystemPrompt()}\n\n${scheduledWaitPrompt(activeGoal)}` };
+		}
+		if (activeGoal.continuation?.hold) {
+			return { systemPrompt: `${currentSystemPrompt()}\n\n${continuationHoldPrompt(activeGoal)}` };
 		}
 		const settings = loadGoalSettings(ctx.cwd);
 		let prompt = goalPrompt(activeGoal, settings);
@@ -651,6 +826,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		// Provider failures are not completed work: persist and refresh the
 		// display, but never queue a continuation for a run whose messages
 		// include an assistant error (danim47c pattern).
+		if (event.messages.some(isTerminalProviderError)) {
+			const goal = core.state.goal;
+			const failed = asRecord(event.messages.find(isTerminalProviderError));
+			const diagnostic = redactDiagnosticText(String(failed?.errorMessage ?? failed?.rawStopReason ?? "terminal provider refusal"));
+			core.runtime.retainContinuationHold(ctx, goal, goalReviewScope(goal), "The provider refused this request; no automatic retry is justified.", [diagnostic], goalHoldAdmissionKey(goal, ctx, pi.getThinkingLevel?.()));
+			recordGoalDiagnostic(ctx, { type: "terminal_provider_failure", goalId: goal.id, error: diagnostic });
+			core.updateUI(ctx);
+			return;
+		}
 		if (hasNetworkErrorAssistantMessage(event.messages) || hasAbortedAssistantMessage(event.messages)) {
 			core.persist(ctx);
 			core.updateUI(ctx);
@@ -665,6 +849,16 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.runtime.clearNetworkErrorBackoff();
 		core.persist(ctx);
 		core.updateUI(ctx);
+		// A model's claim that an active goal is paused is unproductive historical
+		// prose, not lifecycle authority. Admit one precise reconciliation review;
+		// never replay the correction on every subsequent response.
+		const activeForReconciliation = core.state.goal;
+		if (activeForReconciliation && !activeForReconciliation.continuation?.wake && !activeForReconciliation.continuation?.hold
+			&& !core.goalWorkToolProductiveThisTurn && !core.goalWorkToolCalledThisTurn && claimsPaused(event.messages) && !falsePausedReconciliationIssued.has(activeForReconciliation.id)) {
+			falsePausedReconciliationIssued.add(activeForReconciliation.id);
+			rememberReviewEvidence("Lifecycle contradiction: the final unproductive response claimed paused, but reconciled goal storage is ACTIVE. Use current state and choose a justified action or incomplete hold.");
+			core.runtime.requestProgressReview(activeForReconciliation.id);
+		}
 		// While an asynchronous delegate is active, its own notification is the
 		// continuation owner. Do not race it with a goal checkpoint or classify
 		// the supervising parent as stalled merely because work happened remotely.
@@ -686,7 +880,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		if (productiveRun) {
 			consecutiveNoProgressTurns = 0;
 			noProgressRecoveryAttempt = 0;
-			core.runtime.clearRetainedReviewInstruction(ctx, core.state.goal);
+			// Activity alone does not erase retained strategic advice; only a later
+			// independent review judges whether that advice was actually executed.
 		} else {
 			consecutiveNoProgressTurns += 1;
 			noProgressRecoveryAttempt = consecutiveNoProgressTurns;
@@ -699,8 +894,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		const auditRecoveryRun = core.runtime.hasAuditRecoveryLease(core.state.goal.id);
 		const explicitReviewRequest = core.runtime.consumeProgressReviewRequest(core.state.goal.id);
 		const reviewExhausted = core.runtime.isProgressReviewExhausted?.(core.state.goal) ?? false;
-		const retainedReviewAction = core.state.goal.continuation?.instruction && !core.state.goal.continuation.wake;
-		if (retainedReviewAction && !productiveRun && !explicitReviewRequest && !auditRecoveryRun) {
+		const retainedReviewAction = core.state.goal.continuation?.instruction && !core.state.goal.continuation.wake && !core.state.goal.continuation.hold;
+		if (core.state.goal.continuation?.hold || core.state.goal.continuation?.wake) {
+			// A durable hold is quiet incomplete state, not permission to queue work.
+			continuationAfterSettleFor = null;
+			executionRecoveryAfterSettleFor = null;
+		} else if (explicitReviewRequest && !reviewExhausted) {
+			reviewAfterSettleFor = core.state.goal.id;
+			continuationAfterSettleFor = null;
+		} else if (retainedReviewAction && !productiveRun && !explicitReviewRequest && !auditRecoveryRun) {
 			// The same actionable advice was already delivered once. Do not buy the
 			// identical review again when it is ignored; recover quietly instead.
 			executionRecoveryAfterSettleFor = core.state.goal.id;
@@ -729,14 +931,18 @@ export function registerGoalEvents(core: GoalCore): void {
 		const executionRecoveryGoalId = executionRecoveryAfterSettleFor;
 		executionRecoveryAfterSettleFor = null;
 		if (reviewGoalId && core.isActionableContinuationGoal(reviewGoalId)) {
-			await runGoalProgressReviewFlow(core, ctx, { reason: "Two consecutive settled runs produced no meaningful work.", latestUserDecisions: latestUserDecisions(ctx, reviewGoalId) });
+			toolCyclesSinceReview = 0;
+			await runGoalProgressReviewFlow(core, ctx, { reason: actualReviewEvidence("Periodic or lifecycle review admitted at settlement."), latestUserDecisions: latestUserDecisions(ctx, reviewGoalId) });
 			return;
 		}
 		if (executionRecoveryGoalId && core.isActionableContinuationGoal(executionRecoveryGoalId)) {
+			// Retained advice was given one execution chance. If the next settled
+			// cycle did not execute it, convert it to a durable quiet hold rather
+			// than starting a timer-driven second owner.
 			const current = core.state.goal;
 			const continuation = current?.id === executionRecoveryGoalId ? current.continuation : undefined;
-			if (current && continuation && !continuation.wake) {
-				core.runtime.scheduleExecutionRecovery(ctx, current, continuation.scope, continuation.instruction);
+			if (current && continuation && !continuation.hold) {
+				core.runtime.retainContinuationHold?.(ctx, current, continuation.scope, "The reviewed next action was not executed; no justified automatic retry remains.", [continuation.instruction], goalHoldAdmissionKey(current, ctx, pi.getThinkingLevel?.()));
 			}
 			return;
 		}
@@ -750,6 +956,8 @@ export function registerGoalEvents(core: GoalCore): void {
 			return;
 		}
 		if (!networkErrorGoalId || !core.isActionableContinuationGoal(networkErrorGoalId)) return;
+		if (providerRetryEnabled || providerRetryOwner) return; // Existing transport owner, not a competing Goal retry.
+		if (core.state.goal?.continuation?.wake || core.state.goal?.continuation?.hold || core.runtime.networkErrorRetryPendingFor?.(networkErrorGoalId)) return;
 		const recovery = loadGoalSettings(ctx.cwd).networkRecovery;
 		const policy = recovery
 			? { maxAttempts: recovery.maxAttempts, maxDelayMs: recovery.maxDelayMs }
@@ -763,9 +971,11 @@ export function registerGoalEvents(core: GoalCore): void {
 			);
 			return;
 		}
-		// Only reachable under a configured bounded cap (maxAttempts > 0).
+		// A configured cap is an honest durable hold, not a reset-on-reload loop.
+		const exhaustedGoal = core.state.goal!;
+		core.runtime.retainContinuationHold(ctx, exhaustedGoal, goalReviewScope(exhaustedGoal), "Bounded provider recovery is exhausted; no automatic retry is scheduled.", ["The configured transient-retry admission returned no further attempt."], goalHoldAdmissionKey(exhaustedGoal, ctx, pi.getThinkingLevel?.()));
 		ctx.ui.notify(
-			"Provider network errors persisted after all recovery attempts. The goal remains active; resume it when the provider is healthy.",
+			"Provider recovery is exhausted. The goal remains ACTIVE and incomplete on a quiet hold.",
 			"warning",
 		);
 	});

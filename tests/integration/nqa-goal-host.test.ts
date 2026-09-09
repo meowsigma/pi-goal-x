@@ -313,6 +313,41 @@ test("explicit resume supersedes a preserved scheduled wait safely", async () =>
 	}
 });
 
+test("native held ACTIVE goals survive status/reload and NQA defers in both loader orders", async (t) => {
+	if (!NQA_SOURCE || !existsSync(NQA_SOURCE)) { t.skip("set PI_NQA_EXTENSION_PATH for native both-order hold coverage"); return; }
+	for (const order of ["goal-first", "nqa-first"] as const) {
+		const cwd = mkdtempSync(path.join("/tmp", `pi-goal-native-hold-${order}-`));
+		try {
+			mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+			const goal = writeActiveGoalFile({ cwd }, {
+				...createGoal({ objective: "Verify the held external criterion", autoContinue: true, sisyphus: false }, Date.now()),
+				continuation: { scope: "held-scope", instruction: "Await a discriminating observation", executionRetries: 0, reviewFailures: 0,
+					hold: { reason: "No justified next action", evidence: ["The required external evidence is unavailable"], at: new Date().toISOString() } },
+			});
+			const entries = [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }];
+			for (let reload = 0; reload < 2; reload += 1) {
+				const host = await loadHost(cwd, entries, order);
+				if (reload === 0) {
+					const command = host.extensions.flatMap((e: any) => [...e.commands.values()]).find((c: any) => c.name === "no-questions-asked");
+					await command.handler("", host.ctx);
+				}
+				await host.emit({ type: "session_start", reason: "start" });
+				const prompt = await host.before("What is the status?", "interactive");
+				assert.match(prompt, /PI GOAL CONTINUATION HOLD/);
+				assert.match(prompt, /preserve ACTIVE\/incomplete|NO-QUESTIONS GOAL-HOLD DEFERRED/);
+				assert.doesNotMatch(prompt, /ACTIVE without a scheduled wait,/);
+				invalidateGoalPoolCache();
+				assert.equal(readActiveGoalFiles({ cwd }).find((g) => g.id === goal.id)?.status, "active");
+				assert.ok(readActiveGoalFiles({ cwd }).find((g) => g.id === goal.id)?.continuation?.hold);
+				assert.equal(host.sentMessages.filter((m: any) => String(m.content).includes("pi_goal_continuation")).length, 0);
+				assert.match(readFileSync(path.join(cwd, ".pi", "no-questions-diagnostics.json"), "utf8"), /"sourceHash":"[a-f0-9]{64}"/);
+				assert.match(readFileSync(path.join(cwd, ".pi", "goals", "diagnostics.json"), "utf8"), /"sourceHash":"[a-f0-9]{64}"/);
+				await host.emit({ type: "session_shutdown" });
+			}
+		} finally { rmSync(cwd, { recursive: true, force: true }); }
+	}
+});
+
 async function loadHost(cwd: string, sessionEntries: unknown[], order: "goal-first" | "nqa-first" = "goal-first", includeNqa = true) {
 	const hostRoot = process.env.PI_HOST_PACKAGE_ROOT ?? path.resolve("node_modules");
 	const loader = await import(path.join(hostRoot, "@earendil-works/pi-coding-agent/dist/core/extensions/loader.js"));

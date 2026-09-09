@@ -298,25 +298,26 @@ test("parseGoalSettings: networkRecovery accepts valid layers and rejects invali
 
 test("loadGoalSettings: networkRecovery defaults to unbounded and honors file + env layers", () => {
 	withTempDir((dir) => {
+		const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "missing-global.json") };
 		const configPath = goalSettingsPath(dir);
 		fs.mkdirSync(path.dirname(configPath), { recursive: true });
 		fs.writeFileSync(configPath, JSON.stringify({ networkRecovery: { maxAttempts: 3 } }), "utf8");
-		assert.deepEqual(loadGoalSettings(dir, {}).networkRecovery, { maxAttempts: 3, maxDelayMs: 80_000 }, "file config read with default plateau");
+		assert.deepEqual(loadGoalSettings(dir, env).networkRecovery, { maxAttempts: 3, maxDelayMs: 80_000 }, "file config read with default plateau");
 		assert.deepEqual(
-			loadGoalSettings(dir, { PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS: "10", PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS: "20000" }).networkRecovery,
+			loadGoalSettings(dir, { ...env, PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS: "10", PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS: "20000" }).networkRecovery,
 			{ maxAttempts: 10, maxDelayMs: 20_000 },
 			"env vars override file",
 		);
 		assert.equal(
-			loadGoalSettings(dir, { PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS: "0" }).networkRecovery?.maxDelayMs,
+			loadGoalSettings(dir, { ...env, PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS: "0" }).networkRecovery?.maxDelayMs,
 			80_000,
 			"zero env delay falls back to the safe default",
 		);
+		assert.deepEqual(loadGoalSettings(path.join(dir, "unset"), env).networkRecovery, {
+			maxAttempts: 0,
+			maxDelayMs: 80_000,
+		}, "unset resolves to library defaults, independently of the user's saved policy");
 	});
-	assert.deepEqual(loadGoalSettings("/tmp/does-not-exist", {}).networkRecovery, {
-		maxAttempts: 0,
-		maxDelayMs: 80_000,
-	}, "unset resolves to unbounded default policy");
 });
 
 test("saveGoalSettingsFileConfig: task keybindings round-trip", () => {

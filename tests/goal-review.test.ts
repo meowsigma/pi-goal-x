@@ -28,14 +28,18 @@ const goal = normalizeGoalRecord({
 assert.ok(goal);
 
 test("progress review validates task evidence and preserves completion authority", () => {
-  const valid = validateGoalReviewDecision({ disposition: "work", summary: "Verification remains incomplete.", nextAction: "Run the checks.", evidence: ["The source still needs verification."], completedTasks: [] }, goal);
+  const valid = validateGoalReviewDecision({ disposition: "work", summary: "Verification remains incomplete.", nextAction: "Run the checks.", expectedObservation: "The check output contains the required result.", decisionImpact: "This verifies the pending task contract.", evidence: ["The source still needs verification."], completedTasks: [] }, goal);
   assert.equal("error" in valid, false);
-  const unknown = validateGoalReviewDecision({ disposition: "work", summary: "x", nextAction: "y", evidence: [], completedTasks: [{ taskId: "missing", evidence: "claimed" }] }, goal);
+  const unknown = validateGoalReviewDecision({ disposition: "work", summary: "x", nextAction: "y", expectedObservation: "The check exposes the missing task.", decisionImpact: "This determines the task gate.", evidence: [], completedTasks: [{ taskId: "missing", evidence: "claimed" }] }, goal);
   assert.match("error" in unknown ? unknown.error : "", /unknown task/);
   const blockedWait = validateGoalReviewDecision({ disposition: "wait", summary: "A dependency is observed.", nextAction: "Recheck the dependency.", evidence: ["observed"], completedTasks: [], wait: { until: "2999-01-01T00:00:00.000Z", criterion: "Dependency changes", observedDependency: "Current dependency is pending.", taskIds: ["verify"] } }, goal);
   assert.equal("error" in blockedWait, false);
   const uncoveredActionable = validateGoalReviewDecision({ disposition: "wait", summary: "A dependency is observed.", nextAction: "Recheck the dependency.", evidence: ["observed"], completedTasks: [], wait: { until: "2999-01-01T00:00:00.000Z", criterion: "Dependency changes", observedDependency: "Current dependency is pending.", taskIds: [] } }, goal);
   assert.match("error" in uncoveredActionable ? uncoveredActionable.error : "", /cover every remaining pending task/);
+  const hold = validateGoalReviewDecision({ disposition: "hold", summary: "No justified next action remains.", nextAction: "Wait for a genuine scope change.", evidence: ["The current artifact and pending task state were inspected."], completedTasks: [], hold: { reason: "The next criterion depends on an unavailable external decision.", evidence: ["No observable dependency change is available."] } }, goal);
+  assert.equal("error" in hold, false);
+  const incompleteWork = validateGoalReviewDecision({ disposition: "work", summary: "More work may help.", nextAction: "Try again.", evidence: ["The previous attempt failed."] , completedTasks: [] }, goal);
+  assert.match("error" in incompleteWork ? incompleteWork.error : "", /expectedObservation and decisionImpact/);
 });
 
 test("progress review only trusts goal-scoped provenance after the focus boundary", () => {
@@ -129,6 +133,8 @@ test("progress reviewer uses a real SDK session with read-only tools and structu
         disposition: "work",
         summary: "The artifact was inspected.",
         nextAction: "Continue with the remaining verification.",
+        expectedObservation: "The remaining verification produces a passing result.",
+        decisionImpact: "This determines whether the pending criterion is satisfied.",
         evidence: ["The read-only artifact contains the expected evidence."],
         completedTasks: [],
       }), { stopReason: "toolUse" });
@@ -266,7 +272,8 @@ test("registered lifecycle buys one review, then recovers quietly after ignored 
     assert.equal(reviewCalls, 1);
     await emptyRun(true);
     assert.equal(reviewCalls, 1, "ignored actionable advice must not repurchase the same review");
-    assert.equal(core.state.goal?.continuation?.wake?.kind, "execution_recovery");
+    assert.equal(core.state.goal?.continuation?.wake, undefined);
+    assert.ok(core.state.goal?.continuation?.hold, "ignored advice ends in a durable hold");
   } finally {
     core.clearContinuationState();
     core.runtime.disposeAuditRetryTimers();
@@ -355,20 +362,20 @@ test("review provider exhaustion survives wake retirement and productive work", 
     accountProgress() {}, pi: { sendMessage() {} },
   } as unknown as GoalCore;
   try {
-    for (let failure = 1; failure <= 4; failure += 1) {
+    for (let failure = 1; failure <= 3; failure += 1) {
       const result = await runGoalProgressReviewFlow(core, ctx as never);
       assert.match(result?.error ?? "", /provider unavailable/);
       assert.equal(providerCalls, failure);
-      // Model the authoritative due-wake retirement before the next cycle.
-      runtime.cancelDeferredWake(current.id);
-      current = { ...current, continuation: { ...current.continuation!, wake: undefined } };
+      // Failed review admission has no timer/wake. The bounded final failure
+      // becomes a durable quiet hold rather than scheduling recovery.
+      current = { ...current, continuation: current.continuation ? { ...current.continuation, wake: undefined, hold: failure >= 3 ? { reason: "review unavailable", evidence: ["provider unavailable"], at: new Date().toISOString() } : undefined } : undefined };
     }
     runtime.clearRetainedReviewInstruction(ctx, current);
-    assert.equal(current.continuation?.reviewFailures, 4);
+    assert.equal(current.continuation?.reviewFailures, 3);
     assert.equal(current.status, "active", "ordinary safe work remains admitted after review exhaustion");
     const exhausted = await runGoalProgressReviewFlow(core, ctx as never);
-    assert.match(exhausted?.error ?? "", /exhausted/i);
-    assert.equal(providerCalls, 4, "exhausted review admission must not make a fifth provider attempt");
+    assert.match(exhausted?.error ?? "", /hold|exhausted/i);
+    assert.equal(providerCalls, 3, "durable hold must not make another provider attempt");
   } finally {
     runtime.disposeAuditRetryTimers();
   }
